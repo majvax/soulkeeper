@@ -1,0 +1,439 @@
+#include "server/game_server.hpp"
+
+#include "shared/components/combat.hpp"
+#include "shared/components/gameplay.hpp"
+#include "shared/components/physics.hpp"
+#include "shared/components/progression.hpp"
+#include "shared/factory/enemy.hpp"
+#include "shared/factory/player.hpp"
+#include "shared/sim/game_world.hpp"
+#include "shared/system/input.hpp"
+
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <numbers>
+#include <random>
+#include <utility>
+#include <vector>
+
+namespace {
+
+// XP required to reach the next level (curve on the current level).
+std::uint32_t xp_needed_for(std::uint16_t level)
+{
+    return 5u + static_cast<std::uint32_t>(level) * 4u;
+}
+
+} // namespace
+
+namespace {
+
+// Spawn / wave tuning.
+constexpr float wave_duration = 15.0f;   // seconds per wave
+constexpr float spawn_distance = 600.0f; // ring radius around a player
+constexpr std::size_t max_enemies = 200;
+
+float random_angle()
+{
+    static std::mt19937 gen{ std::random_device{}() };
+    std::uniform_real_distribution<float> dist{ 0.0f, 2.0f * std::numbers::pi_v<float> };
+    return dist(gen);
+}
+
+// Seconds between spawns — shorter as the run progresses.
+float spawn_interval_for(std::uint16_t wave)
+{
+    return std::max(0.4f, 1.6f - (static_cast<float>(wave) * 0.12f));
+}
+
+// Relative spawn weight per archetype at a given wave (à la wild-woods-2).
+std::array<float, 3> spawn_weights(std::uint16_t wave)
+{
+    const float w = static_cast<float>(wave);
+    return { 6.0f,                          // Bandit: always
+             std::max(0.0f, w - 1.0f) * 1.5f, // Scout: from wave >= 2
+             std::max(0.0f, w - 3.0f) * 1.0f }; // Brute: from wave >= 4
+}
+
+EnemyType pick_archetype(std::uint16_t wave, std::mt19937& rng)
+{
+    const std::array<float, 3> weights = spawn_weights(wave);
+    std::discrete_distribution<std::size_t> dist{ weights.begin(), weights.end() };
+    return static_cast<EnemyType>(dist(rng));
+}
+
+} // namespace
+
+namespace server {
+
+GameServer::GameServer(net::Server server) : server_{ std::move(server) }, world_{ shared::make_game_world() }
+{
+    xp_needed_ = xp_needed_for(level_);
+}
+
+void GameServer::poll()
+{
+    for (const net::Event& ev : server_.poll()) {
+        if (ev.type == net::EventType::Disconnect) {
+            on_disconnect(ev.peer_id);
+        } else if (ev.type == net::EventType::Receive) {
+            proto::ByteReader reader(ev.payload);
+            const auto type = reader.get<proto::MsgType>();
+            if (type == proto::MsgType::Join) {
+                on_join(ev.peer_id, reader);
+            } else if (type == proto::MsgType::StartGame) {
+                on_start(ev.peer_id);
+            } else if (type == proto::MsgType::Input) {
+                on_input(ev.peer_id, reader);
+            } else if (type == proto::MsgType::Command) {
+                on_command(ev.peer_id, reader);
+            } else if (type == proto::MsgType::SelectUpgrade) {
+                on_select(ev.peer_id, reader);
+            }
+        }
+    }
+}
+
+void GameServer::update(core::FixedTimestep& timestep)
+{
+    while (timestep.consume()) {
+        if (state_ != proto::GameState::Playing) { break; }
+        // Frozen while paused or during a level-up selection, but keep streaming
+        // the (frozen) world so clients stay consistent.
+        if (!paused_ && !leveling_) {
+            spawn_enemies(timestep.dt());
+            world_.step(timestep.dt());
+            check_level_up();
+        }
+        if (tick_ % proto::snapshot_every_n_ticks == 0) { broadcast_snapshot(); }
+        ++tick_;
+    }
+}
+
+void GameServer::spawn_enemies(float dt)
+{
+    core::Registry& registry = world_.registry();
+
+    // Advance the wave clock.
+    std::uint16_t wave = 1;
+    registry.view<GameStats>().each([&](core::Entity, GameStats& stats) {
+        wave_timer_ += dt;
+        if (wave_timer_ >= wave_duration) {
+            wave_timer_ -= wave_duration;
+            ++stats.wave;
+            spdlog::info("wave {}", stats.wave);
+        }
+        wave = stats.wave;
+    });
+
+    spawn_timer_ += dt;
+    if (spawn_timer_ < spawn_interval_for(wave)) { return; }
+    spawn_timer_ = 0.0f;
+
+    // Collect connected players to spawn near, and count current enemies.
+    std::vector<Position> players;
+    registry.view<PlayerTag, Position>().each(
+      [&](core::Entity, const PlayerTag&, const Position& pos) { players.push_back(pos); });
+    if (players.empty()) { return; }
+
+    std::size_t enemy_count = 0;
+    registry.view<EnemyTag>().each([&](core::Entity, const EnemyTag&) { ++enemy_count; });
+    if (enemy_count >= max_enemies) { return; }
+
+    const Position& target = players[enemy_count % players.size()];
+    const float angle = random_angle();
+    create_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
+                 target.y + (std::sin(angle) * spawn_distance), pick_archetype(wave, rng_));
+}
+
+void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
+{
+    const auto join = reader.get<proto::Join>();
+    if (!join) { return; }
+    const std::string name = proto::read_name(join->name);
+    core::Registry& registry = world_.registry();
+
+    if (const auto it = sessions_.find(join->token); it != sessions_.end()) {
+        // Reconnect: re-bind this peer to the existing player, dropping any stale
+        // mapping from the previous (dead) peer.
+        if (it->second.peer_id != 0) { peer_token_.erase(it->second.peer_id); }
+        it->second.peer_id = peer_id;
+        it->second.connected = true;
+        peer_token_[peer_id] = join->token;
+        spdlog::info("'{}' reconnected -> entity {}", it->second.name, it->second.entity);
+    } else {
+        // New player.
+        const core::Entity player = create_player(registry, 0, 0);
+        Session session{ .entity = player, .name = name, .peer_id = peer_id, .connected = true };
+        if (!have_host_) {
+            session.is_host = true;
+            host_token_ = join->token;
+            have_host_ = true;
+        }
+        sessions_[join->token] = session;
+        peer_token_[peer_id] = join->token;
+        spdlog::info("'{}' joined -> entity {}{}", name, player, session.is_host ? " (host)" : "");
+    }
+
+    const Session& session = sessions_[join->token];
+    proto::ByteWriter welcome;
+    welcome.put(proto::MsgType::Welcome);
+    welcome.put(proto::Welcome{ .player_net_id = session.entity,
+                                .is_host = static_cast<std::uint8_t>(session.is_host ? 1 : 0) });
+    server_.send(peer_id, welcome.bytes(), true);
+    send_state(peer_id);
+    broadcast_roster();
+}
+
+void GameServer::on_disconnect(std::uint32_t peer_id)
+{
+    const auto it = peer_token_.find(peer_id);
+    if (it == peer_token_.end()) { return; }
+    const std::uint64_t token = it->second;
+    peer_token_.erase(it);
+
+    // If this peer still owed a level-up choice, drop it and resume if last.
+    if (leveling_) {
+        pending_.erase(peer_id);
+        offered_.erase(peer_id);
+        if (pending_.empty()) { leveling_ = false; }
+    }
+
+    Session& session = sessions_[token];
+    // Ignore a stale peer that a faster reconnect already replaced.
+    if (session.peer_id != peer_id) { return; }
+    session.connected = false;
+    session.peer_id = 0;
+    if (Velocity* vel = world_.registry().try_get<Velocity>(session.entity)) { *vel = { .dx = 0, .dy = 0 }; }
+    spdlog::info("'{}' disconnected (entity kept for reconnect)", session.name);
+    broadcast_roster();
+}
+
+void GameServer::on_start(std::uint32_t peer_id)
+{
+    const auto it = peer_token_.find(peer_id);
+    if (it == peer_token_.end() || it->second != host_token_ || state_ != proto::GameState::Lobby) { return; }
+    state_ = proto::GameState::Playing;
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::State);
+    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    server_.broadcast(writer.bytes(), true);
+    spdlog::info("host started the game");
+}
+
+void GameServer::on_input(std::uint32_t peer_id, proto::ByteReader& reader)
+{
+    const auto input = reader.get<proto::Input>();
+    const auto it = peer_token_.find(peer_id);
+    if (!input || it == peer_token_.end() || state_ != proto::GameState::Playing) { return; }
+    core::Registry& registry = world_.registry();
+    const core::Entity player = sessions_[it->second].entity;
+    if (registry.try_get<Downed>(player) != nullptr) { return; } // no control while down
+    if (Velocity* vel = registry.try_get<Velocity>(player)) {
+        const float speed = registry.try_get<Speed>(player) != nullptr ? registry.get<Speed>(player).value : PLAYER_SPEED;
+        apply_input(*vel, input->move_x, input->move_y, speed);
+    }
+    if (AimState* aim = registry.try_get<AimState>(player)) {
+        *aim = { .dx = input->aim_x, .dy = input->aim_y, .firing = input->firing };
+    }
+}
+
+void GameServer::on_command(std::uint32_t peer_id, proto::ByteReader& reader)
+{
+    const auto command = reader.get<proto::Command>();
+    const auto it = peer_token_.find(peer_id);
+    if (!command || it == peer_token_.end() || it->second != host_token_) { return; } // host only
+    switch (*command) {
+    case proto::Command::Pause:
+        paused_ = true;
+        spdlog::info("game paused by host");
+        break;
+    case proto::Command::Resume:
+        paused_ = false;
+        spdlog::info("game resumed by host");
+        break;
+    }
+}
+
+void GameServer::broadcast_roster()
+{
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::Roster);
+    writer.put(proto::RosterHeader{ .count = static_cast<std::uint8_t>(sessions_.size()) });
+    for (const auto& [token, session] : sessions_) {
+        proto::RosterEntry entry{};
+        entry.net_id = session.entity;
+        proto::write_name(entry.name, session.name);
+        entry.is_host = session.is_host ? 1 : 0;
+        entry.connected = session.connected ? 1 : 0;
+        writer.put(entry);
+    }
+    server_.broadcast(writer.bytes(), true);
+}
+
+void GameServer::send_state(std::uint32_t peer_id)
+{
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::State);
+    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    server_.send(peer_id, writer.bytes(), true);
+}
+
+void GameServer::broadcast_snapshot()
+{
+    core::Registry& registry = world_.registry();
+    std::vector<proto::SnapshotEntry> entries;
+    registry.view<Position>().each([&](core::Entity entity, const Position& pos) {
+        proto::EntityKind kind = proto::EntityKind::Mover;
+        if (registry.has<PlayerTag>(entity)) {
+            kind = proto::EntityKind::Player;
+        } else if (registry.has<EnemyTag>(entity)) {
+            kind = proto::EntityKind::Enemy;
+        } else if (registry.has<Projectile>(entity)) {
+            kind = proto::EntityKind::Projectile;
+        } else if (registry.has<XpOrb>(entity)) {
+            kind = proto::EntityKind::XpOrb;
+        }
+
+        std::uint8_t health = 255;
+        if (const Health* hp = registry.try_get<Health>(entity); hp && hp->max > 0.0f) {
+            const float frac = std::clamp(hp->current / hp->max, 0.0f, 1.0f);
+            health = static_cast<std::uint8_t>(frac * 255.0f);
+        }
+
+        std::uint8_t variant = 0;
+        std::uint16_t aura_radius = 0;
+        std::uint16_t move_speed = 0;
+        if (kind == proto::EntityKind::Player) {
+            if (const Aura* aura = registry.try_get<Aura>(entity)) {
+                aura_radius = static_cast<std::uint16_t>(aura->radius);
+            }
+            if (const Speed* speed = registry.try_get<Speed>(entity)) {
+                move_speed = static_cast<std::uint16_t>(speed->value);
+            }
+        } else if (kind == proto::EntityKind::Enemy) {
+            if (const Archetype* arch = registry.try_get<Archetype>(entity)) { variant = arch->id; }
+        }
+
+        entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,
+                            .kind = static_cast<std::uint8_t>(kind), .health = health, .variant = variant,
+                            .aura_radius = aura_radius, .move_speed = move_speed });
+    });
+
+    // Shared XP progress + wave for the HUD.
+    std::uint8_t xp_frac = 0;
+    std::uint16_t wave = 1;
+    registry.view<GameStats>().each([&](core::Entity, const GameStats& stats) {
+        const float frac = std::clamp(static_cast<float>(stats.xp) / static_cast<float>(xp_needed_), 0.0f, 1.0f);
+        xp_frac = static_cast<std::uint8_t>(frac * 255.0f);
+        wave = stats.wave;
+    });
+
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::Snapshot);
+    writer.put(proto::SnapshotHeader{ .server_tick = tick_,
+                                      .count = static_cast<std::uint16_t>(entries.size()),
+                                      .level = level_,
+                                      .xp_frac = xp_frac,
+                                      .wave = wave });
+    for (const proto::SnapshotEntry& entry : entries) { writer.put(entry); }
+    server_.broadcast(writer.bytes(), false);
+}
+
+void GameServer::check_level_up()
+{
+    core::Registry& registry = world_.registry();
+    GameStats* stats = nullptr;
+    registry.view<GameStats>().each([&](core::Entity, GameStats& s) { stats = &s; });
+    if (stats == nullptr || stats->xp < xp_needed_) { return; }
+
+    stats->xp -= xp_needed_;
+    ++level_;
+    xp_needed_ = xp_needed_for(level_);
+
+    // Freeze the world and ask every connected player to choose an upgrade.
+    leveling_ = true;
+    pending_.clear();
+    offered_.clear();
+    for (const auto& [peer, token] : peer_token_) {
+        start_level_up_for(peer);
+        pending_.insert(peer);
+    }
+    if (pending_.empty()) { leveling_ = false; } // nobody to choose
+    spdlog::info("team reached level {}", level_);
+}
+
+void GameServer::start_level_up_for(std::uint32_t peer_id)
+{
+    const core::Entity player = sessions_[peer_token_[peer_id]].entity;
+    const std::array<proto::LevelUpChoice, proto::level_up_choices> choices = roll_upgrades(player);
+    offered_[peer_id] = choices;
+
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::LevelUp);
+    for (const proto::LevelUpChoice& choice : choices) { writer.put(choice); }
+    server_.send(peer_id, writer.bytes(), true);
+}
+
+std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgrades(core::Entity player)
+{
+    // Upgrades available to this specific player (Onion once, AOE only with aura).
+    std::vector<UpgradeId> pool;
+    for (const UpgradeId id : { UpgradeId::Damage, UpgradeId::FireRate, UpgradeId::MoveSpeed, UpgradeId::MaxHp,
+                                UpgradeId::AoeZone, UpgradeId::Onion }) {
+        if (is_available(world_.registry(), player, id)) { pool.push_back(id); }
+    }
+
+    std::array<Rarity, 3> rarities{ Rarity::Common, Rarity::Uncommon, Rarity::Legendary };
+    std::array<float, 3> rarity_weights{ rarity_weight(Rarity::Common), rarity_weight(Rarity::Uncommon),
+                                         rarity_weight(Rarity::Legendary) };
+
+    const auto roll_rarity = [&] {
+        std::discrete_distribution<std::size_t> dist{ rarity_weights.begin(), rarity_weights.end() };
+        return rarities[dist(rng_)];
+    };
+
+    std::array<proto::LevelUpChoice, proto::level_up_choices> out{};
+    for (std::size_t k = 0; k < proto::level_up_choices; ++k) {
+        proto::LevelUpChoice choice{};
+        if (!pool.empty()) {
+            std::uniform_int_distribution<std::size_t> pick{ 0, pool.size() - 1 };
+            const std::size_t idx = pick(rng_);
+            const UpgradeId id = pool[idx];
+            pool.erase(pool.begin() + static_cast<std::ptrdiff_t>(idx)); // no duplicates
+            const Rarity rarity = (id == UpgradeId::Onion) ? Rarity::Legendary : roll_rarity();
+            choice = { .id = static_cast<std::uint8_t>(id), .rarity = static_cast<std::uint8_t>(rarity) };
+        } else {
+            // Fewer than 3 available: pad with a plain Common Damage.
+            choice = { .id = static_cast<std::uint8_t>(UpgradeId::Damage),
+                       .rarity = static_cast<std::uint8_t>(Rarity::Common) };
+        }
+        out[k] = choice;
+    }
+    return out;
+}
+
+void GameServer::on_select(std::uint32_t peer_id, proto::ByteReader& reader)
+{
+    const auto select = reader.get<proto::SelectUpgrade>();
+    const auto peer_it = peer_token_.find(peer_id);
+    const auto offer_it = offered_.find(peer_id);
+    if (!select || !leveling_ || peer_it == peer_token_.end() || offer_it == offered_.end()
+        || select->index >= proto::level_up_choices) {
+        return;
+    }
+
+    const proto::LevelUpChoice& chosen = offer_it->second[select->index];
+    apply_upgrade(world_.registry(), sessions_[peer_it->second].entity,
+                  static_cast<UpgradeId>(chosen.id), static_cast<Rarity>(chosen.rarity));
+
+    pending_.erase(peer_id);
+    offered_.erase(offer_it);
+    if (pending_.empty()) { leveling_ = false; } // everyone chose -> resume
+}
+
+} // namespace server

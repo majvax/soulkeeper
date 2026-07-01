@@ -1,8 +1,8 @@
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.3)
 include(cmake/warning.cmake)
 
 if (NOT DEFINED CMAKE_CXX_STANDARD)
-    set(CMAKE_CXX_STANDARD 23)
+  set(CMAKE_CXX_STANDARD 26)
 endif()
 
 set(CMAKE_CXX_EXTENSIONS OFF)
