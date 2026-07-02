@@ -73,6 +73,11 @@ namespace server {
 GameServer::GameServer(net::Server server) : server_{ std::move(server) }, world_{ shared::make_game_world() }
 {
     xp_needed_ = xp_needed_for(level_);
+    // Bind the ECS into the sim VM, then load plugins (upgrades + objects).
+    // Bindings capture &world_.registry(), which is stable for our lifetime.
+    mod::install_sim_bindings(lua_host_, world_.registry());
+    lua_host_.load_dir("mods");
+    mod::install_script_systems(lua_host_, world_); // add Lua-defined systems to the pipeline
 }
 
 void GameServer::poll()
@@ -106,7 +111,10 @@ void GameServer::update(core::FixedTimestep& timestep)
         // the (frozen) world so clients stay consistent.
         if (!paused_ && !leveling_) {
             spawn_enemies(timestep.dt());
+            snapshot_enemies();       // record the enemy set before stepping
             world_.step(timestep.dt());
+            emit_enemy_deaths();      // any enemy gone after the step died
+            emit_downed_transitions();
             check_level_up();
         }
         if (tick_ % proto::snapshot_every_n_ticks == 0) { broadcast_snapshot(); }
@@ -126,6 +134,7 @@ void GameServer::spawn_enemies(float dt)
             wave_timer_ -= wave_duration;
             ++stats.wave;
             spdlog::info("wave {}", stats.wave);
+            lua_host_.events().emit("on_wave_start", static_cast<int>(stats.wave));
         }
         wave = stats.wave;
     });
@@ -148,6 +157,48 @@ void GameServer::spawn_enemies(float dt)
     const float angle = random_angle();
     create_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
                  target.y + (std::sin(angle) * spawn_distance), pick_archetype(wave, rng_));
+}
+
+void GameServer::snapshot_enemies()
+{
+    core::Registry& registry = world_.registry();
+    pre_step_enemies_.clear();
+    registry.view<EnemyTag, Position, Archetype>().each(
+      [&](core::Entity e, const EnemyTag&, const Position& pos, const Archetype& arch) {
+          const EnemyStats stats = enemy_stats(static_cast<EnemyType>(arch.id));
+          pre_step_enemies_.push_back(
+            { .entity = e, .x = pos.x, .y = pos.y, .variant = arch.id, .xp = stats.xp });
+      });
+}
+
+void GameServer::emit_enemy_deaths()
+{
+    core::Registry& registry = world_.registry();
+    if (!lua_host_.events().has("on_enemy_death")) { return; } // skip table churn if unsubscribed
+    for (const EnemyDeathSnap& s : pre_step_enemies_) {
+        if (registry.valid(s.entity)) { continue; } // still alive
+        sol::table victim = lua_host_.lua().create_table();
+        victim["x"] = s.x;
+        victim["y"] = s.y;
+        victim["variant"] = s.variant;
+        victim["xp"] = s.xp;
+        lua_host_.events().emit("on_enemy_death", victim);
+    }
+}
+
+void GameServer::emit_downed_transitions()
+{
+    core::Registry& registry = world_.registry();
+    const bool subscribed = lua_host_.events().has("on_player_downed");
+    for (auto& [token, session] : sessions_) {
+        if (!registry.valid(session.entity)) { continue; }
+        const bool downed = registry.has<Downed>(session.entity);
+        if (downed && !session.was_downed && subscribed) {
+            lua_host_.events().emit("on_player_downed",
+                                    mod::EntityHandle{ .reg = &registry, .entity = session.entity });
+        }
+        session.was_downed = downed;
+    }
 }
 
 void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
@@ -306,12 +357,8 @@ void GameServer::broadcast_snapshot()
         }
 
         std::uint8_t variant = 0;
-        std::uint16_t aura_radius = 0;
         std::uint16_t move_speed = 0;
         if (kind == proto::EntityKind::Player) {
-            if (const Aura* aura = registry.try_get<Aura>(entity)) {
-                aura_radius = static_cast<std::uint16_t>(aura->radius);
-            }
             if (const Speed* speed = registry.try_get<Speed>(entity)) {
                 move_speed = static_cast<std::uint16_t>(speed->value);
             }
@@ -321,7 +368,7 @@ void GameServer::broadcast_snapshot()
 
         entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,
                             .kind = static_cast<std::uint8_t>(kind), .health = health, .variant = variant,
-                            .aura_radius = aura_radius, .move_speed = move_speed });
+                            .move_speed = move_speed });
     });
 
     // Shared XP progress + wave for the HUD.
@@ -340,7 +387,11 @@ void GameServer::broadcast_snapshot()
                                       .level = level_,
                                       .xp_frac = xp_frac,
                                       .wave = wave });
-    for (const proto::SnapshotEntry& entry : entries) { writer.put(entry); }
+    // Each entry is followed by the entity's networked script components.
+    for (const proto::SnapshotEntry& entry : entries) {
+        writer.put(entry);
+        mod::write_networked(writer, registry, lua_host_.scripts(), entry.id);
+    }
     server_.broadcast(writer.bytes(), false);
 }
 
@@ -365,6 +416,7 @@ void GameServer::check_level_up()
     }
     if (pending_.empty()) { leveling_ = false; } // nobody to choose
     spdlog::info("team reached level {}", level_);
+    lua_host_.events().emit("on_level_up", static_cast<int>(level_));
 }
 
 void GameServer::start_level_up_for(std::uint32_t peer_id)
@@ -381,17 +433,21 @@ void GameServer::start_level_up_for(std::uint32_t peer_id)
 
 std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgrades(core::Entity player)
 {
-    // Upgrades available to this specific player (Onion once, AOE only with aura).
-    std::vector<UpgradeId> pool;
-    for (const UpgradeId id : { UpgradeId::Damage, UpgradeId::FireRate, UpgradeId::MoveSpeed, UpgradeId::MaxHp,
-                                UpgradeId::AoeZone, UpgradeId::Onion }) {
-        if (is_available(world_.registry(), player, id)) { pool.push_back(id); }
+    const mod::ContentRegistry& registry = lua_host_.registry();
+    const mod::EntityHandle handle{ .reg = &world_.registry(), .entity = player };
+
+    // Wire ids of content available to this specific player (each def's own
+    // `available` predicate decides — e.g. Onion only without an aura).
+    std::vector<std::uint8_t> pool;
+    for (const mod::ContentDef& d : registry.defs()) {
+        if (mod::run_available(d, handle)) { pool.push_back(d.wire_id); }
     }
 
-    std::array<Rarity, 3> rarities{ Rarity::Common, Rarity::Uncommon, Rarity::Legendary };
-    std::array<float, 3> rarity_weights{ rarity_weight(Rarity::Common), rarity_weight(Rarity::Uncommon),
-                                         rarity_weight(Rarity::Legendary) };
-
+    const std::array<mod::Rarity, 3> rarities{ mod::Rarity::Common, mod::Rarity::Uncommon,
+                                               mod::Rarity::Legendary };
+    const std::array<float, 3> rarity_weights{ mod::rarity_weight(mod::Rarity::Common),
+                                               mod::rarity_weight(mod::Rarity::Uncommon),
+                                               mod::rarity_weight(mod::Rarity::Legendary) };
     const auto roll_rarity = [&] {
         std::discrete_distribution<std::size_t> dist{ rarity_weights.begin(), rarity_weights.end() };
         return rarities[dist(rng_)];
@@ -403,14 +459,16 @@ std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgra
         if (!pool.empty()) {
             std::uniform_int_distribution<std::size_t> pick{ 0, pool.size() - 1 };
             const std::size_t idx = pick(rng_);
-            const UpgradeId id = pool[idx];
+            const std::uint8_t wire = pool[idx];
             pool.erase(pool.begin() + static_cast<std::ptrdiff_t>(idx)); // no duplicates
-            const Rarity rarity = (id == UpgradeId::Onion) ? Rarity::Legendary : roll_rarity();
-            choice = { .id = static_cast<std::uint8_t>(id), .rarity = static_cast<std::uint8_t>(rarity) };
+            const mod::ContentDef* d = registry.by_wire(wire);
+            // Objects don't scale with rarity — always Legendary.
+            const mod::Rarity rarity =
+              (d != nullptr && d->kind == mod::ContentKind::Object) ? mod::Rarity::Legendary : roll_rarity();
+            choice = { .id = wire, .rarity = static_cast<std::uint8_t>(rarity) };
         } else {
-            // Fewer than 3 available: pad with a plain Common Damage.
-            choice = { .id = static_cast<std::uint8_t>(UpgradeId::Damage),
-                       .rarity = static_cast<std::uint8_t>(Rarity::Common) };
+            // Fewer than 3 available: pad with the first content at Common.
+            choice = { .id = 0, .rarity = static_cast<std::uint8_t>(mod::Rarity::Common) };
         }
         out[k] = choice;
     }
@@ -428,8 +486,11 @@ void GameServer::on_select(std::uint32_t peer_id, proto::ByteReader& reader)
     }
 
     const proto::LevelUpChoice& chosen = offer_it->second[select->index];
-    apply_upgrade(world_.registry(), sessions_[peer_it->second].entity,
-                  static_cast<UpgradeId>(chosen.id), static_cast<Rarity>(chosen.rarity));
+    if (const mod::ContentDef* d = lua_host_.registry().by_wire(chosen.id)) {
+        const mod::EntityHandle handle{ .reg = &world_.registry(),
+                                        .entity = sessions_[peer_it->second].entity };
+        mod::run_apply(*d, handle, static_cast<mod::Rarity>(chosen.rarity));
+    }
 
     pending_.erase(peer_id);
     offered_.erase(offer_it);

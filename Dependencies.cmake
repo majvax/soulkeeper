@@ -65,3 +65,50 @@ if(stb_ADDED)
     add_library(stb INTERFACE)
     target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 endif()
+
+# Lua 5.4 — the embedded scripting runtime for the modding layer. The official
+# mirror ships sources at the repo root but no build system; compile the library
+# ourselves (excluding the two standalone-tool mains lua.c / luac.c).
+CPMAddPackage(
+    NAME lua
+    GITHUB_REPOSITORY lua/lua
+    GIT_TAG v5.4.7
+    DOWNLOAD_ONLY YES
+)
+if(lua_ADDED)
+    file(GLOB LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
+    # Drop the CLI (lua.c) and compiler (luac.c) mains, and the onelua.c
+    # amalgamation (it re-#includes every unit + a main() -> duplicate symbols).
+    list(FILTER LUA_SOURCES EXCLUDE REGEX "/(lua|luac|onelua)\\.c$")
+    add_library(lua STATIC ${LUA_SOURCES})
+    # Build the C sources as C (they are not C++), and enable POSIX + dlopen on unix.
+    set_target_properties(lua PROPERTIES LINKER_LANGUAGE C)
+    target_include_directories(lua SYSTEM PUBLIC ${lua_SOURCE_DIR})
+    if(UNIX)
+        target_compile_definitions(lua PRIVATE LUA_USE_LINUX)
+        target_link_libraries(lua PUBLIC m ${CMAKE_DL_LIBS})
+    endif()
+    add_library(lua::lua ALIAS lua)
+endif()
+
+# sol2 — modern C++ <-> Lua binding (header-only). Catch mod errors via safe
+# function calls so a broken plugin can never crash the authoritative server.
+# No sol2 release since v3.3.0 (2022), which predates GCC 16 / C++26 and
+# misdetects Lua 5.4; the actively-maintained `develop` branch is the supported
+# choice for modern toolchains.
+CPMAddPackage(
+    NAME sol2
+    GITHUB_REPOSITORY ThePhD/sol2
+    GIT_TAG develop
+    DOWNLOAD_ONLY YES
+)
+if(sol2_ADDED)
+    add_library(sol2 INTERFACE)
+    target_include_directories(sol2 SYSTEM INTERFACE ${sol2_SOURCE_DIR}/include)
+    # SOL_SAFE_FUNCTION: mod-callback errors are caught, not UB.
+    # SOL_NO_LUA_HPP: force sol2 to include our vendored <lua.h> (5.4) instead of
+    # a stray system-installed <lua.hpp> of a different version.
+    target_compile_definitions(sol2 INTERFACE SOL_SAFE_FUNCTION=1 SOL_NO_LUA_HPP=1)
+    target_link_libraries(sol2 INTERFACE lua::lua)
+    add_library(sol2::sol2 ALIAS sol2)
+endif()

@@ -1,6 +1,8 @@
 #pragma once
 #include "client/engine.hpp"
+#include "client/mod/render_bindings.hpp"
 #include "client/renderer.hpp"
+#include "core/ecs.hpp"
 #include "client/scene.hpp"
 #include "client/scene/console.hpp"
 #include "client/scene/level_up.hpp"
@@ -12,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <imgui.h>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,17 +25,23 @@
 // All networking lives in the injected client::Session.
 struct Remote
 {
-    std::uint8_t kind;         // proto::EntityKind
-    std::uint32_t net_id;      // server id, for the name label
-    std::uint8_t health;       // 0..255 fraction of max, for the health bar
-    std::uint8_t variant;      // enemies: archetype id (EnemyType)
-    std::uint16_t aura_radius; // players: aura radius (0 = none)
+    std::uint8_t kind;    // proto::EntityKind
+    std::uint32_t net_id; // server id, for the name label
+    std::uint8_t health;  // 0..255 fraction of max, for the health bar
+    std::uint8_t variant; // enemies: archetype id (EnemyType)
 };
 
 class GameScene : public client::Scene
 {
 public:
-    explicit GameScene(client::Engine* engine) : Scene(engine), textures_{ engine->renderer() } {}
+    explicit GameScene(client::Engine* engine) : Scene(engine), textures_{ engine->renderer() }
+    {
+        draw_ctx_.renderer = engine->renderer();
+        draw_ctx_.textures = &textures_;
+        // One persistent Lua object referencing our DrawContext, reused every
+        // frame for all plugin draw hooks (no per-call allocation).
+        ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(draw_ctx_));
+    }
 
     // Input comes through the event stack (not SDL_GetKeyboardState), so a scene
     // that returns Stop above us naturally blocks it — no ImGui focus checks.
@@ -172,23 +181,27 @@ private:
         for (std::uint16_t i = 0; i < header->count; ++i) {
             const auto entry = reader.get<proto::SnapshotEntry>();
             if (!entry) { break; }
+            // Every entry is followed by its networked script components.
+            std::vector<mod::NetComp> comps = mod::read_networked(reader, engine_->mods().scripts());
 
             if (has_player_ && entry->id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = entry->x, .y = entry->y }; // snap correction
                 my_health_ = entry->health;
-                my_aura_radius_ = entry->aura_radius;
                 my_move_speed_ = entry->move_speed;
+                script_state_[entry->id] = std::move(comps);
+                seen.insert(entry->id);
                 continue;
             }
 
             seen.insert(entry->id);
+            script_state_[entry->id] = std::move(comps);
             const auto it = remotes_.find(entry->id);
             if (it == remotes_.end()) {
                 const core::Entity e = registry_.create();
                 registry_.assign(e, Position{ .x = entry->x, .y = entry->y });
                 registry_.assign(e, PrevPosition{ .x = entry->x, .y = entry->y });
                 registry_.assign(e, Remote{ .kind = entry->kind, .net_id = entry->id, .health = entry->health,
-                                            .variant = entry->variant, .aura_radius = entry->aura_radius });
+                                            .variant = entry->variant });
                 remotes_[entry->id] = e;
             } else {
                 Position& pos = registry_.get<Position>(it->second);
@@ -196,7 +209,6 @@ private:
                 pos = { .x = entry->x, .y = entry->y };
                 Remote& rem = registry_.get<Remote>(it->second);
                 rem.health = entry->health;
-                rem.aura_radius = entry->aura_radius;
             }
         }
 
@@ -207,6 +219,9 @@ private:
             } else {
                 ++it;
             }
+        }
+        for (auto it = script_state_.begin(); it != script_state_.end();) {
+            it = seen.contains(it->first) ? std::next(it) : script_state_.erase(it);
         }
         time_since_snapshot_ = 0.0f;
     }
@@ -224,6 +239,8 @@ private:
         const float wh = static_cast<float>(engine_->height());
         const float ox = (ww * 0.5f) - cam_x;
         const float oy = (wh * 0.5f) - cam_y;
+        draw_ctx_.ox = ox; // keep the plugin draw context's camera current
+        draw_ctx_.oy = oy;
 
         draw_background(r, cam_x, cam_y, ww, wh, ox, oy);
 
@@ -250,7 +267,7 @@ private:
                   draw_enemy(r, x, y, enemy_tex, rem.variant);
                   health_bar(r, x, y, rem.health);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
-                  if (rem.aura_radius > 0) { draw_aura(x, y, static_cast<float>(rem.aura_radius)); }
+                  draw_object_hooks(x, y, script_state_for(rem.net_id));
                   draw_entity(r, x, y, player_tex, SDL_Color{ 220, 200, 80, 255 });
                   health_bar(r, x, y, rem.health);
                   label(x, y, engine_->session().name_of(rem.net_id));
@@ -266,7 +283,7 @@ private:
 
         if (has_player_) {
             const Position& p = registry_.get<Position>(player_);
-            if (my_aura_radius_ > 0) { draw_aura(ox + p.x, oy + p.y, static_cast<float>(my_aura_radius_)); }
+            draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
             draw_entity(r, ox + p.x, oy + p.y, player_tex, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
             label(ox + p.x, oy + p.y, engine_->session().name());
@@ -343,20 +360,30 @@ private:
         }
     }
 
-    static void draw_xp_orb(SDL_Renderer* r, float cx, float cy)
+    void draw_xp_orb(SDL_Renderer* r, float cx, float cy)
     {
+        if (SDL_Texture* coin = textures_.get(asset_coin)) {
+            client::draw_centered(r, coin, cx, cy, orb_size, orb_size);
+            return;
+        }
         constexpr float size = 9.0f;
-        SDL_SetRenderDrawColor(r, 90, 200, 255, 255); // XP: cyan
+        SDL_SetRenderDrawColor(r, 90, 200, 255, 255); // XP: cyan (fallback)
         const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
         SDL_RenderFillRect(r, &rect);
     }
 
-    // Translucent aura ring around a player who has the Onion aura.
-    static void draw_aura(float cx, float cy, float radius)
+    // Run every plugin Object draw hook for a player (e.g. the Onion aura ring).
+    // Hooks self-gate (the Onion skips a zero radius), so calling is cheap.
+    [[nodiscard]] const std::vector<mod::NetComp>* script_state_for(std::uint32_t net_id) const
     {
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        draw->AddCircleFilled(ImVec2(cx, cy), radius, IM_COL32(120, 180, 255, 30));
-        draw->AddCircle(ImVec2(cx, cy), radius, IM_COL32(120, 180, 255, 120), 0, 2.0f);
+        const auto it = script_state_.find(net_id);
+        return it != script_state_.end() ? &it->second : nullptr;
+    }
+
+    void draw_object_hooks(float cx, float cy, const std::vector<mod::NetComp>* comps)
+    {
+        const client::DrawView view{ .x = cx, .y = cy, .scripts = &engine_->mods().scripts(), .comps = comps };
+        client::run_object_draws(engine_->mods(), ctx_obj_, view);
     }
 
     static void health_bar(SDL_Renderer* r, float cx, float cy, std::uint8_t health)
@@ -383,10 +410,12 @@ private:
 
     static constexpr float entity_size = 12.0f;
     static constexpr float sprite_size = 48.0f;
+    static constexpr float orb_size = 20.0f;
     static constexpr float bg_tile = 256.0f;
     static constexpr const char* asset_player = "assets/sprite/player.png";
     static constexpr const char* asset_enemy = "assets/sprite/enemy.png";
     static constexpr const char* asset_background = "assets/background.png";
+    static constexpr const char* asset_coin = "assets/icons/coin.png";
 
     // Held-input state, maintained from key/mouse events in handle_event.
     struct InputState
@@ -396,6 +425,8 @@ private:
     void clear_input() { input_ = {}; }
 
     client::Textures textures_;
+    client::DrawContext draw_ctx_;  // reused surface for plugin draw hooks
+    sol::object ctx_obj_;           // persistent Lua handle to draw_ctx_
     InputState input_;
     core::Registry registry_;
     std::unordered_map<std::uint32_t, core::Entity> remotes_; // net id -> local entity
@@ -404,8 +435,9 @@ private:
     bool has_player_ = false;
     bool level_open_ = false;
     std::uint8_t my_health_ = 255;
-    std::uint16_t my_aura_radius_ = 0;
     std::uint16_t my_move_speed_ = 0;
+    // Per-entity networked script components (net id -> components), for draw hooks.
+    std::unordered_map<std::uint32_t, std::vector<mod::NetComp>> script_state_;
     std::uint16_t level_ = 1;
     std::uint8_t xp_frac_ = 0;
     std::uint16_t wave_ = 1;

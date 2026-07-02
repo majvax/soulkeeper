@@ -16,6 +16,8 @@ target_link_libraries(client
         imgui::imgui
         enet
         stb
+        sol2::sol2
+        fmt::fmt
 )
 
 target_include_directories(client
@@ -36,6 +38,8 @@ target_link_libraries(server
     PRIVATE
     spdlog::spdlog
     enet
+    sol2::sol2
+    fmt::fmt
 )
 
 target_include_directories(server

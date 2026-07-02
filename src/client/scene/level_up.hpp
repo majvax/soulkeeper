@@ -2,7 +2,8 @@
 #include "client/engine.hpp"
 #include "client/renderer.hpp"
 #include "client/scene.hpp"
-#include "shared/progression/upgrades.hpp"
+#include "shared/mod/registry.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <imgui.h>
@@ -48,20 +49,38 @@ public:
         draw->AddText(ImVec2(w * 0.5f - 90.0f, h * 0.5f - 200.0f), IM_COL32(255, 255, 255, 255),
                       "LEVEL UP - choose an upgrade");
 
+        const mod::ContentRegistry& registry = engine_->mods().registry();
         const auto& choices = engine_->session().choices();
         for (std::size_t i = 0; i < choices.size(); ++i) {
             const SDL_FRect rect = card_rect(i, w, h);
-            const auto id = static_cast<UpgradeId>(choices[i].id);
-            const auto rarity = static_cast<Rarity>(choices[i].rarity);
+            const auto rarity = static_cast<mod::Rarity>(choices[i].rarity);
+            const mod::ContentDef* def = registry.by_wire(choices[i].id);
             const SDL_Color col = rarity_color(rarity);
 
-            SDL_Texture* tex = textures_.get(card_asset(rarity));
-            if (tex != nullptr) {
-                SDL_RenderTexture(r, tex, nullptr, &rect);
-            } else {
-                SDL_SetRenderDrawColor(r, 24, 24, 30, 240);
-                SDL_RenderFillRect(r, &rect);
+            // Card background: a darkened rarity tint (grey / green / yellow).
+            SDL_SetRenderDrawColor(r, static_cast<Uint8>(col.r / 3), static_cast<Uint8>(col.g / 3),
+                                   static_cast<Uint8>(col.b / 3), 245);
+            SDL_RenderFillRect(r, &rect);
+
+            // Icon: centered near the top, drawn at its natural size (clamped) —
+            // never stretched to fill the card.
+            if (def != nullptr && !def->sprite.empty()) {
+                if (SDL_Texture* icon = textures_.get(def->sprite)) {
+                    float iw = 0.0f;
+                    float ih = 0.0f;
+                    SDL_GetTextureSize(icon, &iw, &ih);
+                    constexpr float max_icon = 96.0f;
+                    const float scale = std::min(1.0f, max_icon / std::max({ iw, ih, 1.0f }));
+                    iw *= scale;
+                    ih *= scale;
+                    const SDL_FRect dst{ .x = rect.x + ((rect.w - iw) * 0.5f),
+                                         .y = rect.y + (rect.h * 0.30f) - (ih * 0.5f),
+                                         .w = iw, .h = ih };
+                    SDL_RenderTexture(r, icon, nullptr, &dst);
+                }
             }
+
+            // Rarity border.
             SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
             for (int b = 0; b < 3; ++b) {
                 const SDL_FRect border{ .x = rect.x - static_cast<float>(b),
@@ -74,9 +93,10 @@ public:
             const ImU32 rc = IM_COL32(col.r, col.g, col.b, 255);
             const std::string num = std::to_string(i + 1);
             draw->AddText(ImVec2(rect.x + 10.0f, rect.y + 8.0f), IM_COL32(200, 200, 200, 255), num.c_str());
-            draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h * 0.42f), IM_COL32(255, 255, 255, 255),
-                          upgrade_label(id));
-            const std::string value = upgrade_value_text(id, rarity);
+            const char* label = (def != nullptr) ? def->label.c_str() : "?";
+            draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h * 0.42f), IM_COL32(255, 255, 255, 255), label);
+            const std::string value = (def != nullptr) ? def->value_text[static_cast<std::size_t>(rarity)]
+                                                        : std::string{};
             draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h * 0.42f + 22.0f), rc, value.c_str());
             draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h - 24.0f), rc, rarity_name(rarity));
         }
@@ -120,32 +140,22 @@ private:
         return -1;
     }
 
-    static const char* card_asset(Rarity rarity)
+    static SDL_Color rarity_color(mod::Rarity rarity)
     {
         switch (rarity) {
-        case Rarity::Common:    return "assets/ui/card_common.png";
-        case Rarity::Uncommon:  return "assets/ui/card_uncommon.png";
-        case Rarity::Legendary: return "assets/ui/card_legendary.png";
-        }
-        return "";
-    }
-
-    static SDL_Color rarity_color(Rarity rarity)
-    {
-        switch (rarity) {
-        case Rarity::Common:    return { .r = 150, .g = 150, .b = 150, .a = 255 };
-        case Rarity::Uncommon:  return { .r = 90, .g = 200, .b = 90, .a = 255 };
-        case Rarity::Legendary: return { .r = 230, .g = 190, .b = 60, .a = 255 };
+        case mod::Rarity::Common:    return { .r = 150, .g = 150, .b = 150, .a = 255 };
+        case mod::Rarity::Uncommon:  return { .r = 90, .g = 200, .b = 90, .a = 255 };
+        case mod::Rarity::Legendary: return { .r = 230, .g = 190, .b = 60, .a = 255 };
         }
         return { .r = 150, .g = 150, .b = 150, .a = 255 };
     }
 
-    static const char* rarity_name(Rarity rarity)
+    static const char* rarity_name(mod::Rarity rarity)
     {
         switch (rarity) {
-        case Rarity::Common:    return "COMMON";
-        case Rarity::Uncommon:  return "UNCOMMON";
-        case Rarity::Legendary: return "LEGENDARY";
+        case mod::Rarity::Common:    return "COMMON";
+        case mod::Rarity::Uncommon:  return "UNCOMMON";
+        case mod::Rarity::Legendary: return "LEGENDARY";
         }
         return "";
     }

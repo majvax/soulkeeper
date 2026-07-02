@@ -14,9 +14,11 @@
 
 #include <SDL3/SDL.h>
 
+#include "client/mod/render_bindings.hpp"
 #include "client/scene.hpp"
 #include "client/session.hpp"
 #include "client/ui.hpp"
+#include "shared/mod/lua_host.hpp"
 
 namespace client {
 
@@ -91,10 +93,27 @@ public:
     // Non-owning handles for scenes.
     [[nodiscard]] SDL_Window* window() const noexcept { return window_.get(); }
     [[nodiscard]] SDL_Renderer* renderer() const noexcept { return renderer_.get(); }
-    [[nodiscard]] int width() const noexcept { return config_.width; }
-    [[nodiscard]] int height() const noexcept { return config_.height; }
+    // Actual render output size (not the requested config size) — correct under
+    // fullscreen / any aspect ratio, so the UI stays centered.
+    [[nodiscard]] int width() const noexcept
+    {
+        int w = 0;
+        int h = 0;
+        SDL_GetRenderOutputSize(renderer_.get(), &w, &h);
+        return w;
+    }
+    [[nodiscard]] int height() const noexcept
+    {
+        int w = 0;
+        int h = 0;
+        SDL_GetRenderOutputSize(renderer_.get(), &w, &h);
+        return h;
+    }
     [[nodiscard]] Session& session() noexcept { return session_; }
     [[nodiscard]] SceneManager& scenes() noexcept { return scenes_; }
+    // The client's render VM: content metadata (labels/sprites) + draw hooks,
+    // shared by the game and level-up scenes.
+    [[nodiscard]] mod::LuaHost& mods() noexcept { return render_host_; }
 
     void quit() noexcept { running_ = false; }
     [[nodiscard]] bool running() const noexcept { return running_; }
@@ -113,12 +132,16 @@ private:
     void on_event(const SDL_Event& event);
     void render(float alpha);
 
-    // Declaration order matters for teardown: ui/session/renderer/window are
-    // destroyed before context_ runs SDL_Quit (members destruct in reverse).
+    // Declaration order matters for teardown (members destruct in reverse):
+    //  * ui/session/renderer/window destroy before context_ runs SDL_Quit;
+    //  * render_host_ (the render VM) MUST outlive scenes_ — scenes hold sol
+    //    references (e.g. GameScene's draw-context object) that unref into its
+    //    Lua state on destruction.
     SDLContext context_;
     WindowPtr window_;
     RendererPtr renderer_;
     EngineConfig config_;
+    mod::LuaHost render_host_; // render VM: content metadata + draw hooks
     Session session_;
     SceneManager scenes_;
     ImGuiLayer ui_layer_;

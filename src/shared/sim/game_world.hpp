@@ -21,13 +21,14 @@ inline World make_game_world()
     const core::Entity stats = world.registry().create();
     world.registry().assign(stats, GameStats{ .xp = 0, .wave = 1 });
 
-    world.add_system(TargetingSystem{});  // enemies aim at the nearest player
-    world.add_system(ShootingSystem{});   // players fire bullets toward their aim
-    world.add_system(MovementSystem{});   // integrate velocity (incl. bullets)
-    world.add_system(ProjectileSystem{}); // bullets hit enemies / expire
-    world.add_system(CombatSystem{});     // enemy contact damage (+ optional aura)
-    world.add_system(PickupSystem{});     // players collect XP orbs -> shared pool
-    world.add_system(DeathSystem{});      // enemies drop orbs; players go down / respawn
+    world.add_system(phase::Targeting, TargetingSystem{});   // enemies aim at the nearest player
+    // (phase::Motion is where Lua slow-field systems run — see mods/core)
+    world.add_system(phase::Shooting, ShootingSystem{});     // players fire bullets toward their aim
+    world.add_system(phase::Movement, MovementSystem{});     // integrate velocity (incl. bullets)
+    world.add_system(phase::Projectile, ProjectileSystem{}); // bullets hit enemies / expire
+    world.add_system(phase::Combat, CombatSystem{});         // enemy contact damage (+ optional aura)
+    world.add_system(phase::Pickup, PickupSystem{});         // players collect XP orbs -> shared pool
+    world.add_system(phase::Death, DeathSystem{});           // enemies drop orbs; players go down/respawn
     return world;
 }
 

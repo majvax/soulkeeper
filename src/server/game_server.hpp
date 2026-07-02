@@ -1,7 +1,8 @@
 #pragma once
 #include "core/timestep.hpp"
+#include "shared/mod/lua_host.hpp"
+#include "shared/mod/sim_bindings.hpp"
 #include "shared/net/net.hpp"
-#include "shared/progression/upgrades.hpp"
 #include "shared/protocol.hpp"
 #include "shared/sim/world.hpp"
 
@@ -11,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace server {
 
@@ -23,6 +25,7 @@ struct Session
     bool is_host = false;
     std::uint32_t peer_id = 0;
     bool connected = false;
+    bool was_downed = false; // for the on_player_downed rising edge
 };
 
 // Authoritative game server: owns the simulation + all session bookkeeping.
@@ -52,9 +55,27 @@ private:
     void spawn_enemies(float dt);
     void check_level_up();
     void start_level_up_for(std::uint32_t peer_id);
+
+    // Sim-event emission (mod hooks). on_enemy_death is detected by diffing the
+    // enemy set around world_.step(); on_player_downed by a per-session edge.
+    void snapshot_enemies();      // fill pre_step_enemies_ before stepping
+    void emit_enemy_deaths();     // emit on_enemy_death for enemies gone after step
+    void emit_downed_transitions(); // emit on_player_downed on the rising edge
+
+    struct EnemyDeathSnap
+    {
+        core::Entity entity;
+        float x, y;
+        std::uint8_t variant;
+        std::uint32_t xp;
+    };
+    std::vector<EnemyDeathSnap> pre_step_enemies_;
     [[nodiscard]] std::array<proto::LevelUpChoice, proto::level_up_choices> roll_upgrades(core::Entity player);
 
     net::Server server_;
+    // lua_host_ MUST be declared before world_: the World's Lua-defined systems
+    // hold sol references, so the World must destruct before the Lua state.
+    mod::LuaHost lua_host_; // sim VM: content + script components/systems (SDL-free)
     shared::World world_;
     proto::GameState state_ = proto::GameState::Lobby;
     std::unordered_map<std::uint64_t, Session> sessions_; // token -> session

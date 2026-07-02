@@ -19,13 +19,8 @@ struct Damage
     float per_second;
 };
 
-// A player's damage aura: enemies within `radius` take `per_second` damage.
-// Not assigned by default — a future upgrade.
-struct Aura
-{
-    float radius;
-    float per_second;
-};
+// (Player area effects like the damage aura / slow field are now Lua-defined
+// script components — see mods/core/mod.lua — not engine C++ structs.)
 
 // Marks an enemy entity.
 struct EnemyTag

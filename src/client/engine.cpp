@@ -11,7 +11,8 @@ std::expected<Engine, EngineError> Engine::create(const EngineConfig& config, st
     if (!SDL_Init(SDL_INIT_VIDEO)) { return std::unexpected(EngineError::sdl_init_failed); }
     SDLContext context{ true };
 
-    WindowPtr window{ SDL_CreateWindow(config.title, config.width, config.height, SDL_WINDOW_RESIZABLE) };
+    WindowPtr window{ SDL_CreateWindow(config.title, config.width, config.height,
+                                       SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE) };
     if (!window) { return std::unexpected(EngineError::window_creation_failed); }
 
     RendererPtr renderer{ SDL_CreateRenderer(window.get(), nullptr) };
@@ -43,6 +44,12 @@ void Engine::render(float alpha)
 void Engine::run()
 {
     running_ = true;
+
+    // Bring up the render VM: register draw bindings, then load plugins. Same
+    // plugin set as the server -> identical content wire ids.
+    install_render_bindings(render_host_);
+    render_host_.load_dir("mods");
+
     session_.connect();
     scenes_.push<LobbyScene>(this); // the only hardcoded scene; the rest self-drive
     scenes_.apply_pending();

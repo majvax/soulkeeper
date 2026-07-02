@@ -125,8 +125,8 @@ struct SelectUpgrade
 
 struct LevelUpChoice
 {
-    std::uint8_t id;     // UpgradeId
-    std::uint8_t rarity; // Rarity
+    std::uint8_t id;     // content wire id (mod::ContentRegistry)
+    std::uint8_t rarity; // mod::Rarity
 };
 
 struct Welcome
@@ -166,11 +166,13 @@ struct SnapshotEntry
 {
     std::uint32_t id; // server entity id == the network id
     float x, y;
-    std::uint8_t kind;         // proto::EntityKind
-    std::uint8_t health;       // 0..255 = fraction of max health
-    std::uint8_t variant;      // enemies: archetype id (EnemyType); 0 otherwise
-    std::uint16_t aura_radius; // players: aura radius in px (0 = none)
-    std::uint16_t move_speed;  // players: current move speed px/s (for prediction)
+    std::uint8_t kind;        // proto::EntityKind
+    std::uint8_t health;      // 0..255 = fraction of max health
+    std::uint8_t variant;     // enemies: archetype id (EnemyType); 0 otherwise
+    std::uint16_t move_speed; // players: current move speed px/s (for prediction)
 };
+// Each SnapshotEntry is immediately followed on the wire by the entity's
+// networked script components (see mod::write_networked / read_networked):
+//   uint8 count; { uint8 net_comp_id; float fields[schema.field_count] } * count
 
 } // namespace proto

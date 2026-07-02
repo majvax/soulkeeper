@@ -7,10 +7,9 @@
 #include "shared/components/progression.hpp"
 #include <cmath>
 
-// Resolve player <-> enemy overlap each tick:
-//   * an enemy damages the player it physically overlaps
-//   * if the player has an Aura upgrade, it damages enemies within aura.radius
-// Enemies go into a spatial grid so each player only checks nearby ones.
+// Resolve player <-> enemy contact each tick: an enemy damages the player it
+// physically overlaps. Enemies go into a spatial grid so each player only checks
+// nearby ones. (Area effects like the damage aura are Lua script systems now.)
 class CombatSystem
 {
 public:
@@ -23,22 +22,17 @@ public:
         registry.view<PlayerTag, Position, Health, Radius>().each(
           [&](core::Entity player, const PlayerTag&, const Position& ppos, Health& php, const Radius& prad) {
               if (registry.try_get<Downed>(player) != nullptr) { return; } // downed = out of combat
-              const Aura* aura = registry.try_get<Aura>(player); // optional upgrade
-              const float aura_radius = (aura != nullptr) ? aura->radius : 0.0f;
-              const float reach = aura_radius + cell_size;
+              const float reach = prad.value + cell_size;
               for (const core::Entity enemy :
                    grid.query(ppos.x - reach, ppos.y - reach, ppos.x + reach, ppos.y + reach)) {
                   const Position* epos = registry.try_get<Position>(enemy);
-                  Health* ehp = registry.try_get<Health>(enemy);
                   const Radius* erad = registry.try_get<Radius>(enemy);
                   const Damage* edmg = registry.try_get<Damage>(enemy);
-                  if (!epos || !ehp || !erad || !edmg) { continue; }
+                  if (!epos || !erad || !edmg) { continue; }
 
                   const float dx = epos->x - ppos.x;
                   const float dy = epos->y - ppos.y;
                   const float dist = std::sqrt((dx * dx) + (dy * dy));
-
-                  if (aura != nullptr && dist < aura->radius) { ehp->current -= aura->per_second * dt; }
                   if (dist < prad.value + erad->value) { php.current -= edmg->per_second * dt; }
               }
           });

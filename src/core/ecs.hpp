@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <concepts>
 #include <cstdint>
@@ -186,6 +187,54 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// DynamicPool: a SparseSet whose per-entity record is a flat run of `stride`
+// doubles. Used for Lua-defined (script) components — the field layout isn't a
+// C++ type, so storage is schema-driven at runtime. Cache-friendly (contiguous
+// rows) and trivial to serialize.
+// ---------------------------------------------------------------------------
+class DynamicPool final : public SparseSet {
+public:
+    explicit DynamicPool(std::uint32_t stride) : stride_{stride} {}
+
+    // Insert a zero-initialised row for `e` (or return the existing one).
+    double* emplace_default(Entity e) {
+        if (contains(e)) {
+            return row(e);
+        }
+        emplace_slot(e);
+        const std::size_t base = fields_.size();
+        fields_.resize(base + stride_, 0.0);
+        return &fields_[base];
+    }
+
+    void remove(Entity e) override {
+        if (!contains(e)) {
+            return;
+        }
+        const std::uint32_t slot = slot_of(e);
+        const std::uint32_t moved = remove_slot(e, slot);
+        if (moved != tombstone) {
+            // Mirror the base's swap-and-pop: copy the last row into `slot`.
+            const std::size_t last = fields_.size() - stride_;
+            std::copy(fields_.begin() + static_cast<std::ptrdiff_t>(last), fields_.end(),
+                      fields_.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(slot) * stride_));
+        }
+        fields_.resize(fields_.size() - stride_);
+    }
+
+    // Pointer to the entity's `stride` doubles, or nullptr if absent.
+    [[nodiscard]] double* row(Entity e) noexcept {
+        return contains(e) ? &fields_[static_cast<std::size_t>(slot_of(e)) * stride_] : nullptr;
+    }
+
+    [[nodiscard]] std::uint32_t stride() const noexcept { return stride_; }
+
+private:
+    std::vector<double> fields_;
+    std::uint32_t stride_;
+};
+
+// ---------------------------------------------------------------------------
 // Stable, monotonic component-type ids (used to index the pool table).
 // ---------------------------------------------------------------------------
 namespace detail {
@@ -279,6 +328,11 @@ public:
                 pool->remove(e);
             }
         }
+        for (auto& pool : dynamic_pools_) { // script components, wiped too
+            if (pool) {
+                pool->remove(e);
+            }
+        }
         const std::uint32_t idx = entity_index(e);
         versions_[idx] = (versions_[idx] + 1u) & entity_version_mask;
         free_list_.push_back(idx);
@@ -344,6 +398,25 @@ public:
         return versions_.size() - free_list_.size();
     }
 
+    // --- runtime / script-component access (for the Lua scripting-ECS) --------
+    // Erased access to a typed component pool by its type_id<T>() (nullptr if the
+    // pool was never created). Lets runtime queries test membership generically.
+    [[nodiscard]] SparseSet* raw_pool(std::uint32_t type) noexcept {
+        return (type < pools_.size()) ? pools_[type].get() : nullptr;
+    }
+
+    // Create a dynamic (script) component pool with `stride` double fields,
+    // returning its id. The pool is wiped on destroy() like any other.
+    std::uint32_t create_dynamic_pool(std::uint32_t stride) {
+        const auto id = static_cast<std::uint32_t>(dynamic_pools_.size());
+        dynamic_pools_.push_back(std::make_unique<DynamicPool>(stride));
+        return id;
+    }
+
+    [[nodiscard]] DynamicPool* dynamic_pool(std::uint32_t id) noexcept {
+        return (id < dynamic_pools_.size()) ? static_cast<DynamicPool*>(dynamic_pools_[id].get()) : nullptr;
+    }
+
 private:
     // Fetch (lazily creating) the pool for T.
     template <Component T>
@@ -377,9 +450,10 @@ private:
         return static_cast<const ComponentPool<T>*>(pools_[id].get());
     }
 
-    std::vector<std::uint32_t> versions_;            // version per entity index
-    std::vector<std::uint32_t> free_list_;           // recyclable indices
-    std::vector<std::unique_ptr<SparseSet>> pools_;  // indexed by type_id<T>()
+    std::vector<std::uint32_t> versions_;                    // version per entity index
+    std::vector<std::uint32_t> free_list_;                   // recyclable indices
+    std::vector<std::unique_ptr<SparseSet>> pools_;          // indexed by type_id<T>()
+    std::vector<std::unique_ptr<SparseSet>> dynamic_pools_;  // script components, by dynamic id
 };
 
 } // namespace core
