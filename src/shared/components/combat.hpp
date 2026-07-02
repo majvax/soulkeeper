@@ -27,13 +27,19 @@ struct EnemyTag
 {
 };
 
-// Enemy archetypes (kept here so the client can read the snapshot variant).
-enum class EnemyType : std::uint8_t { Bandit = 0, Scout = 1, Brute = 2 };
-
-// The archetype id carried by an enemy entity (for snapshots + XP lookup).
+// The archetype carried by an enemy entity: the enemy wire id from the mod
+// EnemyRegistry (Lua-defined — see mods/core/enemies.lua). Travels in
+// snapshots as `variant` so the client can look up how to draw it.
 struct Archetype
 {
     std::uint8_t id;
+};
+
+// XP dropped as an orb when this entity dies (copied from its EnemyDef at
+// spawn, so pure systems never need registry access).
+struct XpReward
+{
+    std::uint32_t value;
 };
 
 // A player's ranged weapon: fires a bullet every `cooldown_max` seconds while firing.

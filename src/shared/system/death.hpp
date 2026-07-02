@@ -4,7 +4,6 @@
 #include "shared/components/gameplay.hpp"
 #include "shared/components/physics.hpp"
 #include "shared/components/progression.hpp"
-#include "shared/factory/enemy.hpp"
 #include "shared/factory/xp_orb.hpp"
 #include <vector>
 
@@ -27,9 +26,7 @@ public:
         for (const core::Entity enemy : dead) {
             const Position& pos = registry.get<Position>(enemy);
             std::uint32_t xp = 1;
-            if (const Archetype* arch = registry.try_get<Archetype>(enemy)) {
-                xp = enemy_stats(static_cast<EnemyType>(arch->id)).xp;
-            }
+            if (const XpReward* reward = registry.try_get<XpReward>(enemy)) { xp = reward->value; }
             create_xp_orb(registry, pos.x, pos.y, xp);
             registry.destroy(enemy);
         }

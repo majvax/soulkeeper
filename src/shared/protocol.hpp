@@ -168,7 +168,7 @@ struct SnapshotEntry
     float x, y;
     std::uint8_t kind;        // proto::EntityKind
     std::uint8_t health;      // 0..255 = fraction of max health
-    std::uint8_t variant;     // enemies: archetype id (EnemyType); 0 otherwise
+    std::uint8_t variant;     // enemies: archetype wire id (mod EnemyRegistry); 0 otherwise
     std::uint16_t move_speed; // players: current move speed px/s (for prediction)
 };
 // Each SnapshotEntry is immediately followed on the wire by the entity's

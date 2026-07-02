@@ -50,22 +50,6 @@ float spawn_interval_for(std::uint16_t wave)
     return std::max(0.4f, 1.6f - (static_cast<float>(wave) * 0.12f));
 }
 
-// Relative spawn weight per archetype at a given wave (à la wild-woods-2).
-std::array<float, 3> spawn_weights(std::uint16_t wave)
-{
-    const float w = static_cast<float>(wave);
-    return { 6.0f,                          // Bandit: always
-             std::max(0.0f, w - 1.0f) * 1.5f, // Scout: from wave >= 2
-             std::max(0.0f, w - 3.0f) * 1.0f }; // Brute: from wave >= 4
-}
-
-EnemyType pick_archetype(std::uint16_t wave, std::mt19937& rng)
-{
-    const std::array<float, 3> weights = spawn_weights(wave);
-    std::discrete_distribution<std::size_t> dist{ weights.begin(), weights.end() };
-    return static_cast<EnemyType>(dist(rng));
-}
-
 } // namespace
 
 namespace server {
@@ -78,6 +62,9 @@ GameServer::GameServer(net::Server server) : server_{ std::move(server) }, world
     mod::install_sim_bindings(lua_host_, world_.registry());
     lua_host_.load_dir("mods");
     mod::install_script_systems(lua_host_, world_); // add Lua-defined systems to the pipeline
+    if (lua_host_.enemies().count() == 0) {
+        spdlog::warn("no enemy archetypes registered (mods/core missing?) — waves will spawn nothing");
+    }
 }
 
 void GameServer::poll()
@@ -153,21 +140,38 @@ void GameServer::spawn_enemies(float dt)
     registry.view<EnemyTag>().each([&](core::Entity, const EnemyTag&) { ++enemy_count; });
     if (enemy_count >= max_enemies) { return; }
 
+    if (wave != spawn_weights_wave_) { refresh_spawn_weights(wave); }
+    if (spawn_variants_.empty()) { return; } // nothing weighted > 0 this wave
+
+    const mod::EnemyDef* def = lua_host_.enemies().by_wire(spawn_variants_[spawn_dist_(rng_)]);
     const Position& target = players[enemy_count % players.size()];
     const float angle = random_angle();
-    create_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
-                 target.y + (std::sin(angle) * spawn_distance), pick_archetype(wave, rng_));
+    mod::spawn_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
+                     target.y + (std::sin(angle) * spawn_distance), *def);
+}
+
+void GameServer::refresh_spawn_weights(std::uint16_t wave)
+{
+    spawn_weights_wave_ = wave;
+    spawn_variants_.clear();
+    std::vector<float> weights;
+    for (const mod::EnemyDef& def : lua_host_.enemies().defs()) {
+        const float weight = def.weight_at(wave);
+        if (weight <= 0.0f) { continue; }
+        spawn_variants_.push_back(def.wire_id);
+        weights.push_back(weight);
+    }
+    spawn_dist_ = std::discrete_distribution<std::size_t>{ weights.begin(), weights.end() };
 }
 
 void GameServer::snapshot_enemies()
 {
     core::Registry& registry = world_.registry();
     pre_step_enemies_.clear();
-    registry.view<EnemyTag, Position, Archetype>().each(
-      [&](core::Entity e, const EnemyTag&, const Position& pos, const Archetype& arch) {
-          const EnemyStats stats = enemy_stats(static_cast<EnemyType>(arch.id));
+    registry.view<EnemyTag, Position, Archetype, XpReward>().each(
+      [&](core::Entity e, const EnemyTag&, const Position& pos, const Archetype& arch, const XpReward& reward) {
           pre_step_enemies_.push_back(
-            { .entity = e, .x = pos.x, .y = pos.y, .variant = arch.id, .xp = stats.xp });
+            { .entity = e, .x = pos.x, .y = pos.y, .variant = arch.id, .xp = reward.value });
       });
 }
 

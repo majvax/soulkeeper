@@ -28,7 +28,7 @@ struct Remote
     std::uint8_t kind;    // proto::EntityKind
     std::uint32_t net_id; // server id, for the name label
     std::uint8_t health;  // 0..255 fraction of max, for the health bar
-    std::uint8_t variant; // enemies: archetype id (EnemyType)
+    std::uint8_t variant; // enemies: archetype wire id (mod EnemyRegistry)
 };
 
 class GameScene : public client::Scene
@@ -328,25 +328,19 @@ private:
         SDL_RenderFillRect(r, &rect);
     }
 
-    // Enemies share one sprite; distinguish archetypes by scale + colour tint.
-    static void draw_enemy(SDL_Renderer* r, float cx, float cy, SDL_Texture* tex, std::uint8_t variant)
+    // Archetypes are Lua-defined (mod:add_enemy): scale/tint/sprite come from
+    // the render VM's enemy registry, keyed by the snapshot variant (wire id).
+    void draw_enemy(SDL_Renderer* r, float cx, float cy, SDL_Texture* shared_tex, std::uint8_t variant)
     {
         float scale = 1.0f;
-        SDL_Color tint{ 230, 120, 230, 255 };   // Bandit: magenta
-        SDL_Color fallback{ 200, 70, 220, 255 };
-        switch (static_cast<EnemyType>(variant)) {
-        case EnemyType::Scout:
-            scale = 0.8f;
-            tint = SDL_Color{ 120, 220, 255, 255 }; // cyan
-            fallback = SDL_Color{ 120, 200, 255, 255 };
-            break;
-        case EnemyType::Brute:
-            scale = 1.5f;
-            tint = SDL_Color{ 255, 110, 100, 255 }; // red
-            fallback = SDL_Color{ 230, 90, 80, 255 };
-            break;
-        case EnemyType::Bandit:
-            break;
+        SDL_Color tint{ 255, 255, 255, 255 };
+        SDL_Texture* tex = shared_tex;
+        if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(variant)) {
+            scale = def->scale;
+            tint = SDL_Color{ def->tint[0], def->tint[1], def->tint[2], 255 };
+            if (!def->sprite.empty()) {
+                if (SDL_Texture* own = textures_.get(def->sprite)) { tex = own; }
+            }
         }
         const float size = sprite_size * scale;
         if (tex != nullptr) {
@@ -354,7 +348,7 @@ private:
             client::draw_centered(r, tex, cx, cy, size, size);
             SDL_SetTextureColorMod(tex, 255, 255, 255);
         } else {
-            SDL_SetRenderDrawColor(r, fallback.r, fallback.g, fallback.b, 255);
+            SDL_SetRenderDrawColor(r, tint.r, tint.g, tint.b, 255);
             const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
             SDL_RenderFillRect(r, &rect);
         }

@@ -35,7 +35,7 @@ src/
                    #   progression(GameStats{xp,wave}, XpOrb, Downed{respawn_wave})
     system/        #   pure systems: targeting, shooting, movement, projectile, combat, pickup, death
                    #   + input.hpp (apply_input(vel,mx,my,speed) helper, PLAYER_SPEED)
-    factory/       #   create_player / create_enemy(x,y,EnemyType) / create_projectile / create_xp_orb
+    factory/       #   create_player / create_enemy(x,y,stats,variant) / create_projectile / create_xp_orb
     sim/           #   World (Registry+SystemManager); make_game_world() registers the pipeline + GameStats singleton
     mod/           #   Lua modding layer (SDL-free): registry (ContentDef/ContentRegistry, string-id ->
                    #   deterministic wire-id), lua_host (sol::state, register_mod, mods/*/mod.lua discovery),
@@ -89,8 +89,8 @@ Upgrades, objects, and even components/systems are **Lua 5.4 plugins** (sol2), n
 - Every Lua callback is a protected call — a broken mod logs and is skipped, never crashes.
 
 ## Gameplay implemented
-Lobby + host-start + reconnect · waves (15s) with archetypes **Bandit/Scout/Brute** (tint+scale on
-one sprite) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
+Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes **Bandit/Scout/Brute**
+(per-wave spawn weights, tint+scale on one sprite — `mods/core/enemies.lua`) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
 card scene** with **rarity** upgrades — all defined in `mods/core/` Lua (stat upgrades + **Onion**
 aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn a few waves later** ·
 `/pause` `/resume` console.
@@ -111,9 +111,6 @@ aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- **`mod:add_enemy`** — enemy archetypes are the last hardcoded content (`enemy_stats()` switch in
-  `factory/enemy.hpp`, spawn weights in `game_server.cpp`, tint/scale switch in `scene/game.hpp`);
-  move them into `mods/core/` like upgrades/objects (promised in `modding.md` §3).
 - **Plugin-set validation at join** — hash the sorted id list, reject mismatched clients.
 - Later: game-over/win, XP magnet, weapon variety, delta/quantized snapshots, F11 fullscreen toggle.
 

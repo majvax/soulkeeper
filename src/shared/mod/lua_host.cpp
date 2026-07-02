@@ -75,6 +75,38 @@ struct ModHandle
         state->registry.add(std::move(d));
     }
 
+    // Register an enemy archetype: stats drive the sim, scale/tint/sprite the
+    // render VM, weight the wave spawner. Both VMs parse the same call.
+    void add_enemy(std::string id, std::string label, sol::table stats, sol::optional<sol::table> opts)
+    {
+        check_ns(id);
+        EnemyDef d;
+        d.id = std::move(id);
+        d.label = std::move(label);
+        d.stats.health = stats.get_or("health", 1.0f);
+        d.stats.speed = stats.get_or("speed", 100.0f);
+        d.stats.damage = stats.get_or("damage", 0.0f);
+        d.stats.radius = stats.get_or("radius", 10.0f);
+        d.stats.xp = static_cast<std::uint32_t>(stats.get_or("xp", 1));
+        if (opts) {
+            const sol::object weight = (*opts)["weight"];
+            if (weight.is<sol::protected_function>()) {
+                d.weight_fn = weight.as<sol::protected_function>();
+            } else if (weight.is<double>()) {
+                d.weight = weight.as<float>();
+            }
+            d.scale = opts->get_or("scale", 1.0f);
+            if (const sol::optional<sol::table> tint = (*opts)["tint"]) {
+                for (std::size_t c = 0; c < d.tint.size(); ++c) {
+                    d.tint[c] = static_cast<std::uint8_t>(tint->get_or(c + 1, 255));
+                }
+            }
+            d.sprite = opts->get_or<std::string>("sprite", "");
+            d.on_spawn = opts->get_or<sol::protected_function>("on_spawn", {});
+        }
+        state->enemies.add(std::move(d));
+    }
+
     void subscribe(std::string event, sol::protected_function handler)
     {
         state->events.subscribe(std::move(event), std::move(handler));
@@ -126,6 +158,7 @@ void LuaHost::install_registration_api()
       "Mod", sol::no_constructor,
       "add_stat_upgrade", &ModHandle::add_stat_upgrade,
       "add_object", &ModHandle::add_object,
+      "add_enemy", &ModHandle::add_enemy,
       "subscribe", &ModHandle::subscribe,
       "define_component", &ModHandle::define_component,
       "define_system", &ModHandle::define_system);
@@ -161,6 +194,7 @@ void LuaHost::load_dir(const std::string& dir)
     if (!fs::is_directory(dir, ec)) {
         std::fprintf(stderr, "[mod] no mods directory '%s' — no content loaded\n", dir.c_str());
         state_->registry.finalize();
+        state_->enemies.finalize();
         return;
     }
 
@@ -197,6 +231,7 @@ void LuaHost::load_dir(const std::string& dir)
     }
 
     state_->registry.finalize();
+    state_->enemies.finalize();
     state_->scripts.finalize();
 }
 

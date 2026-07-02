@@ -36,4 +36,27 @@ void ContentRegistry::finalize()
     }
 }
 
+void EnemyRegistry::finalize()
+{
+    std::sort(defs_.begin(), defs_.end(),
+              [](const EnemyDef& a, const EnemyDef& b) { return a.id < b.id; });
+    id_to_wire_.clear();
+    for (std::size_t i = 0; i < defs_.size(); ++i) {
+        defs_[i].wire_id = static_cast<std::uint8_t>(i);
+        id_to_wire_.emplace(defs_[i].id, defs_[i].wire_id);
+    }
+}
+
+float EnemyDef::weight_at(std::uint16_t wave) const
+{
+    if (!weight_fn.valid()) { return weight; }
+    sol::protected_function_result res = weight_fn(static_cast<int>(wave));
+    if (!res.valid()) {
+        const sol::error err = res;
+        std::fprintf(stderr, "[mod] enemy '%s' weight(wave) error: %s\n", id.c_str(), err.what());
+        return 0.0f;
+    }
+    return res.get<float>();
+}
+
 } // namespace mod

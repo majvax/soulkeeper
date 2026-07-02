@@ -53,6 +53,7 @@ private:
     void broadcast_snapshot();
 
     void spawn_enemies(float dt);
+    void refresh_spawn_weights(std::uint16_t wave); // re-evaluate enemy defs' weight(wave)
     void check_level_up();
     void start_level_up_for(std::uint32_t peer_id);
 
@@ -86,6 +87,13 @@ private:
     std::uint32_t tick_ = 0;
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;
+
+    // Spawn table for the current wave: Lua weight callbacks run once per wave
+    // (refresh_spawn_weights), the per-spawn hot path just samples the cached
+    // distribution. Parallel arrays: spawn_dist_ indexes into spawn_variants_.
+    std::vector<std::uint8_t> spawn_variants_;
+    std::discrete_distribution<std::size_t> spawn_dist_;
+    std::uint16_t spawn_weights_wave_ = 0; // 0 = never refreshed (waves start at 1)
 
     // Shared progression + synchronized level-up.
     std::uint16_t level_ = 1;

@@ -29,6 +29,11 @@ struct EntityHandle
 // authoritative registry). Call once, before load_dir().
 void install_sim_bindings(LuaHost& host, core::Registry& world_reg);
 
+// Create an enemy from a registered def and fire its optional on_spawn hook
+// (protected; errors logged). Used by the wave spawner and the Lua spawn_enemy
+// global so scripted spawns behave exactly like natural ones.
+core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def);
+
 // After load_dir(): add every Lua-defined system to the World's pipeline (at its
 // phase order, honoring an optional rate throttle). Server-only.
 void install_script_systems(LuaHost& host, shared::World& world);

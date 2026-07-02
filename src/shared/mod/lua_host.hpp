@@ -22,6 +22,7 @@ namespace mod {
 struct ModState
 {
     ContentRegistry registry;
+    EnemyRegistry enemies;
     EventBus events;
     ScriptComponentRegistry scripts;
     std::vector<ScriptSystem> script_systems;
@@ -36,6 +37,8 @@ public:
     [[nodiscard]] sol::state& lua() noexcept { return lua_; }
     [[nodiscard]] ContentRegistry& registry() noexcept { return state_->registry; }
     [[nodiscard]] const ContentRegistry& registry() const noexcept { return state_->registry; }
+    [[nodiscard]] EnemyRegistry& enemies() noexcept { return state_->enemies; }
+    [[nodiscard]] const EnemyRegistry& enemies() const noexcept { return state_->enemies; }
     [[nodiscard]] EventBus& events() noexcept { return state_->events; }
     [[nodiscard]] const EventBus& events() const noexcept { return state_->events; }
     [[nodiscard]] ScriptComponentRegistry& scripts() noexcept { return state_->scripts; }

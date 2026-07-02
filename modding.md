@@ -103,8 +103,34 @@ mod:add_object("core:onion", "Onion",
 The `core:aura` component and the system that ticks it are defined in Lua too — see §6. The Frost
 Belt is the same pattern with a `core:slow` component and a motion-phase system.
 
-> Enemy archetypes are still hardcoded; a `mod:add_enemy(...)` kind is planned and will follow the
-> same shape.
+### Enemy
+Enemy archetypes are plugins too. Stats drive the simulation, `weight` the wave spawner,
+`scale`/`tint`/`sprite` the client. All of Soulkeeper's enemies live in `mods/core/enemies.lua`.
+
+```lua
+mod:add_enemy("core:scout", "Scout",
+    { health = 10, speed = 200, damage = 15, radius = 8, xp = 1 },
+    {
+        weight = function(wave) return math.max(0, wave - 1) * 1.5 end,
+        scale  = 0.8,
+        tint   = { 120, 220, 255 },
+    })
+```
+
+Enemy `opts` (all optional):
+
+| Key | VM | Meaning |
+|-----|----|---------|
+| `weight` (number or `fun(wave) -> number`) | sim | relative spawn chance, **re-evaluated once per wave** (not per spawn); `0`/absent = never spawns naturally |
+| `scale` (number) | render | sprite scale (default 1.0) |
+| `tint` (`{r,g,b}`) | render | colour mod on the sprite (default white) |
+| `sprite` (string) | render | own sprite path (default: the shared `assets/sprite/enemy.png`) |
+| `on_spawn(e)` | sim | runs on every spawn — attach script components for custom behaviour |
+
+An enemy's wire id is what snapshots carry as `variant` (and what `on_enemy_death` reports); like
+all content it's the lexicographic sort index, but within a **separate enemy id space**. Spawn one
+from a script with `spawn_enemy(x, y, "core:scout")` — it fires `on_spawn` exactly like a natural
+wave spawn.
 
 ---
 
@@ -173,7 +199,8 @@ Engine component globals & fields: `Position{x,y}`, `Velocity{dx,dy}`, `Speed{va
 `Health{current,max}`, `Radius{value}`, `Damage{per_second}`, `Weapon{cooldown_max, cooldown_current,
 bullet_speed, damage, projectile_lifetime}`, `AimState{dx,dy,firing}`. Tag globals for queries:
 `Enemy`, `Player`. Spawn helpers: `spawn_projectile(x,y,vx,vy,damage,lifetime)`,
-`spawn_xp_orb(x,y,value)`, `spawn_enemy(x,y,type)`.
+`spawn_xp_orb(x,y,value)`, `spawn_enemy(x,y,id)` (`id` = a registered enemy like `"core:brute"`;
+returns nil + logs on an unknown id).
 
 ### Defining a component
 A component is a named list of **number** fields. Flag it `networked` to sync it to clients (so draw
@@ -263,7 +290,9 @@ lua-language-server.
   path.
 - **Layering:** the registration API + sim bindings live in `src/shared/mod/` (rendering-free); the
   render bindings live in `src/client/mod/`. The server binary links Lua but never SDL/ImGui.
-- **Registry:** `src/shared/mod/registry.*` holds the string-id → wire-id map and metadata;
+- **Registry:** `src/shared/mod/registry.*` holds the string-id → wire-id maps and metadata
+  (`ContentRegistry` for upgrades/objects, `EnemyRegistry` for enemy archetypes — separate id
+  spaces, same deterministic sort scheme);
   `src/shared/mod/lua_host.*` owns the `sol::state`, exposes `register_mod`/`Mod`, and discovers
   `mods/*/mod.lua`. `src/shared/mod/events.hpp` is the event bus. `src/shared/mod/script_ecs.hpp` is
   the scripting-ECS (dynamic components + net-id assignment + snapshot serialization); dynamic

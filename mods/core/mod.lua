@@ -12,6 +12,7 @@ function main()
     include("systems.lua")(mod)    -- tick the aura / slow each frame
     include("upgrades.lua")(mod)   -- stat upgrades
     include("objects.lua")(mod)    -- Onion, Frost Belt
+    include("enemies.lua")(mod)    -- Bandit, Scout, Brute archetypes
 
     return mod
 end

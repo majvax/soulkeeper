@@ -264,9 +264,30 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     lua.set_function("spawn_xp_orb", [reg](float x, float y, int value) {
         return EntityHandle{ .reg = reg, .entity = create_xp_orb(*reg, x, y, static_cast<std::uint32_t>(value)) };
     });
-    lua.set_function("spawn_enemy", [reg](float x, float y, int type) {
-        return EntityHandle{ .reg = reg, .entity = create_enemy(*reg, x, y, static_cast<EnemyType>(type)) };
-    });
+    const EnemyRegistry* enemies = &host.enemies(); // heap-stable (lives in ModState)
+    lua.set_function("spawn_enemy",
+                     [reg, enemies](float x, float y, const std::string& id, sol::this_state ts) -> sol::object {
+                         const EnemyDef* def = enemies->by_id(id);
+                         if (def == nullptr) {
+                             std::fprintf(stderr, "[mod] spawn_enemy: unknown enemy id '%s'\n", id.c_str());
+                             return sol::lua_nil;
+                         }
+                         return sol::make_object(
+                           ts, EntityHandle{ .reg = reg, .entity = spawn_enemy(*reg, x, y, *def) });
+                     });
+}
+
+core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def)
+{
+    const core::Entity enemy = create_enemy(reg, x, y, def.stats, def.wire_id);
+    if (def.on_spawn.valid()) {
+        sol::protected_function_result res = def.on_spawn(EntityHandle{ .reg = &reg, .entity = enemy });
+        if (!res.valid()) {
+            const sol::error err = res;
+            std::fprintf(stderr, "[mod] enemy '%s' on_spawn error: %s\n", def.id.c_str(), err.what());
+        }
+    }
+    return enemy;
 }
 
 void install_script_systems(LuaHost& host, shared::World& world)

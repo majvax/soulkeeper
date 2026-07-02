@@ -20,6 +20,8 @@
 
 #include <sol/sol.hpp>
 
+#include "shared/factory/enemy.hpp" // EnemyStats
+
 namespace mod {
 
 // Upgrade rarity. Kept here (rather than in progression/) so the registry — the
@@ -118,6 +120,66 @@ private:
     }
 
     std::vector<ContentDef> defs_;
+    std::unordered_map<std::string, std::uint8_t> id_to_wire_;
+};
+
+// One registered enemy archetype. Enemies live in their OWN registry (separate
+// wire-id space from upgrades/objects): the snapshot `variant` byte is the
+// enemy wire id, and the level-up roll never has to filter them out.
+struct EnemyDef
+{
+    std::string id;    // namespaced, e.g. "core:brute" — the sort key
+    std::string label; // display name
+
+    EnemyStats stats{}; // health/speed/damage/radius/xp (what create_enemy needs)
+
+    // Spawn weighting: either a constant or a Lua fn(wave) -> number (wins over
+    // the constant). Evaluated once per wave server-side, never per spawn.
+    float weight = 0.0f;
+    sol::protected_function weight_fn;
+    [[nodiscard]] float weight_at(std::uint16_t wave) const; // registry.cpp (protected call + log)
+
+    // Render VM: how to draw it (shared enemy sprite unless `sprite` overrides).
+    float scale = 1.0f;
+    std::array<std::uint8_t, 3> tint{ 255, 255, 255 };
+    std::string sprite;
+
+    sol::protected_function on_spawn; // optional (Entity) [sim] — attach extra components etc.
+
+    std::uint8_t wire_id = 0; // assigned by finalize()
+};
+
+// Registered enemies + the same deterministic string-id -> wire-id scheme as
+// ContentRegistry (wire id = lexicographic sort index).
+class EnemyRegistry
+{
+public:
+    void add(EnemyDef def)
+    {
+        for (const EnemyDef& d : defs_) {
+            if (d.id == def.id) { return; } // ignore duplicate id (first wins)
+        }
+        defs_.push_back(std::move(def));
+    }
+
+    void finalize(); // sort by id, wire id = index — see registry.cpp
+
+    [[nodiscard]] std::size_t count() const noexcept { return defs_.size(); }
+    [[nodiscard]] const std::vector<EnemyDef>& defs() const noexcept { return defs_; }
+
+    [[nodiscard]] const EnemyDef* by_wire(std::uint8_t wire) const noexcept
+    {
+        return wire < defs_.size() ? &defs_[wire] : nullptr;
+    }
+
+    [[nodiscard]] const EnemyDef* by_id(const std::string& id) const
+    {
+        const auto it = id_to_wire_.find(id);
+        return it == id_to_wire_.end() ? nullptr : &defs_[it->second];
+    }
+
+private:
+    std::vector<EnemyDef> defs_;
     std::unordered_map<std::string, std::uint8_t> id_to_wire_;
 };
 

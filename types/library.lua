@@ -117,8 +117,10 @@ function world:each(...) end
 function spawn_projectile(x, y, vx, vy, damage, lifetime) end
 ---@return Entity
 function spawn_xp_orb(x, y, value) end
----@return Entity
-function spawn_enemy(x, y, type) end
+---Spawn a registered enemy archetype (fires its on_spawn hook).
+---@param id string  # a registered enemy id, e.g. "core:brute"
+---@return Entity|nil # nil (and a logged error) if the id is unknown
+function spawn_enemy(x, y, id) end
 
 --=============================================================================
 -- Draw context + view (render VM; passed into an object's `draw` hook). `x,y`
@@ -169,6 +171,20 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@field value_text? ValueTextFn
 ---@field draw? DrawFn
 
+---@class EnemyStats
+---@field health number
+---@field speed number   # px/s
+---@field damage number  # contact damage per second
+---@field radius number  # collision radius, px
+---@field xp integer     # dropped as an orb on death
+
+---@class EnemyOpts
+---@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)
+---@field scale? number    # sprite scale (default 1.0)
+---@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
+---@field sprite? string   # own sprite path (default: the shared enemy sprite)
+---@field on_spawn? fun(e: Entity) # sim VM: attach extra components etc.
+
 ---@class ComponentOpts
 ---@field networked? boolean  # sync to clients so draw hooks can read it
 
@@ -197,6 +213,14 @@ function Mod:add_stat_upgrade(id, label, amounts, apply, opts) end
 ---@param acquire AcquireFn
 ---@param opts? ObjectOpts
 function Mod:add_object(id, label, acquire, opts) end
+
+---Register an enemy archetype: stats drive the sim, weight the wave spawner,
+---scale/tint/sprite the client. See mods/core/enemies.lua.
+---@param id string   # namespaced, e.g. "core:brute"
+---@param label string
+---@param stats EnemyStats
+---@param opts? EnemyOpts
+function Mod:add_enemy(id, label, stats, opts) end
 
 ---Define a component: a named list of number fields, optionally networked.
 ---@param id string
