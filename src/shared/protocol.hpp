@@ -22,7 +22,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 1;
+inline constexpr std::uint16_t protocol_version = 2;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -44,7 +44,7 @@ enum class MsgType : std::uint8_t {
     JoinDenied = 11,   // S2C: plugin-set hash mismatch; peer is then kicked (reliable)
 };
 
-enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4 };
+enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };
 enum class GameState : std::uint8_t { Lobby = 0, Playing = 1 };
 
 inline constexpr std::uint8_t level_up_choices = 3;
@@ -129,6 +129,7 @@ struct Input
     std::int8_t move_y;
     float aim_x, aim_y; // normalized aim direction
     std::uint8_t firing; // 1 while the trigger is held
+    std::uint8_t dash;   // 1 = dash requested this packet (edge, not held)
 };
 
 struct SelectUpgrade
@@ -180,8 +181,8 @@ struct SnapshotEntry
     std::uint32_t id; // server entity id == the network id
     float x, y;
     std::uint8_t kind;        // proto::EntityKind
-    std::uint8_t health;      // 0..255 = fraction of max health
-    std::uint8_t variant;     // enemies: archetype wire id (mod EnemyRegistry); 0 otherwise
+    std::uint8_t health;      // players: current hearts; others: 0..255 fraction of max health
+    std::uint8_t variant;     // enemies: archetype wire id; players: max hearts; 0 otherwise
     std::uint16_t move_speed; // players: current move speed px/s (for prediction)
 };
 // Each SnapshotEntry is immediately followed on the wire by the entity's

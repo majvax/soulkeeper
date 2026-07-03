@@ -13,6 +13,17 @@ return function(mod)
             end,
         })
 
+    -- Legendary: dashing damages and shoves enemies you pass through.
+    mod:add_object("core:shockwave", "Shockwave Dash",
+        function(e)
+            local d = e:get(Dash)
+            if d then d.shockwave = 25 end
+        end,
+        {
+            rarity = "legendary",
+            value_text = function() return "dash damages enemies" end,
+        })
+
     mod:add_object("core:frostbelt", "Frost Belt",
         function(e) e:set("core:slow", { radius = 140, factor = 0.5 }) end,
         {

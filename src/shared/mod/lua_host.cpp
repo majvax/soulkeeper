@@ -14,6 +14,29 @@ namespace mod {
 
 namespace {
 
+// Handle returned by mod:add_enemy — attaches script components to every
+// spawned instance of the archetype, chainable:
+//   mod:add_enemy(...):component("core:ranged", { range = 340, ... })
+struct EnemyBuilder
+{
+    ModState* state = nullptr;
+    std::string id;
+
+    EnemyBuilder& component(const std::string& comp_id, const sol::table& fields)
+    {
+        EnemyDef* def = state->enemies.find(id);
+        if (def == nullptr) { return *this; }
+        EnemyComponentInit init{ .component_id = comp_id, .fields = {} };
+        for (const auto& [key, value] : fields) {
+            if (key.is<std::string>() && value.is<double>()) {
+                init.fields.emplace_back(key.as<std::string>(), value.as<double>());
+            }
+        }
+        def->components.push_back(std::move(init));
+        return *this;
+    }
+};
+
 // FNV-1a 64 accumulator for the plugin-set hash. Strings are folded with their
 // terminating NUL so ("ab","c") and ("a","bc") can't collide.
 struct Fnv1a
@@ -111,18 +134,30 @@ struct ModHandle
     }
 
     // Register an enemy archetype: stats drive the sim, scale/tint/sprite the
-    // render VM, weight the wave spawner. Both VMs parse the same call.
-    void add_enemy(std::string id, std::string label, sol::table stats, sol::optional<sol::table> opts)
+    // render VM, weight the wave spawner. Both VMs parse the same call. Stats
+    // can be a table or fun(wave) -> table (per-wave scaling, cached per wave).
+    // Returns a builder: chain :component(id, fields) to attach script
+    // components to every spawned instance.
+    EnemyBuilder add_enemy(std::string id, std::string label, const sol::object& stats,
+                           sol::optional<sol::table> opts)
     {
         check_ns(id);
         EnemyDef d;
-        d.id = std::move(id);
+        d.id = id;
         d.label = std::move(label);
-        d.stats.health = stats.get_or("health", 1.0f);
-        d.stats.speed = stats.get_or("speed", 100.0f);
-        d.stats.damage = stats.get_or("damage", 0.0f);
-        d.stats.radius = stats.get_or("radius", 10.0f);
-        d.stats.xp = static_cast<std::uint32_t>(stats.get_or("xp", 1));
+        const EnemyStats defaults{ .health = 1, .speed = 100, .damage = 0, .radius = 10, .xp = 1 };
+        d.stats = defaults;
+        if (stats.is<sol::table>()) {
+            d.stats = parse_enemy_stats(stats.as<sol::table>(), defaults);
+        } else if (stats.is<sol::protected_function>()) {
+            d.stats_fn = stats.as<sol::protected_function>();
+            sol::protected_function_result base = d.stats_fn(1); // wave-1 baseline
+            if (base.valid()) {
+                if (const sol::optional<sol::table> table = base.get<sol::optional<sol::table>>()) {
+                    d.stats = parse_enemy_stats(*table, defaults);
+                }
+            }
+        }
         if (opts) {
             const sol::object weight = (*opts)["weight"];
             if (weight.is<sol::protected_function>()) {
@@ -140,6 +175,7 @@ struct ModHandle
             d.on_spawn = opts->get_or<sol::protected_function>("on_spawn", {});
         }
         state->enemies.add(std::move(d));
+        return EnemyBuilder{ .state = state, .id = std::move(id) };
     }
 
     void subscribe(std::string event, sol::protected_function handler)
@@ -188,6 +224,10 @@ void LuaHost::install_registration_api()
     // Capture the heap-stable ModState pointer (NOT `this`) so closures/handles
     // survive a move of the LuaHost.
     ModState* st = state_.get();
+
+    lua_.new_usertype<EnemyBuilder>(
+      "EnemyArchetype", sol::no_constructor,
+      "component", &EnemyBuilder::component);
 
     lua_.new_usertype<ModHandle>(
       "Mod", sol::no_constructor,

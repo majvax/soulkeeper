@@ -20,15 +20,30 @@
 ---@class Speed
 ---@field value number  # movement speed, px/s
 
----@class Health
+---@class Health   # enemies (float HP; players use Hearts)
 ---@field current number
 ---@field max number
+
+---@class Hearts   # player heart life (discrete; hits cost whole hearts)
+---@field current integer
+---@field max integer
+
+---@class Dash
+---@field cooldown_max number  # seconds per charge refill
+---@field cooldown number      # time until the next charge
+---@field shockwave number     # damage to enemies passed through (0 = off)
+---@field charges integer
+---@field max_charges integer
+
+---@class Crit
+---@field chance number      # 0..1 roll per shot
+---@field multiplier number  # damage x on a crit
 
 ---@class Radius
 ---@field value number  # collision radius, px
 
 ---@class Damage
----@field per_second number  # contact damage dealt to players
+---@field per_second number  # enemies: HEARTS removed per contact hit
 
 ---@class Weapon
 ---@field cooldown_max number
@@ -45,7 +60,7 @@
 ---@class EnemyTag   # membership-only tag (no fields)
 ---@class PlayerTag  # membership-only tag (no fields)
 
----@alias Component Position|Velocity|Speed|Health|Radius|Damage|Weapon|AimState|EnemyTag|PlayerTag
+---@alias Component Position|Velocity|Speed|Health|Hearts|Radius|Damage|Weapon|AimState|Dash|Crit|EnemyTag|PlayerTag
 
 -- Component tag globals (pass these to Entity/world methods).
 ---@type Component
@@ -64,6 +79,12 @@ Damage = nil
 Weapon = nil
 ---@type Component
 AimState = nil
+---@type Component
+Hearts = nil
+---@type Component
+Dash = nil
+---@type Component
+Crit = nil
 ---@type Component
 Enemy = nil
 ---@type Component
@@ -173,13 +194,25 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@field sprite? string
 ---@field value_text? ValueTextFn
 ---@field draw? DrawFn
+---@field rarity? string  # tier the object rolls at: "common".."legendary" (default "epic")
 
 ---@class EnemyStats
 ---@field health number
 ---@field speed number   # px/s
----@field damage number  # contact damage per second
+---@field damage number  # HEARTS removed per contact hit
 ---@field radius number  # collision radius, px
 ---@field xp integer     # dropped as an orb on death
+
+---Archetype handle returned by Mod:add_enemy.
+---@class EnemyArchetype
+local EnemyArchetype = {}
+
+---Attach a script component (with these field values) to every spawned
+---instance of the archetype. Chainable. Applied without Lua on the spawn path.
+---@param id string     # a defined script component, e.g. "core:ranged"
+---@param fields table<string, number>
+---@return EnemyArchetype
+function EnemyArchetype:component(id, fields) end
 
 ---@class EnemyOpts
 ---@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)
@@ -205,7 +238,7 @@ local Mod = {}
 ---Register a repeatable, rarity-scaled stat upgrade.
 ---@param id string       # namespaced, e.g. "core:damage"
 ---@param label string
----@param amounts number[] # { common, uncommon, legendary }
+---@param amounts number[] # per tier { common, uncommon, rare, epic, legendary }; missing/0 = not offered at that tier
 ---@param apply ApplyFn
 ---@param opts? StatUpgradeOpts
 function Mod:add_stat_upgrade(id, label, amounts, apply, opts) end
@@ -218,11 +251,13 @@ function Mod:add_stat_upgrade(id, label, amounts, apply, opts) end
 function Mod:add_object(id, label, acquire, opts) end
 
 ---Register an enemy archetype: stats drive the sim, weight the wave spawner,
----scale/tint/sprite the client. See mods/core/enemies.lua.
+---scale/tint/sprite the client. Stats can be a function of the wave (per-wave
+---scaling, evaluated once per wave). See mods/core/enemies.lua.
 ---@param id string   # namespaced, e.g. "core:brute"
 ---@param label string
----@param stats EnemyStats
+---@param stats EnemyStats|fun(wave: integer): EnemyStats
 ---@param opts? EnemyOpts
+---@return EnemyArchetype  # chain :component(id, fields) to attach components
 function Mod:add_enemy(id, label, stats, opts) end
 
 ---Define a component: a named list of number fields, optionally networked.

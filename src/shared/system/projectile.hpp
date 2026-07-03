@@ -29,7 +29,9 @@ public:
         std::vector<PlayerTarget> players;
         registry.view<PlayerTag, Position, Radius>().each(
           [&](core::Entity player, const PlayerTag&, const Position& pos, const Radius& rad) {
-              if (registry.try_get<Downed>(player) == nullptr) { // downed = out of combat
+              // Downed players are out of combat; invulnerable ones let bullets pass.
+              if (registry.try_get<Downed>(player) == nullptr
+                  && registry.try_get<Invulnerable>(player) == nullptr) {
                   players.push_back({ .entity = player, .x = pos.x, .y = pos.y, .radius = rad.value });
               }
           });
@@ -50,8 +52,9 @@ public:
                       const float dy = target.y - bpos.y;
                       const float hit = brad.value + target.radius;
                       if ((dx * dx) + (dy * dy) < hit * hit) {
-                          if (Health* php = registry.try_get<Health>(target.entity)) {
-                              php->current -= proj.damage;
+                          if (Hearts* hearts = registry.try_get<Hearts>(target.entity)) {
+                              hearts->current -= static_cast<std::int16_t>(std::max(1.0f, proj.damage));
+                              registry.assign(target.entity, Invulnerable{ .remaining = HIT_IFRAMES });
                           }
                           dead_bullets.push_back(bullet);
                           break; // one hit, bullet is consumed

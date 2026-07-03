@@ -2,6 +2,7 @@
 #include "shared/components/progression.hpp"
 #include "shared/sim/world.hpp"
 #include "shared/system/combat.hpp"
+#include "shared/system/dash.hpp"
 #include "shared/system/death.hpp"
 #include "shared/system/movement.hpp"
 #include "shared/system/pickup.hpp"
@@ -22,7 +23,8 @@ inline World make_game_world()
     world.registry().assign(stats, GameStats{ .xp = 0, .wave = 1 });
 
     world.add_system(phase::Targeting, TargetingSystem{});   // enemies aim at the nearest player
-    // (phase::Motion is where Lua slow-field systems run — see mods/core)
+    world.add_system(phase::Motion, DashSystem{});           // dash burst/recharge (+ shockwave)
+    // (phase::Motion is also where Lua slow-field systems run — see mods/core)
     world.add_system(phase::Shooting, ShootingSystem{});     // players fire bullets toward their aim
     world.add_system(phase::Movement, MovementSystem{});     // integrate velocity (incl. bullets)
     world.add_system(phase::Projectile, ProjectileSystem{}); // bullets hit enemies / expire

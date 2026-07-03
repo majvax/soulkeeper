@@ -15,6 +15,7 @@
 #include "shared/factory/xp_orb.hpp"
 #include "shared/mod/script_ecs.hpp"
 #include "shared/sim/world.hpp"
+#include "shared/system/input.hpp" // DASH_COOLDOWN default for the Dash binding
 
 namespace mod {
 
@@ -160,6 +161,12 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     register_component<Health>(lua, *table, "Health",
       [](const sol::table& t) { return Health{ .current = t.get_or("current", 0.0f), .max = t.get_or("max", 0.0f) }; },
       "current", &Health::current, "max", &Health::max);
+    register_component<Hearts>(lua, *table, "Hearts",
+      [](const sol::table& t) {
+          return Hearts{ .current = static_cast<std::int16_t>(t.get_or("current", 3)),
+                         .max = static_cast<std::int16_t>(t.get_or("max", 3)) };
+      },
+      "current", &Hearts::current, "max", &Hearts::max);
     register_component<Radius>(lua, *table, "Radius",
       [](const sol::table& t) { return Radius{ .value = t.get_or("value", 0.0f) }; },
       "value", &Radius::value);
@@ -184,6 +191,23 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                            .firing = static_cast<std::uint8_t>(t.get_or("firing", 0)) };
       },
       "dx", &AimState::dx, "dy", &AimState::dy, "firing", &AimState::firing);
+    register_component<Dash>(lua, *table, "Dash",
+      [](const sol::table& t) {
+          return Dash{ .cooldown_max = t.get_or("cooldown_max", DASH_COOLDOWN),
+                       .cooldown = t.get_or("cooldown", 0.0f),
+                       .burst_remaining = 0.0f,
+                       .dir_x = 1.0f, .dir_y = 0.0f,
+                       .shockwave = t.get_or("shockwave", 0.0f),
+                       .charges = static_cast<std::uint8_t>(t.get_or("charges", 1)),
+                       .max_charges = static_cast<std::uint8_t>(t.get_or("max_charges", 1)) };
+      },
+      "cooldown_max", &Dash::cooldown_max, "cooldown", &Dash::cooldown, "shockwave", &Dash::shockwave,
+      "charges", &Dash::charges, "max_charges", &Dash::max_charges);
+    register_component<Crit>(lua, *table, "Crit",
+      [](const sol::table& t) {
+          return Crit{ .chance = t.get_or("chance", 0.0f), .multiplier = t.get_or("multiplier", 1.5f) };
+      },
+      "chance", &Crit::chance, "multiplier", &Crit::multiplier);
     // Tag components — no fields; used for membership in queries (`Enemy`, `Player`).
     register_component<EnemyTag>(lua, *table, "Enemy", [](const sol::table&) { return EnemyTag{}; });
     register_component<PlayerTag>(lua, *table, "Player", [](const sol::table&) { return PlayerTag{}; });
@@ -268,21 +292,36 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
         return EntityHandle{ .reg = reg, .entity = create_xp_orb(*reg, x, y, static_cast<std::uint32_t>(value)) };
     });
     const EnemyRegistry* enemies = &host.enemies(); // heap-stable (lives in ModState)
-    lua.set_function("spawn_enemy",
-                     [reg, enemies](float x, float y, const std::string& id, sol::this_state ts) -> sol::object {
-                         const EnemyDef* def = enemies->by_id(id);
-                         if (def == nullptr) {
-                             std::fprintf(stderr, "[mod] spawn_enemy: unknown enemy id '%s'\n", id.c_str());
-                             return sol::lua_nil;
-                         }
-                         return sol::make_object(
-                           ts, EntityHandle{ .reg = reg, .entity = spawn_enemy(*reg, x, y, *def) });
-                     });
+    lua.set_function(
+      "spawn_enemy",
+      [reg, enemies, scripts](float x, float y, const std::string& id, sol::this_state ts) -> sol::object {
+          const EnemyDef* def = enemies->by_id(id);
+          if (def == nullptr) {
+              std::fprintf(stderr, "[mod] spawn_enemy: unknown enemy id '%s'\n", id.c_str());
+              return sol::lua_nil;
+          }
+          return sol::make_object(
+            ts, EntityHandle{ .reg = reg, .entity = spawn_enemy(*reg, x, y, *def, def->stats, *scripts) });
+      });
 }
 
-core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def)
+core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def, const EnemyStats& stats,
+                         ScriptComponentRegistry& scripts)
 {
-    const core::Entity enemy = create_enemy(reg, x, y, def.stats, def.wire_id);
+    const core::Entity enemy = create_enemy(reg, x, y, stats, def.wire_id);
+    // Builder-declared components go straight through the script-ECS pools —
+    // no Lua on the spawn path.
+    for (const EnemyComponentInit& init : def.components) {
+        ScriptSchema* schema = scripts.by_id(init.component_id);
+        if (schema == nullptr || !schema->has_pool) { continue; }
+        core::DynamicPool* pool = reg.dynamic_pool(schema->pool_id);
+        if (pool == nullptr) { continue; }
+        double* row = pool->emplace_default(enemy);
+        for (const auto& [name, value] : init.fields) {
+            const int field = schema->field_index(name);
+            if (field >= 0) { row[field] = value; }
+        }
+    }
     if (def.on_spawn.valid()) {
         sol::protected_function_result res = def.on_spawn(EntityHandle{ .reg = &reg, .entity = enemy });
         if (!res.valid()) {

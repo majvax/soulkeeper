@@ -14,7 +14,7 @@ inline core::Entity create_player(core::Registry& registry, float x, float y)
     registry.assign(player, PrevPosition{ .x = x, .y = y });
     registry.assign(player, Velocity{ .dx = 0, .dy = 0 });
     registry.assign(player, PlayerTag{});
-    registry.assign(player, Health{ .current = 100, .max = 100 });
+    registry.assign(player, Hearts{ .current = 3, .max = 3 });
     registry.assign(player, Radius{ .value = 12 });
     registry.assign(player, Speed{ .value = PLAYER_SPEED });
     registry.assign(player, Weapon{ .cooldown_max = 0.35f,
@@ -23,5 +23,9 @@ inline core::Entity create_player(core::Registry& registry, float x, float y)
                                     .damage = 10.0f,
                                     .projectile_lifetime = 1.2f });
     registry.assign(player, AimState{ .dx = 1.0f, .dy = 0.0f, .firing = 0 });
+    registry.assign(player, Dash{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f,
+                                  .burst_remaining = 0.0f, .dir_x = 1.0f, .dir_y = 0.0f,
+                                  .shockwave = 0.0f, .charges = 1, .max_charges = 1 });
+    registry.assign(player, Crit{ .chance = 0.05f, .multiplier = 1.5f });
     return player;
 }

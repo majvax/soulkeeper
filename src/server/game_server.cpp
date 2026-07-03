@@ -143,22 +143,26 @@ void GameServer::spawn_enemies(float dt)
     if (wave != spawn_weights_wave_) { refresh_spawn_weights(wave); }
     if (spawn_variants_.empty()) { return; } // nothing weighted > 0 this wave
 
-    const mod::EnemyDef* def = lua_host_.enemies().by_wire(spawn_variants_[spawn_dist_(rng_)]);
+    const std::size_t roll = spawn_dist_(rng_);
+    const mod::EnemyDef* def = lua_host_.enemies().by_wire(spawn_variants_[roll]);
     const Position& target = players[enemy_count % players.size()];
     const float angle = random_angle();
     mod::spawn_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
-                     target.y + (std::sin(angle) * spawn_distance), *def);
+                     target.y + (std::sin(angle) * spawn_distance), *def, spawn_stats_[roll],
+                     lua_host_.scripts());
 }
 
 void GameServer::refresh_spawn_weights(std::uint16_t wave)
 {
     spawn_weights_wave_ = wave;
     spawn_variants_.clear();
+    spawn_stats_.clear();
     std::vector<float> weights;
     for (const mod::EnemyDef& def : lua_host_.enemies().defs()) {
         const float weight = def.weight_at(wave);
         if (weight <= 0.0f) { continue; }
         spawn_variants_.push_back(def.wire_id);
+        spawn_stats_.push_back(def.stats_at(wave)); // Lua scaling runs once per wave
         weights.push_back(weight);
     }
     spawn_dist_ = std::discrete_distribution<std::size_t>{ weights.begin(), weights.end() };
@@ -309,6 +313,15 @@ void GameServer::on_input(std::uint32_t peer_id, proto::ByteReader& reader)
     if (AimState* aim = registry.try_get<AimState>(player)) {
         *aim = { .dx = input->aim_x, .dy = input->aim_y, .firing = input->firing };
     }
+    if (input->dash != 0) {
+        if (Dash* dash = registry.try_get<Dash>(player)) {
+            // Dash toward the move direction; standing still dashes toward the aim.
+            const bool moving = input->move_x != 0 || input->move_y != 0;
+            const float dx = moving ? static_cast<float>(input->move_x) : input->aim_x;
+            const float dy = moving ? static_cast<float>(input->move_y) : input->aim_y;
+            start_dash(*dash, dx, dy);
+        }
+    }
 }
 
 void GameServer::on_command(std::uint32_t peer_id, proto::ByteReader& reader)
@@ -366,6 +379,8 @@ void GameServer::broadcast_snapshot()
             kind = proto::EntityKind::Projectile;
         } else if (registry.has<XpOrb>(entity)) {
             kind = proto::EntityKind::XpOrb;
+        } else if (registry.has<HeartPickup>(entity)) {
+            kind = proto::EntityKind::Heart;
         }
 
         std::uint8_t health = 255;
@@ -377,13 +392,19 @@ void GameServer::broadcast_snapshot()
         std::uint8_t variant = 0;
         std::uint16_t move_speed = 0;
         if (kind == proto::EntityKind::Player) {
+            // Players use discrete hearts: health byte = current, variant = max.
+            if (const Hearts* hearts = registry.try_get<Hearts>(entity)) {
+                health = static_cast<std::uint8_t>(std::clamp<int>(hearts->current, 0, 255));
+                variant = static_cast<std::uint8_t>(std::clamp<int>(hearts->max, 1, 255));
+            }
             if (const Speed* speed = registry.try_get<Speed>(entity)) {
                 move_speed = static_cast<std::uint16_t>(speed->value);
             }
         } else if (kind == proto::EntityKind::Enemy) {
             if (const Archetype* arch = registry.try_get<Archetype>(entity)) { variant = arch->id; }
         } else if (kind == proto::EntityKind::Projectile) {
-            if (registry.has<Hostile>(entity)) { variant = 1; } // enemy-fired -> hostile tint
+            if (registry.has<Hostile>(entity)) { variant = 1; }       // enemy-fired -> hostile tint
+            else if (registry.has<CritTag>(entity)) { variant = 2; }  // crit -> bigger/orange
         }
 
         entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,

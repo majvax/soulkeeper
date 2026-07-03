@@ -47,6 +47,33 @@ void EnemyRegistry::finalize()
     }
 }
 
+EnemyStats parse_enemy_stats(const sol::table& table, const EnemyStats& fallback)
+{
+    return EnemyStats{ .health = table.get_or("health", fallback.health),
+                       .speed = table.get_or("speed", fallback.speed),
+                       .damage = table.get_or("damage", fallback.damage),
+                       .radius = table.get_or("radius", fallback.radius),
+                       .xp = static_cast<std::uint32_t>(
+                         table.get_or("xp", static_cast<int>(fallback.xp))) };
+}
+
+EnemyStats EnemyDef::stats_at(std::uint16_t wave) const
+{
+    if (!stats_fn.valid()) { return stats; }
+    sol::protected_function_result res = stats_fn(static_cast<int>(wave));
+    if (!res.valid()) {
+        const sol::error err = res;
+        std::fprintf(stderr, "[mod] enemy '%s' stats(wave) error: %s\n", id.c_str(), err.what());
+        return stats;
+    }
+    const sol::optional<sol::table> table = res.get<sol::optional<sol::table>>();
+    if (!table) {
+        std::fprintf(stderr, "[mod] enemy '%s' stats(wave) did not return a table\n", id.c_str());
+        return stats;
+    }
+    return parse_enemy_stats(*table, stats);
+}
+
 float EnemyDef::weight_at(std::uint16_t wave) const
 {
     if (!weight_fn.valid()) { return weight; }

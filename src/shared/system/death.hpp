@@ -4,15 +4,19 @@
 #include "shared/components/gameplay.hpp"
 #include "shared/components/physics.hpp"
 #include "shared/components/progression.hpp"
+#include "shared/factory/heart.hpp"
 #include "shared/factory/xp_orb.hpp"
+#include <random>
 #include <vector>
 
-// Enemies die -> drop an XP orb worth their archetype's value. Players don't die
-// permanently (co-op): they go Downed and respawn a few waves later.
+// Enemies die -> drop an XP orb worth their archetype's value, and rarely a
+// healing heart. Players don't die permanently (co-op): they go Downed and
+// respawn a few waves later.
 class DeathSystem
 {
 public:
     static constexpr std::uint16_t respawn_waves = 2;
+    static constexpr float heart_drop_chance = 0.04f;
 
     void operator()(core::Registry& registry, float /*dt*/)
     {
@@ -28,21 +32,26 @@ public:
             std::uint32_t xp = 1;
             if (const XpReward* reward = registry.try_get<XpReward>(enemy)) { xp = reward->value; }
             create_xp_orb(registry, pos.x, pos.y, xp);
+            if (chance_(rng_) < heart_drop_chance) { create_heart(registry, pos.x + 14, pos.y); }
             registry.destroy(enemy);
         }
 
-        registry.view<PlayerTag, Health, Position>().each(
-          [&](core::Entity player, const PlayerTag&, Health& hp, Position& pos) {
+        registry.view<PlayerTag, Hearts, Position>().each(
+          [&](core::Entity player, const PlayerTag&, Hearts& hearts, Position& pos) {
               if (Downed* downed = registry.try_get<Downed>(player)) {
                   if (wave >= downed->respawn_wave) {
                       registry.remove<Downed>(player);
-                      hp.current = hp.max;
+                      hearts.current = hearts.max;
                       pos = { .x = 0, .y = 0 };
                   }
-              } else if (hp.current <= 0.0f) {
+              } else if (hearts.current <= 0) {
                   registry.assign(player, Downed{ .respawn_wave = static_cast<std::uint16_t>(wave + respawn_waves) });
                   if (Velocity* vel = registry.try_get<Velocity>(player)) { *vel = { .dx = 0, .dy = 0 }; }
               }
           });
     }
+
+private:
+    std::minstd_rand rng_{ std::random_device{}() };
+    std::uniform_real_distribution<float> chance_{ 0.0f, 1.0f };
 };

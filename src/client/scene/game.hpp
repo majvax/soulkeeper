@@ -64,6 +64,9 @@ public:
             case SDLK_S: input_.down = down; break;
             case SDLK_Q: input_.left = down; break;
             case SDLK_D: input_.right = down; break;
+            case SDLK_LSHIFT: // dash is an edge, not a hold
+                if (down && !event.key.repeat) { input_.dash_queued = true; }
+                break;
             default: break;
             }
         }
@@ -156,13 +159,27 @@ private:
         }
         const std::uint8_t firing = (input_.firing && !downed) ? 1 : 0;
 
-        engine_->session().send_input(
-          proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x, .aim_y = aim_y, .firing = firing });
+        // Dash: forward the edge to the server and mirror it locally so the
+        // predicted position bursts in the same tick. The local Dash uses base
+        // constants — upgraded cooldown/charges live server-side; position is
+        // corrected by snapshots either way.
+        std::uint8_t dash_flag = 0;
+        if (input_.dash_queued && !downed) {
+            dash_flag = 1;
+            const bool moving = mx != 0 || my != 0;
+            start_dash(local_dash_, moving ? static_cast<float>(mx) : aim_x,
+                       moving ? static_cast<float>(my) : aim_y);
+        }
+        input_.dash_queued = false;
+
+        engine_->session().send_input(proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x,
+                                                    .aim_y = aim_y, .firing = firing, .dash = dash_flag });
 
         if (has_player_ && !downed) {
             const float speed = my_move_speed_ > 0 ? static_cast<float>(my_move_speed_) : PLAYER_SPEED;
             Velocity& vel = registry_.get<Velocity>(player_);
             apply_input(vel, mx, my, speed);
+            tick_dash(local_dash_, vel, speed, dt);
             Position& pos = registry_.get<Position>(player_);
             pos.x += vel.dx * dt;
             pos.y += vel.dy * dt;
@@ -186,7 +203,8 @@ private:
 
             if (has_player_ && entry->id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = entry->x, .y = entry->y }; // snap correction
-                my_health_ = entry->health;
+                my_health_ = entry->health;      // current hearts
+                my_max_hearts_ = entry->variant; // max hearts
                 my_move_speed_ = entry->move_speed;
                 script_state_[entry->id] = std::move(comps);
                 seen.insert(entry->id);
@@ -249,7 +267,13 @@ private:
         if (my_health_ == 0) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "DOWNED - respawning...");
         } else {
-            ImGui::Text("HP: %d%%", static_cast<int>(my_health_) * 100 / 255);
+            draw_hearts_hud(my_health_, my_max_hearts_);
+        }
+        if (local_dash_.charges > 0) {
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "DASH READY (SHIFT)");
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "DASH %.1fs",
+                               static_cast<double>(std::max(0.0f, local_dash_.cooldown)));
         }
         ImGui::Text("Wave %u   Level %u", static_cast<unsigned>(wave_), static_cast<unsigned>(level_));
         ImGui::ProgressBar(static_cast<float>(xp_frac_) / 255.0f, ImVec2(160.0f, 0.0f), "XP");
@@ -269,12 +293,17 @@ private:
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   draw_object_hooks(x, y, script_state_for(rem.net_id));
                   draw_entity(r, x, y, player_tex, SDL_Color{ 220, 200, 80, 255 });
-                  health_bar(r, x, y, rem.health);
+                  // Player bytes are hearts (current/max) -> bar fraction.
+                  health_bar(r, x, y,
+                             static_cast<std::uint8_t>(rem.health * 255
+                                                       / std::max<int>(1, rem.variant)));
                   label(x, y, engine_->session().name_of(rem.net_id));
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
                   draw_projectile(r, x, y, rem.variant);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
                   draw_xp_orb(r, x, y);
+              } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
+                  draw_heart_pickup(r, x, y);
               } else {
                   draw_entity(r, x, y, nullptr, SDL_Color{ 220, 80, 80, 255 });
                   health_bar(r, x, y, rem.health);
@@ -322,9 +351,12 @@ private:
 
     static void draw_projectile(SDL_Renderer* r, float cx, float cy, std::uint8_t variant)
     {
-        constexpr float size = 7.0f;
+        float size = 7.0f;
         if (variant == 1) {
             SDL_SetRenderDrawColor(r, 255, 90, 70, 255); // hostile (enemy-fired)
+        } else if (variant == 2) {
+            SDL_SetRenderDrawColor(r, 255, 170, 60, 255); // crit: bigger + orange
+            size = 11.0f;
         } else {
             SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
         }
@@ -356,6 +388,39 @@ private:
             const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
             SDL_RenderFillRect(r, &rect);
         }
+    }
+
+    // HUD hearts row: hearth icons (tinted dark when empty), red squares fallback.
+    void draw_hearts_hud(std::uint8_t current, std::uint8_t max)
+    {
+        SDL_Texture* icon = textures_.get(asset_heart);
+        constexpr float size = 22.0f;
+        for (std::uint8_t i = 0; i < max; ++i) {
+            if (i > 0) { ImGui::SameLine(0.0f, 4.0f); }
+            const bool filled = i < current;
+            if (icon != nullptr) {
+                const ImVec4 tint = filled ? ImVec4(1, 1, 1, 1) : ImVec4(0.25f, 0.25f, 0.25f, 0.9f);
+                ImGui::Image(reinterpret_cast<ImTextureID>(icon), ImVec2(size, size),
+                             ImVec2(0, 0), ImVec2(1, 1), tint, ImVec4(0, 0, 0, 0));
+            } else {
+                const ImU32 col = filled ? IM_COL32(230, 60, 70, 255) : IM_COL32(70, 70, 70, 220);
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), col, 4.0f);
+                ImGui::Dummy(ImVec2(size, size));
+            }
+        }
+    }
+
+    void draw_heart_pickup(SDL_Renderer* r, float cx, float cy)
+    {
+        if (SDL_Texture* icon = textures_.get(asset_heart)) {
+            client::draw_centered(r, icon, cx, cy, orb_size, orb_size);
+            return;
+        }
+        constexpr float size = 10.0f;
+        SDL_SetRenderDrawColor(r, 230, 60, 70, 255); // heal: red (fallback)
+        const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
+        SDL_RenderFillRect(r, &rect);
     }
 
     void draw_xp_orb(SDL_Renderer* r, float cx, float cy)
@@ -414,11 +479,13 @@ private:
     static constexpr const char* asset_enemy = "assets/sprite/enemy.png";
     static constexpr const char* asset_background = "assets/background.png";
     static constexpr const char* asset_coin = "assets/icons/coin.png";
+    static constexpr const char* asset_heart = "assets/icons/hearth.png";
 
     // Held-input state, maintained from key/mouse events in handle_event.
     struct InputState
     {
         bool up = false, down = false, left = false, right = false, firing = false;
+        bool dash_queued = false; // edge: set on SHIFT keydown, consumed per tick
     };
     void clear_input() { input_ = {}; }
 
@@ -432,8 +499,12 @@ private:
     std::uint32_t my_net_id_ = 0;
     bool has_player_ = false;
     bool level_open_ = false;
-    std::uint8_t my_health_ = 255;
+    std::uint8_t my_health_ = 255;     // current hearts (snapshot health byte)
+    std::uint8_t my_max_hearts_ = 3;   // max hearts (snapshot variant byte)
     std::uint16_t my_move_speed_ = 0;
+    // Local dash prediction (base constants; server is authoritative).
+    Dash local_dash_{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f, .burst_remaining = 0.0f,
+                      .dir_x = 1.0f, .dir_y = 0.0f, .shockwave = 0.0f, .charges = 1, .max_charges = 1 };
     // Per-entity networked script components (net id -> components), for draw hooks.
     std::unordered_map<std::uint32_t, std::vector<mod::NetComp>> script_state_;
     std::uint16_t level_ = 1;

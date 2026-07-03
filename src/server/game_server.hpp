@@ -88,10 +88,11 @@ private:
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;
 
-    // Spawn table for the current wave: Lua weight callbacks run once per wave
-    // (refresh_spawn_weights), the per-spawn hot path just samples the cached
-    // distribution. Parallel arrays: spawn_dist_ indexes into spawn_variants_.
+    // Spawn table for the current wave: Lua weight/stats callbacks run once per
+    // wave (refresh_spawn_weights), the per-spawn hot path just samples the
+    // cached distribution. Parallel arrays indexed by the same roll.
     std::vector<std::uint8_t> spawn_variants_;
+    std::vector<EnemyStats> spawn_stats_; // wave-scaled stats per variant
     std::discrete_distribution<std::size_t> spawn_dist_;
     std::uint16_t spawn_weights_wave_ = 0; // 0 = never refreshed (waves start at 1)
 

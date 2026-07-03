@@ -71,10 +71,13 @@ Soulkeeper avoids this:
 ## 3. Registering content
 
 ### Stat upgrade
-Repeatable, rarity-scaled (`amounts = { common, uncommon, legendary }`).
+Repeatable, rarity-scaled. `amounts` has one value per tier —
+`{ common, uncommon, rare, epic, legendary }` — and a **missing or 0 entry means the upgrade is
+not offered at that tier**: `{ 5, 10, 15 }` exists only at Common/Uncommon/Rare, `{ 0, 0, 0, 1 }`
+only at Epic.
 
 ```lua
-mod:add_stat_upgrade("core:damage", "Sharp Rounds", { 4, 8, 15 },
+mod:add_stat_upgrade("core:damage", "Sharp Rounds", { 3, 5, 8, 12, 20 },
     function(e, rarity, amount)          -- apply(entity, rarity, amount)
         local w = e:get(Weapon)
         if w then w.damage = w.damage + amount end
@@ -84,8 +87,9 @@ mod:add_stat_upgrade("core:damage", "Sharp Rounds", { 4, 8, 15 },
 
 ### Object
 Acquired **once** (the engine tracks ownership — you don't write an `available` for that), no rarity
-scaling. Each object should carry its **own component** (see §6) so multiple objects stay independent.
-Objects have **no amount**.
+scaling. An object declares the single tier it rolls at (`rarity = "epic"` by default; the level-up
+roll picks the tier first, so a legendary object is genuinely rare). Each object should carry its
+**own component** (see §6) so multiple objects stay independent. Objects have **no amount**.
 
 ```lua
 mod:add_object("core:onion", "Onion",
@@ -93,6 +97,7 @@ mod:add_object("core:onion", "Onion",
         e:set("core:aura", { radius = 120, per_second = 25 })
     end,
     {
+        rarity = "epic",                          -- the tier this object rolls at
         value_text = function() return "damage aura" end,
         draw = function(ctx, view)               -- per-frame, client-side
             local a = view:get("core:aura")       -- networked component fields
@@ -110,14 +115,25 @@ Belt is the same pattern with a `core:slow` component and a motion-phase system.
 Enemy archetypes are plugins too. Stats drive the simulation, `weight` the wave spawner,
 `scale`/`tint`/`sprite` the client. All of Soulkeeper's enemies live in `mods/core/enemies.lua`.
 
+`stats` is a table **or a `fun(wave) -> table`** (per-wave scaling — evaluated once per wave,
+like `weight`). `damage` is discrete **hearts per hit** (players have heart life with 1 s of
+i-frames after any hit). `add_enemy` returns the archetype: chain **`:component(id, fields)`** to
+attach script components to every spawned instance — declarative, and applied without any Lua on
+the spawn path.
+
 ```lua
-mod:add_enemy("core:scout", "Scout",
-    { health = 10, speed = 200, damage = 15, radius = 8, xp = 1 },
+mod:add_enemy("core:slinger", "Slinger",
+    function(wave)                      -- stats scale with the wave
+        return { health = 15 * (1 + 0.15 * (wave - 1)), speed = 100,
+                 damage = 1, radius = 9, xp = 2 }
+    end,
     {
-        weight = function(wave) return math.max(0, wave - 1) * 1.5 end,
-        scale  = 0.8,
-        tint   = { 120, 220, 255 },
+        weight = function(wave) return math.max(0, wave - 2) * 1.2 end,
+        scale  = 0.9,
+        tint   = { 150, 255, 140 },
     })
+    :component("core:ranged", { range = 340, standoff = 260,
+                                cooldown = 1.6, bullet_speed = 260, damage = 1, timer = 1.0 })
 ```
 
 Enemy `opts` (all optional):
@@ -128,7 +144,7 @@ Enemy `opts` (all optional):
 | `scale` (number) | render | sprite scale (default 1.0) |
 | `tint` (`{r,g,b}`) | render | colour mod on the sprite (default white) |
 | `sprite` (string) | render | own sprite path (default: the shared `assets/sprite/enemy.png`) |
-| `on_spawn(e)` | sim | runs on every spawn — attach script components for custom behaviour |
+| `on_spawn(e)` | sim | escape hatch for dynamic per-spawn logic (prefer `:component()` for static state) |
 
 An enemy's wire id is what snapshots carry as `variant` (and what `on_enemy_death` reports); like
 all content it's the lexicographic sort index, but within a **separate enemy id space**. Spawn one
@@ -147,6 +163,7 @@ Both `add_stat_upgrade` and `add_object` take an optional trailing table:
 | `sprite` (string) | both | render | card sprite path (relative to repo root) |
 | `value_format` (string) | stat | — | **fmt-style** format applied to the amount, e.g. `"+{} DMG"` |
 | `value_text(amount, rarity) -> string` | both | — | advanced: compute the card text yourself (wins over `value_format`) |
+| `rarity` (string) | object | sim | the tier the object rolls at: `"common"`…`"legendary"` (default `"epic"`) |
 | `draw(ctx, view)` | object | render | per-frame draw hook |
 
 **Value text** is precomputed once at load (never per frame). `value_format` is formatted in **C++
@@ -199,8 +216,11 @@ e:remove(Weapon) / e:remove("core:aura")
 ```
 
 Engine component globals & fields: `Position{x,y}`, `Velocity{dx,dy}`, `Speed{value}`,
-`Health{current,max}`, `Radius{value}`, `Damage{per_second}`, `Weapon{cooldown_max, cooldown_current,
-bullet_speed, damage, projectile_lifetime}`, `AimState{dx,dy,firing}`. Tag globals for queries:
+`Health{current,max}` (enemies), `Hearts{current,max}` (player heart life),
+`Radius{value}`, `Damage{per_second}` (for enemies: hearts per contact hit),
+`Weapon{cooldown_max, cooldown_current, bullet_speed, damage, projectile_lifetime}`,
+`AimState{dx,dy,firing}`, `Dash{cooldown_max, cooldown, shockwave, charges, max_charges}`,
+`Crit{chance, multiplier}`. Tag globals for queries:
 `Enemy`, `Player`. Spawn helpers: `spawn_projectile(x,y,vx,vy,damage,lifetime[,hostile])` (pass
 `hostile = true` for enemy-fired bullets — they hit players instead of enemies),
 `spawn_xp_orb(x,y,value)`, `spawn_enemy(x,y,id)` (`id` = a registered enemy like `"core:brute"`;

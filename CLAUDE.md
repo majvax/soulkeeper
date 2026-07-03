@@ -30,12 +30,13 @@ src/
     spatial.hpp    #   SpatialGrid uniform hash (insert/query AABB), broad-phase
     systems.hpp    #   SystemManager (ordered vector of void(Registry&,float))
   shared/          # SDL-free, used by client AND server
-    components/    #   physics(Position,PrevPosition,Velocity,Speed) combat(Health,Radius,Damage,Weapon,
-                   #   AimState,Projectile,Hostile,Lifetime,EnemyTag,Archetype,XpReward) gameplay(PlayerTag)
+    components/    #   physics(Position,PrevPosition,Velocity,Speed) combat(Health[enemies],Hearts[players],
+                   #   Invulnerable,HeartPickup,Radius,Damage[hearts/hit],Weapon,AimState,Dash,Crit,CritTag,
+                   #   Projectile,Hostile,Lifetime,EnemyTag,Archetype,XpReward) gameplay(PlayerTag)
                    #   progression(GameStats{xp,wave}, XpOrb, Downed{respawn_wave})
-    system/        #   pure systems: targeting, shooting, movement, projectile, combat, pickup, death
-                   #   + input.hpp (apply_input(vel,mx,my,speed) helper, PLAYER_SPEED)
-    factory/       #   create_player / create_enemy(x,y,stats,variant) / create_projectile / create_xp_orb
+    system/        #   pure systems: targeting, dash, shooting, movement, projectile, combat, pickup, death
+                   #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
+    factory/       #   create_player / create_enemy(x,y,stats,variant) / create_projectile / create_xp_orb / create_heart
     sim/           #   World (Registry+SystemManager); make_game_world() registers the pipeline + GameStats singleton
     mod/           #   Lua modding layer (SDL-free): registry (ContentDef/ContentRegistry, string-id ->
                    #   deterministic wire-id), lua_host (sol::state, register_mod, mods/*/mod.lua discovery),
@@ -60,7 +61,7 @@ modding.md         # the full modding guide (API reference, performance model, i
 
 ## Runtime model (how it actually works)
 - **Server-authoritative.** Server owns the World + runs the system pipeline
-  (`Targeting → Shooting → Movement → Projectile → Combat → Pickup → Death`) at 120 Hz, broadcasts
+  (`Targeting → Dash/Motion → Shooting → Movement → Projectile → Combat → Pickup → Death`) at 120 Hz, broadcasts
   full snapshots at 60 Hz. Clients **predict** the local player (same `apply_input`, corrected by
   snapshots) and **interpolate** remotes. `Session` on the client mirrors control state; `GameScene`
   keeps a render-only `Registry`.
@@ -94,9 +95,13 @@ Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes
 **Bandit/Scout/Brute/Slinger** (per-wave spawn weights, tint+scale on one sprite —
 `mods/core/enemies.lua`; the Slinger stands off and fires **hostile projectiles** via Lua
 `core:ranged` systems) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
-card scene** with **rarity** upgrades — all defined in `mods/core/` Lua (stat upgrades + **Onion**
-aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn a few waves later** ·
-`/pause` `/resume` console.
+card scene** with **5 rarity tiers** (grey/green/blue/purple/gold; rarity-first roll, per-tier
+amounts, objects declare their tier) — all content in `mods/core/` Lua (13 stat upgrades incl.
+crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **heart life** (3 hearts,
+1 s i-frames, rare heart drops heal; Vitality raises the cap only) · enemies **scale per wave**
+(Lua stats fn) · **dash on LSHIFT** (predicted client-side; Shockwave object makes it damage) ·
+**crit** (chance/multiplier; crit bullets render orange) · co-op **downed → respawn a few waves
+later** · `/pause` `/resume` console.
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build` → `bin/client`, `bin/server`. **Adding a new
