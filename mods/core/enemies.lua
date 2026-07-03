@@ -1,58 +1,74 @@
 -- mods/core/enemies.lua — the built-in enemy archetypes.
 --
--- `weight` is the relative spawn chance and `stats` a function of the wave —
--- both re-evaluated once per wave (never per spawn). `damage` is discrete
--- HEARTS per hit (players have heart life with i-frames). Enemies default to
--- the shared enemy sprite, distinguished by tint + scale.
+-- An enemy is a pure component bag: mod:enemy declares identity + visuals +
+-- spawn weight, then :component(Handle, fields | fun(wave)) attaches
+-- everything gameplay-defining. Function inits re-resolve once per wave —
+-- that's the wave-scaling mechanism. Damage is discrete HEARTS per hit
+-- (players have heart life with i-frames).
 
--- Standard wave scaling: health +15%/wave, a little extra speed (capped at
--- +40%), +1 xp every 4 waves. Contact hearts stay flat.
-local function scale(base)
+-- Health scaling: +15% per wave.
+local function health(base)
     return function(wave)
-        local w = wave - 1
-        return {
-            health = base.health * (1 + 0.15 * w),
-            speed = math.min(base.speed + 2 * w, base.speed * 1.4),
-            damage = base.damage,
-            radius = base.radius,
-            xp = base.xp + math.floor(w / 4),
-        }
+        local h = base * (1 + 0.15 * (wave - 1))
+        return { current = h, max = h }
     end
 end
 
-return function(mod)
-    mod:add_enemy("core:bandit", "Bandit",
-        scale({ health = 20, speed = 120, damage = 1, radius = 10, xp = 1 }),
-        { weight = 6, tint = { 230, 120, 230 } }) -- magenta, always in the pool
+-- Speed scaling: +2 px/s per wave, capped at +40%.
+local function speed(base)
+    return function(wave)
+        return { value = math.min(base + 2 * (wave - 1), base * 1.4) }
+    end
+end
 
-    mod:add_enemy("core:scout", "Scout",
-        scale({ health = 10, speed = 200, damage = 1, radius = 8, xp = 1 }),
-        {
+-- XP scaling: +1 every 4 waves.
+local function xp(base)
+    return function(wave)
+        return { value = base + math.floor((wave - 1) / 4) }
+    end
+end
+
+return function(mod, C)
+    mod:enemy("bandit", "Bandit", { weight = 6, tint = { 230, 120, 230 } }) -- magenta, always
+        :component(Health, health(20))
+        :component(Speed, speed(120))
+        :component(Damage, { per_second = 1 }) -- 1 heart per contact hit
+        :component(Radius, { value = 10 })
+        :component(XpReward, xp(1))
+
+    mod:enemy("scout", "Scout", {
             weight = function(wave) return math.max(0, wave - 1) * 1.5 end, -- from wave 2
             scale = 0.8,
             tint = { 120, 220, 255 }, -- cyan
         })
+        :component(Health, health(10))
+        :component(Speed, speed(200))
+        :component(Damage, { per_second = 1 })
+        :component(Radius, { value = 8 })
+        :component(XpReward, xp(1))
 
-    mod:add_enemy("core:brute", "Brute",
-        scale({ health = 60, speed = 70, damage = 2, radius = 16, xp = 3 }),
-        {
+    mod:enemy("brute", "Brute", {
             weight = function(wave) return math.max(0, wave - 3) * 1.0 end, -- from wave 4
             scale = 1.5,
             tint = { 255, 110, 100 }, -- red
         })
+        :component(Health, health(60))
+        :component(Speed, speed(70))
+        :component(Damage, { per_second = 2 }) -- heavy: 2 hearts
+        :component(Radius, { value = 16 })
+        :component(XpReward, xp(3))
 
     -- Ranged: hangs back and pelts players with hostile projectiles. Behaviour
-    -- comes from the core:ranged component (attached below) + its systems.
-    mod:add_enemy("core:slinger", "Slinger",
-        scale({ health = 15, speed = 100, damage = 1, radius = 9, xp = 2 }),
-        {
+    -- comes from the core Ranged component + its systems (see systems.lua).
+    mod:enemy("slinger", "Slinger", {
             weight = function(wave) return math.max(0, wave - 2) * 1.2 end, -- from wave 3
             scale = 0.9,
             tint = { 150, 255, 140 }, -- green
         })
-        :component("core:ranged", {
-            range = 340, standoff = 260,
-            cooldown = 1.6, bullet_speed = 260, damage = 1, -- 1 heart per bullet
-            timer = 1.0, -- brief grace period after spawning
-        })
+        :component(Health, health(15))
+        :component(Speed, speed(100))
+        :component(Damage, { per_second = 1 })
+        :component(Radius, { value = 9 })
+        :component(XpReward, xp(2))
+        :component(C.Ranged, {}) -- all defaults (range 340, 1 heart bullets, ...)
 end

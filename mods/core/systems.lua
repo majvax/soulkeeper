@@ -1,9 +1,9 @@
 -- mods/core/systems.lua — systems that tick the core components each frame.
-return function(mod)
+return function(mod, C)
     -- Damage aura: hurt enemies inside any player's aura, every tick.
-    mod:define_system("core:aura_sys", { phase = "update" }, function(dt)
-        for p in world:each("core:aura", Position, Player) do
-            local a = p:get("core:aura")
+    mod:system("aura_sys", { phase = "update" }, function(dt)
+        for p in world:each(C.Aura, Position, Player) do
+            local a = p:get(C.Aura)
             local pp = p:get(Position)
             for e in world:each(Enemy, Position, Health) do
                 local ep = e:get(Position)
@@ -30,9 +30,9 @@ return function(mod)
 
     -- Ranged enemies hold position once close enough (runs before Movement, so
     -- it overrides the chase velocity from targeting).
-    mod:define_system("core:ranged_standoff", { phase = "motion" }, function(dt)
-        for e in world:each("core:ranged", Position, Velocity, Enemy) do
-            local r = e:get("core:ranged")
+    mod:system("ranged_standoff", { phase = "motion" }, function(dt)
+        for e in world:each(C.Ranged, Position, Velocity, Enemy) do
+            local r = e:get(C.Ranged)
             local ep = e:get(Position)
             local _, d2 = nearest_player(ep.x, ep.y)
             if d2 < r.standoff * r.standoff then
@@ -43,9 +43,9 @@ return function(mod)
     end)
 
     -- Ranged enemies fire a hostile projectile at the nearest player in range.
-    mod:define_system("core:ranged_fire", { phase = "update" }, function(dt)
-        for e in world:each("core:ranged", Position, Enemy) do
-            local r = e:get("core:ranged")
+    mod:system("ranged_fire", { phase = "update" }, function(dt)
+        for e in world:each(C.Ranged, Position, Enemy) do
+            local r = e:get(C.Ranged)
             r.timer = r.timer - dt
             if r.timer <= 0 then
                 local ep = e:get(Position)
@@ -66,9 +66,9 @@ return function(mod)
     end)
 
     -- Slow field: scale the velocity of enemies inside it (runs before Movement).
-    mod:define_system("core:slow_sys", { phase = "motion" }, function(dt)
-        for p in world:each("core:slow", Position, Player) do
-            local s = p:get("core:slow")
+    mod:system("slow_sys", { phase = "motion" }, function(dt)
+        for p in world:each(C.Slow, Position, Player) do
+            local s = p:get(C.Slow)
             local pp = p:get(Position)
             for e in world:each(Enemy, Position, Velocity) do
                 local ep = e:get(Position)

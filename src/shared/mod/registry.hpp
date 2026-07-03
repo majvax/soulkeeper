@@ -20,7 +20,7 @@
 
 #include <sol/sol.hpp>
 
-#include "shared/factory/enemy.hpp" // EnemyStats
+#include "shared/mod/component_ref.hpp"
 
 namespace mod {
 
@@ -138,18 +138,15 @@ private:
     std::unordered_map<std::string, std::uint8_t> id_to_wire_;
 };
 
-// A script component attached to every spawned instance of an archetype
-// (declared via the EnemyBuilder's :component()). Applied straight through the
-// script-ECS pools at spawn — no Lua call on the spawn path.
+// A component attached to every spawned instance of an archetype, declared via
+// the builder's :component(Handle, fields | fun(wave) -> fields). Enemies are
+// pure component bags: Health/Speed/Radius/... come through this list too.
+// Function inits are resolved once per wave (cached next to the spawn weights).
 struct EnemyComponentInit
 {
-    std::string component_id;                             // e.g. "core:ranged"
-    std::vector<std::pair<std::string, double>> fields;   // name -> value
+    ComponentRef ref;
+    sol::object init; // a fields table, or fun(wave) -> fields table
 };
-
-// Parse a Lua stats table { health, speed, damage, radius, xp } (missing keys
-// keep the fallback's values).
-[[nodiscard]] EnemyStats parse_enemy_stats(const sol::table& table, const EnemyStats& fallback);
 
 // One registered enemy archetype. Enemies live in their OWN registry (separate
 // wire-id space from upgrades/objects): the snapshot `variant` byte is the
@@ -159,14 +156,12 @@ struct EnemyDef
     std::string id;    // namespaced, e.g. "core:brute" — the sort key
     std::string label; // display name
 
-    EnemyStats stats{}; // health/speed/damage/radius/xp (what create_enemy needs)
+    std::vector<EnemyComponentInit> components; // the archetype's component bag
 
-    // Optional fun(wave) -> stats table: per-wave scaling, evaluated once per
-    // wave server-side (cached next to the spawn weights). Wins over `stats`.
-    sol::protected_function stats_fn;
-    [[nodiscard]] EnemyStats stats_at(std::uint16_t wave) const; // registry.cpp
-
-    std::vector<EnemyComponentInit> components; // attached to every spawn
+    // Resolve the init list for a wave: tables pass through, functions are
+    // called (protected; errors logged -> empty table). registry.cpp.
+    [[nodiscard]] std::vector<std::pair<const ComponentRef*, sol::table>>
+    inits_at(std::uint16_t wave) const;
 
     // Spawn weighting: either a constant or a Lua fn(wave) -> number (wins over
     // the constant). Evaluated once per wave server-side, never per spawn.

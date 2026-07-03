@@ -47,31 +47,32 @@ void EnemyRegistry::finalize()
     }
 }
 
-EnemyStats parse_enemy_stats(const sol::table& table, const EnemyStats& fallback)
+std::vector<std::pair<const ComponentRef*, sol::table>> EnemyDef::inits_at(std::uint16_t wave) const
 {
-    return EnemyStats{ .health = table.get_or("health", fallback.health),
-                       .speed = table.get_or("speed", fallback.speed),
-                       .damage = table.get_or("damage", fallback.damage),
-                       .radius = table.get_or("radius", fallback.radius),
-                       .xp = static_cast<std::uint32_t>(
-                         table.get_or("xp", static_cast<int>(fallback.xp))) };
-}
-
-EnemyStats EnemyDef::stats_at(std::uint16_t wave) const
-{
-    if (!stats_fn.valid()) { return stats; }
-    sol::protected_function_result res = stats_fn(static_cast<int>(wave));
-    if (!res.valid()) {
-        const sol::error err = res;
-        std::fprintf(stderr, "[mod] enemy '%s' stats(wave) error: %s\n", id.c_str(), err.what());
-        return stats;
+    std::vector<std::pair<const ComponentRef*, sol::table>> out;
+    out.reserve(components.size());
+    for (const EnemyComponentInit& init : components) {
+        if (init.init.is<sol::table>()) {
+            out.emplace_back(&init.ref, init.init.as<sol::table>());
+            continue;
+        }
+        if (init.init.is<sol::protected_function>()) {
+            sol::protected_function_result res = init.init.as<sol::protected_function>()(static_cast<int>(wave));
+            if (res.valid()) {
+                if (const sol::optional<sol::table> table = res.get<sol::optional<sol::table>>()) {
+                    out.emplace_back(&init.ref, *table);
+                    continue;
+                }
+                std::fprintf(stderr, "[mod] enemy '%s' %s(wave) did not return a table\n", id.c_str(),
+                             init.ref.id.c_str());
+            } else {
+                const sol::error err = res;
+                std::fprintf(stderr, "[mod] enemy '%s' %s(wave) error: %s\n", id.c_str(),
+                             init.ref.id.c_str(), err.what());
+            }
+        }
     }
-    const sol::optional<sol::table> table = res.get<sol::optional<sol::table>>();
-    if (!table) {
-        std::fprintf(stderr, "[mod] enemy '%s' stats(wave) did not return a table\n", id.c_str());
-        return stats;
-    }
-    return parse_enemy_stats(*table, stats);
+    return out;
 }
 
 float EnemyDef::weight_at(std::uint16_t wave) const

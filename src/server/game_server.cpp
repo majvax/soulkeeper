@@ -65,6 +65,19 @@ GameServer::GameServer(net::Server server) : server_{ std::move(server) }, world
     if (lua_host_.enemies().count() == 0) {
         spdlog::warn("no enemy archetypes registered (mods/core missing?) — waves will spawn nothing");
     }
+    // Enemies are pure component bags — hold plugins to the kernel contract.
+    for (const mod::EnemyDef& def : lua_host_.enemies().defs()) {
+        bool has_health = false;
+        bool has_radius = false;
+        for (const mod::EnemyComponentInit& init : def.components) {
+            has_health = has_health || init.ref.id == "Health";
+            has_radius = has_radius || init.ref.id == "Radius";
+        }
+        if (!has_health || !has_radius) {
+            spdlog::warn("enemy '{}' lacks {} — it won't die/collide properly", def.id,
+                         !has_health ? "Health" : "Radius");
+        }
+    }
 }
 
 void GameServer::poll()
@@ -148,21 +161,21 @@ void GameServer::spawn_enemies(float dt)
     const Position& target = players[enemy_count % players.size()];
     const float angle = random_angle();
     mod::spawn_enemy(registry, target.x + (std::cos(angle) * spawn_distance),
-                     target.y + (std::sin(angle) * spawn_distance), *def, spawn_stats_[roll],
-                     lua_host_.scripts());
+                     target.y + (std::sin(angle) * spawn_distance), *def, spawn_inits_[roll],
+                     *lua_host_.bindings());
 }
 
 void GameServer::refresh_spawn_weights(std::uint16_t wave)
 {
     spawn_weights_wave_ = wave;
     spawn_variants_.clear();
-    spawn_stats_.clear();
+    spawn_inits_.clear();
     std::vector<float> weights;
     for (const mod::EnemyDef& def : lua_host_.enemies().defs()) {
         const float weight = def.weight_at(wave);
         if (weight <= 0.0f) { continue; }
         spawn_variants_.push_back(def.wire_id);
-        spawn_stats_.push_back(def.stats_at(wave)); // Lua scaling runs once per wave
+        spawn_inits_.push_back(def.inits_at(wave)); // Lua scaling runs once per wave
         weights.push_back(weight);
     }
     spawn_dist_ = std::discrete_distribution<std::size_t>{ weights.begin(), weights.end() };

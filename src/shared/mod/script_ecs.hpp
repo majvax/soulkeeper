@@ -25,6 +25,7 @@ struct ScriptSchema
 {
     std::string id;                  // namespaced, e.g. "core:slow"
     std::vector<std::string> fields; // ordered field names (all doubles)
+    std::vector<double> defaults;    // per-field default (e:set fills unset fields from these)
     bool networked = false;
     std::uint32_t pool_id = 0;       // DynamicPool id (valid only on a bound/server registry)
     bool has_pool = false;
@@ -57,12 +58,15 @@ public:
     // Server binds the world Registry so define() can allocate DynamicPools.
     void bind(core::Registry* reg) noexcept { registry_ = reg; }
 
-    ScriptSchema* define(std::string id, std::vector<std::string> fields, bool networked)
+    ScriptSchema* define(std::string id, std::vector<std::string> fields, std::vector<double> defaults,
+                         bool networked)
     {
         if (ScriptSchema* existing = by_id(id)) { return existing; } // ignore duplicate
         ScriptSchema s;
         s.id = std::move(id);
         s.fields = std::move(fields);
+        s.defaults = std::move(defaults);
+        s.defaults.resize(s.fields.size(), 0.0);
         s.networked = networked;
         if (registry_ != nullptr) {
             s.pool_id = registry_->create_dynamic_pool(static_cast<std::uint32_t>(s.fields.size()));

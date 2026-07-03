@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "shared/protocol.hpp"  // protocol_version (plugin-hash seed)
@@ -13,29 +14,6 @@
 namespace mod {
 
 namespace {
-
-// Handle returned by mod:add_enemy — attaches script components to every
-// spawned instance of the archetype, chainable:
-//   mod:add_enemy(...):component("core:ranged", { range = 340, ... })
-struct EnemyBuilder
-{
-    ModState* state = nullptr;
-    std::string id;
-
-    EnemyBuilder& component(const std::string& comp_id, const sol::table& fields)
-    {
-        EnemyDef* def = state->enemies.find(id);
-        if (def == nullptr) { return *this; }
-        EnemyComponentInit init{ .component_id = comp_id, .fields = {} };
-        for (const auto& [key, value] : fields) {
-            if (key.is<std::string>() && value.is<double>()) {
-                init.fields.emplace_back(key.as<std::string>(), value.as<double>());
-            }
-        }
-        def->components.push_back(std::move(init));
-        return *this;
-    }
-};
 
 // FNV-1a 64 accumulator for the plugin-set hash. Strings are folded with their
 // terminating NUL so ("ab","c") and ("a","bc") can't collide.
@@ -55,22 +33,89 @@ struct Fnv1a
     }
 };
 
+// Run a plugin's main() on demand (memoized). This is what import() calls and
+// what pass 2 of load_dir drives — require-style lazy loading with cycle
+// detection; the plugin's exports are whatever its main() returned.
+sol::object run_plugin(ModState* st, const std::string& name)
+{
+    if (const auto done = st->exports.find(name); done != st->exports.end()) { return done->second; }
+    const auto pending = st->pending.find(name);
+    if (pending == st->pending.end()) {
+        std::fprintf(stderr, "[mod] import('%s'): no such plugin in mods/\n", name.c_str());
+        return sol::lua_nil;
+    }
+    for (const std::string& loading : st->import_stack) {
+        if (loading == name) {
+            std::fprintf(stderr, "[mod] circular import of '%s' (via '%s')\n", name.c_str(),
+                         st->import_stack.back().c_str());
+            return sol::lua_nil;
+        }
+    }
+
+    st->import_stack.push_back(name);
+    const std::string saved_dir = std::exchange(st->current_dir, pending->second.dir);
+    const std::string saved_plugin = std::exchange(st->current_plugin, name);
+
+    sol::object result = sol::lua_nil;
+    sol::protected_function_result res = pending->second.main();
+    if (res.valid()) {
+        result = res.get<sol::object>();
+    } else {
+        const sol::error err = res;
+        std::fprintf(stderr, "[mod] '%s' main() error: %s\n", name.c_str(), err.what());
+    }
+
+    st->current_dir = saved_dir;
+    st->current_plugin = saved_plugin;
+    st->import_stack.pop_back();
+    st->exports.emplace(name, result); // memoize (even a nil/failed load — no retry storms)
+    return result;
+}
+
+// Handle returned by mod:enemy — attaches components (kernel or Lua-defined,
+// static table or fun(wave) for per-wave scaling) to every spawned instance:
+//   mod:enemy("slinger", "Slinger", {...})
+//       :component(Health, function(wave) return { current = h, max = h } end)
+//       :component(Ranged, { range = 340 })
+struct EnemyBuilder
+{
+    ModState* state = nullptr;
+    std::string id;
+
+    EnemyBuilder component(const ComponentRef& ref, const sol::object& init)
+    {
+        EnemyDef* def = state->enemies.find(id);
+        if (def == nullptr) { return *this; }
+        if (!ref.valid()) {
+            std::fprintf(stderr, "[mod] enemy '%s': :component() got an invalid handle\n", id.c_str());
+            return *this;
+        }
+        if (!init.is<sol::table>() && !init.is<sol::protected_function>()) {
+            std::fprintf(stderr, "[mod] enemy '%s': %s init must be a table or fun(wave)\n", id.c_str(),
+                         ref.id.c_str());
+            return *this;
+        }
+        def->components.push_back(EnemyComponentInit{ .ref = ref, .init = init });
+        return *this;
+    }
+};
+
 // The `Mod` handle plugins get from register_mod(). Holds a stable pointer to
 // the host's ModState (survives a LuaHost move) plus the mod's namespace.
+// Every registered name is auto-prefixed "ns:" — plugins never write full ids.
 struct ModHandle
 {
     ModState* state = nullptr;
     std::string ns;
 
-    // Warn (but proceed) if an id isn't namespaced under this mod.
-    void check_ns(const std::string& id) const
+    [[nodiscard]] std::string qualify(const std::string& name) const
     {
-        if (id.empty()) {
-            std::fprintf(stderr, "[mod] '%s' registered content with an empty id\n", ns.c_str());
-        } else if (id.rfind(ns + ":", 0) != 0) {
-            std::fprintf(stderr, "[mod] '%s' id '%s' is not namespaced '%s:' — collision risk\n",
-                         ns.c_str(), id.c_str(), ns.c_str());
+        if (name.find(':') != std::string::npos) {
+            std::fprintf(stderr, "[mod] '%s': name '%s' contains ':' — names are auto-namespaced\n",
+                         ns.c_str(), name.c_str());
+            return name;
         }
+        return ns + ":" + name;
     }
 
     static void read_amounts(ContentDef& d, const sol::table& amounts)
@@ -94,13 +139,52 @@ struct ModHandle
         return Rarity::Epic;
     }
 
-    void add_stat_upgrade(std::string id, std::string label, sol::table amounts,
-                          sol::protected_function apply, sol::optional<sol::table> opts)
+    // Define a component: fields with defaults ({ range = 340, timer = 0 }).
+    // Returns THE handle — store it, share it via exports; no string ids.
+    // Field order is the sorted field-name order (deterministic on every
+    // process, required for the networked wire layout).
+    ComponentRef component(const std::string& name, const sol::table& fields, sol::optional<sol::table> opts)
     {
-        check_ns(id);
+        std::string id = qualify(name);
+        std::vector<std::pair<std::string, double>> decl;
+        for (const auto& [key, value] : fields) {
+            if (key.is<std::string>() && value.is<double>()) {
+                decl.emplace_back(key.as<std::string>(), value.as<double>());
+            } else {
+                std::fprintf(stderr, "[mod] component '%s': fields must be name = number-default\n",
+                             id.c_str());
+            }
+        }
+        std::sort(decl.begin(), decl.end());
+        std::vector<std::string> names;
+        std::vector<double> defaults;
+        names.reserve(decl.size());
+        defaults.reserve(decl.size());
+        for (auto& [field, def_value] : decl) {
+            names.push_back(std::move(field));
+            defaults.push_back(def_value);
+        }
+        const bool networked = opts ? opts->get_or("networked", false) : false;
+        ScriptSchema* schema = state->scripts.define(id, std::move(names), std::move(defaults), networked);
+        return ComponentRef{ .engine_tag = -1, .schema = schema, .id = std::move(id) };
+    }
+
+    // Define a system: fn(dt) run each tick at a phase, optionally throttled.
+    void system(const std::string& name, sol::table opts, sol::protected_function fn)
+    {
+        const std::string phase = opts.get_or<std::string>("phase", "update");
+        const int order = (phase == "motion") ? shared::phase::Motion : shared::phase::Update;
+        const double rate = opts.get_or("rate", 0.0);
+        state->script_systems.push_back(
+          { .id = qualify(name), .order = order, .rate = rate, .fn = std::move(fn) });
+    }
+
+    void upgrade(const std::string& name, std::string label, const sol::table& amounts,
+                 sol::protected_function apply, sol::optional<sol::table> opts)
+    {
         ContentDef d;
         d.kind = ContentKind::StatUpgrade;
-        d.id = std::move(id);
+        d.id = qualify(name);
         d.label = std::move(label);
         read_amounts(d, amounts);
         d.apply = std::move(apply);
@@ -113,13 +197,12 @@ struct ModHandle
         state->registry.add(std::move(d));
     }
 
-    void add_object(std::string id, std::string label, sol::protected_function acquire,
-                    sol::optional<sol::table> opts)
+    void object(const std::string& name, std::string label, sol::protected_function acquire,
+                sol::optional<sol::table> opts)
     {
-        check_ns(id);
         ContentDef d;
         d.kind = ContentKind::Object;
-        d.id = std::move(id);
+        d.id = qualify(name);
         d.label = std::move(label);
         d.acquire = std::move(acquire);
         if (opts) {
@@ -133,31 +216,13 @@ struct ModHandle
         state->registry.add(std::move(d));
     }
 
-    // Register an enemy archetype: stats drive the sim, scale/tint/sprite the
-    // render VM, weight the wave spawner. Both VMs parse the same call. Stats
-    // can be a table or fun(wave) -> table (per-wave scaling, cached per wave).
-    // Returns a builder: chain :component(id, fields) to attach script
-    // components to every spawned instance.
-    EnemyBuilder add_enemy(std::string id, std::string label, const sol::object& stats,
-                           sol::optional<sol::table> opts)
+    // Register an enemy archetype. Pure component bag: chain :component(...)
+    // for everything gameplay-defining (Health, Speed, Damage, Radius, ...).
+    EnemyBuilder enemy(const std::string& name, std::string label, sol::optional<sol::table> opts)
     {
-        check_ns(id);
         EnemyDef d;
-        d.id = id;
+        d.id = qualify(name);
         d.label = std::move(label);
-        const EnemyStats defaults{ .health = 1, .speed = 100, .damage = 0, .radius = 10, .xp = 1 };
-        d.stats = defaults;
-        if (stats.is<sol::table>()) {
-            d.stats = parse_enemy_stats(stats.as<sol::table>(), defaults);
-        } else if (stats.is<sol::protected_function>()) {
-            d.stats_fn = stats.as<sol::protected_function>();
-            sol::protected_function_result base = d.stats_fn(1); // wave-1 baseline
-            if (base.valid()) {
-                if (const sol::optional<sol::table> table = base.get<sol::optional<sol::table>>()) {
-                    d.stats = parse_enemy_stats(*table, defaults);
-                }
-            }
-        }
         if (opts) {
             const sol::object weight = (*opts)["weight"];
             if (weight.is<sol::protected_function>()) {
@@ -174,6 +239,7 @@ struct ModHandle
             d.sprite = opts->get_or<std::string>("sprite", "");
             d.on_spawn = opts->get_or<sol::protected_function>("on_spawn", {});
         }
+        std::string id = d.id;
         state->enemies.add(std::move(d));
         return EnemyBuilder{ .state = state, .id = std::move(id) };
     }
@@ -183,28 +249,11 @@ struct ModHandle
         state->events.subscribe(std::move(event), std::move(handler));
     }
 
-    // Define a Lua component: a named list of double fields, optionally networked
-    // (synced to clients for rendering).
-    void define_component(std::string id, sol::table fields, sol::optional<sol::table> opts)
+    // Fire a custom event other plugins can subscribe to. Bare names are
+    // auto-namespaced ("boss_spawned" -> "core:boss_spawned").
+    void emit(const std::string& event, sol::variadic_args args)
     {
-        check_ns(id);
-        std::vector<std::string> names;
-        for (std::size_t i = 1; i <= fields.size(); ++i) {
-            names.push_back(fields.get_or(i, std::string{}));
-        }
-        const bool networked = opts ? opts->get_or("networked", false) : false;
-        state->scripts.define(std::move(id), std::move(names), networked);
-    }
-
-    // Define a Lua system: fn(dt) run each tick at a phase, optionally throttled.
-    void define_system(std::string id, sol::table opts, sol::protected_function fn)
-    {
-        check_ns(id);
-        const std::string phase = opts.get_or<std::string>("phase", "update");
-        const int order = (phase == "motion") ? shared::phase::Motion : shared::phase::Update;
-        const double rate = opts.get_or("rate", 0.0);
-        state->script_systems.push_back(
-          { .id = std::move(id), .order = order, .rate = rate, .fn = std::move(fn) });
+        state->events.emit_variadic(qualify(event), args);
     }
 };
 
@@ -225,18 +274,31 @@ void LuaHost::install_registration_api()
     // survive a move of the LuaHost.
     ModState* st = state_.get();
 
+    // The universal component handle (created by the prelude + mod:component).
+    lua_.new_usertype<ComponentRef>("Component", sol::no_constructor,
+                                    "id", sol::readonly(&ComponentRef::id));
+
+    // Engine prelude: kernel components as handles, same names in BOTH VMs
+    // (the render VM only stores them — e.g. in enemy builders — never
+    // dispatches; the sim VM's BindingTable is built in this exact order).
+    for (std::size_t i = 0; i < engine_component_names.size(); ++i) {
+        const char* name = engine_component_names[i];
+        lua_[name] = ComponentRef{ .engine_tag = static_cast<int>(i), .schema = nullptr, .id = name };
+    }
+
     lua_.new_usertype<EnemyBuilder>(
       "EnemyArchetype", sol::no_constructor,
       "component", &EnemyBuilder::component);
 
     lua_.new_usertype<ModHandle>(
       "Mod", sol::no_constructor,
-      "add_stat_upgrade", &ModHandle::add_stat_upgrade,
-      "add_object", &ModHandle::add_object,
-      "add_enemy", &ModHandle::add_enemy,
+      "component", &ModHandle::component,
+      "system", &ModHandle::system,
+      "upgrade", &ModHandle::upgrade,
+      "object", &ModHandle::object,
+      "enemy", &ModHandle::enemy,
       "subscribe", &ModHandle::subscribe,
-      "define_component", &ModHandle::define_component,
-      "define_system", &ModHandle::define_system);
+      "emit", &ModHandle::emit);
 
     // include("file.lua") runs a file relative to the current mod's folder and
     // returns its value — lets a plugin split itself across files.
@@ -252,9 +314,20 @@ void LuaHost::install_registration_api()
         return res.get<sol::object>();
     });
 
+    // import("core") -> that plugin's exports (its main()'s return value),
+    // loading it on demand. THE cross-plugin mechanism: a components-library
+    // plugin exports handles; dependents import them. Load order solves itself.
+    lua_.set_function("import", [st](const std::string& name) { return run_plugin(st, name); });
+
     lua_.set_function("register_mod",
                       [st](std::string ns, sol::optional<std::string> description,
                            sol::optional<std::string> author) {
+                          if (!st->current_plugin.empty() && ns != st->current_plugin) {
+                              std::fprintf(stderr,
+                                           "[mod] plugin folder '%s' declares namespace '%s' — the "
+                                           "folder name is the import name; keep them identical\n",
+                                           st->current_plugin.c_str(), ns.c_str());
+                          }
                           std::fprintf(stdout, "[mod] loaded '%s' — %s by %s\n", ns.c_str(),
                                        description.value_or("(no description)").c_str(),
                                        author.value_or("(unknown)").c_str());
@@ -268,14 +341,13 @@ void LuaHost::load_dir(const std::string& dir)
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) {
         std::fprintf(stderr, "[mod] no mods directory '%s' — no content loaded\n", dir.c_str());
-        state_->registry.finalize();
-        state_->enemies.finalize();
-        compute_plugin_hash();
+        finalize_content();
         return;
     }
 
-    // Load each mod's entry script sorted by path (stable logs; wire ids come
-    // from id sort, so load order doesn't affect them).
+    // Pass 1: run every entry script (it just defines main()); folder name =
+    // plugin/import name. Sorted for stable logs; wire ids come from id sort,
+    // and Lua-visible load order from import(), so path order decides nothing.
     std::vector<fs::path> entries;
     for (const fs::directory_entry& e : fs::directory_iterator(dir, ec)) {
         if (!e.is_directory()) { continue; }
@@ -285,7 +357,8 @@ void LuaHost::load_dir(const std::string& dir)
     std::sort(entries.begin(), entries.end());
 
     for (const fs::path& script : entries) {
-        state_->current_dir = script.parent_path().string(); // for include()
+        const std::string plugin = script.parent_path().filename().string();
+        state_->current_dir = script.parent_path().string(); // for include() at file scope
         sol::protected_function_result loaded =
           lua_.safe_script_file(script.string(), sol::script_pass_on_error);
         if (!loaded.valid()) {
@@ -298,14 +371,20 @@ void LuaHost::load_dir(const std::string& dir)
             std::fprintf(stderr, "[mod] %s has no global main() — skipped\n", script.string().c_str());
             continue;
         }
-        sol::protected_function_result res = main();
-        if (!res.valid()) {
-            const sol::error err = res;
-            std::fprintf(stderr, "[mod] %s main() error: %s\n", script.string().c_str(), err.what());
-        }
+        state_->pending.emplace(plugin,
+                                PendingPlugin{ .main = main, .dir = script.parent_path().string() });
+        state_->plugin_order.push_back(plugin);
         lua_["main"] = sol::lua_nil; // don't leak this mod's main() into the next
     }
 
+    // Pass 2: run every main() (import() may already have pulled some in).
+    for (const std::string& plugin : state_->plugin_order) { run_plugin(state_.get(), plugin); }
+
+    finalize_content();
+}
+
+void LuaHost::finalize_content()
+{
     state_->registry.finalize();
     state_->enemies.finalize();
     state_->scripts.finalize();

@@ -18,16 +18,16 @@
 namespace client {
 
 // What a draw hook receives about the entity being drawn (screen-space `x,y`),
-// plus access to its networked script components: `view:get("core:slow")`
-// returns a table of that component's fields, or nil if the entity lacks it.
+// plus access to its networked script components: `view:get(C.Slow)` returns a
+// table of that component's fields, or nil if the entity lacks it.
 struct DrawView
 {
     float x = 0.0f;
     float y = 0.0f;
-    const mod::ScriptComponentRegistry* scripts = nullptr;
+    const mod::ScriptComponentRegistry* scripts = nullptr; // kept for schema lookups
     const std::vector<mod::NetComp>* comps = nullptr;
 
-    [[nodiscard]] sol::object get(const std::string& id, sol::this_state ts) const;
+    [[nodiscard]] sol::object get(const mod::ComponentRef& ref, sol::this_state ts) const;
 };
 
 // Reusable per-frame drawing surface handed to plugin draw hooks. The scene

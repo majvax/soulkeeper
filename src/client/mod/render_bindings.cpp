@@ -39,10 +39,10 @@ void DrawContext::text(float x, float y, const std::string& s, int r, int g, int
     ImGui::GetForegroundDrawList()->AddText(ImVec2(x, y), IM_COL32(r, g, b, a), s.c_str());
 }
 
-sol::object DrawView::get(const std::string& id, sol::this_state ts) const
+sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) const
 {
-    if (scripts == nullptr || comps == nullptr) { return sol::lua_nil; }
-    const mod::ScriptSchema* schema = scripts->by_id(id);
+    if (comps == nullptr) { return sol::lua_nil; }
+    const mod::ScriptSchema* schema = ref.schema; // engine comps aren't in the script blob
     if (schema == nullptr || schema->net_id < 0) { return sol::lua_nil; }
     for (const mod::NetComp& c : *comps) {
         if (c.net_id != schema->net_id) { continue; }

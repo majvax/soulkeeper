@@ -2,14 +2,16 @@
 #include "shared/mod/sim_bindings.hpp"
 
 #include <cstdio>
-#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "shared/components/combat.hpp"
 #include "shared/components/gameplay.hpp"
 #include "shared/components/physics.hpp"
+#include "shared/components/progression.hpp"
 #include "shared/factory/enemy.hpp"
 #include "shared/factory/projectile.hpp"
 #include "shared/factory/xp_orb.hpp"
@@ -21,29 +23,18 @@ namespace mod {
 
 namespace {
 
-// One entry per engine component type: the runtime dispatch behind
-// e:has/get/assign/remove, plus an erased pool fetcher for runtime queries. The
-// Lua global for each component (e.g. `Weapon`) is its index into this table.
-struct ComponentBinding
-{
-    std::function<bool(core::Registry&, core::Entity)> has;
-    std::function<sol::object(sol::state_view, core::Registry&, core::Entity)> get;
-    std::function<void(core::Registry&, core::Entity, const sol::table&)> assign;
-    std::function<void(core::Registry&, core::Entity)> remove;
-    std::function<core::SparseSet*(core::Registry&)> pool; // for world:each membership
-};
-
-using BindingTable = std::vector<ComponentBinding>;
-
-// Register an engine component usertype + its dispatch entry, and expose `name`
-// as the tag global. `builder` constructs the component from a Lua table.
+// Register an engine component usertype + its dispatch entry. The table index
+// MUST match the component's position in engine_component_names (the prelude
+// handles installed by lua_host carry that index as their engine_tag).
 template <typename T, typename Builder, typename... Fields>
 void register_component(sol::state& lua, BindingTable& table, const char* name, Builder builder,
                         Fields&&... fields)
 {
-    // Hidden metatable name so it doesn't shadow the `name` tag global.
+    if (std::string_view(engine_component_names.at(table.size())) != name) {
+        std::fprintf(stderr, "[mod] FATAL: engine component '%s' registered out of prelude order\n", name);
+    }
+    // Hidden metatable name so it doesn't shadow the `name` prelude handle.
     lua.new_usertype<T>(std::string("_ct_") + name, std::forward<Fields>(fields)...);
-    const int tag = static_cast<int>(table.size());
     table.push_back(ComponentBinding{
       .has = [](core::Registry& r, core::Entity e) { return r.has<T>(e); },
       .get = [](sol::state_view sv, core::Registry& r, core::Entity e) -> sol::object {
@@ -51,17 +42,17 @@ void register_component(sol::state& lua, BindingTable& table, const char* name, 
           return p ? sol::make_object(sv, std::ref(*p)) : sol::lua_nil;
       },
       .assign = [builder](core::Registry& r, core::Entity e, const sol::table& t) {
-          if (r.has<T>(e)) { r.remove<T>(e); } // assign == set/replace
+          if (r.has<T>(e)) { r.remove<T>(e); } // set == replace
           r.assign(e, builder(t));
       },
       .remove = [](core::Registry& r, core::Entity e) { if (r.has<T>(e)) { r.remove<T>(e); } },
       .pool = [](core::Registry& r) { return r.raw_pool(core::type_id<T>()); },
     });
-    lua[name] = tag;
 }
 
 // Write-through proxy over a script component's field row. Re-resolves the row
-// each access so it survives pool reallocation.
+// each access so it survives pool reallocation. STRICT: unknown field names
+// raise a Lua error (typos are loud, not silent nils).
 struct ScriptFieldProxy
 {
     core::DynamicPool* pool;
@@ -69,21 +60,35 @@ struct ScriptFieldProxy
     const ScriptSchema* schema;
 };
 
-// Resolve a query argument (int engine tag or string script id) to a pool, or
-// nullptr (missing → the query is empty).
-core::SparseSet* resolve_pool(const sol::object& arg, core::Registry& reg, const BindingTable& table,
-                              ScriptComponentRegistry& scripts)
+// Fill a script component's row: defaults first, then the given overrides.
+// `strict` raises on unknown keys (e:set); the spawn path logs instead (it
+// runs on the C++ tick, not under a protected call).
+void fill_script_row(double* row, const ScriptSchema& schema, const sol::table& fields, bool strict)
 {
-    if (arg.get_type() == sol::type::number) {
-        const int tag = arg.as<int>();
-        if (tag >= 0 && tag < static_cast<int>(table.size())) { return table[tag].pool(reg); }
+    for (std::size_t i = 0; i < schema.defaults.size(); ++i) { row[i] = schema.defaults[i]; }
+    for (const auto& [key, value] : fields) {
+        if (!key.is<std::string>() || !value.is<double>()) { continue; }
+        const std::string name = key.as<std::string>();
+        const int field = schema.field_index(name);
+        if (field >= 0) {
+            row[field] = value.as<double>();
+        } else if (strict) {
+            throw std::runtime_error("component '" + schema.id + "' has no field '" + name + "'");
+        } else {
+            std::fprintf(stderr, "[mod] component '%s' has no field '%s' (ignored)\n", schema.id.c_str(),
+                         name.c_str());
+        }
+    }
+}
+
+// Resolve a handle to a pool for membership tests, or nullptr (=> empty query).
+core::SparseSet* resolve_pool(const ComponentRef& ref, core::Registry& reg, const BindingTable& table)
+{
+    if (ref.is_engine()) {
+        if (ref.engine_tag < static_cast<int>(table.size())) { return table[ref.engine_tag].pool(reg); }
         return nullptr;
     }
-    if (arg.get_type() == sol::type::string) {
-        ScriptSchema* s = scripts.by_id(arg.as<std::string>());
-        if (s != nullptr && s->has_pool) { return reg.dynamic_pool(s->pool_id); }
-        return nullptr;
-    }
+    if (ref.schema != nullptr && ref.schema->has_pool) { return reg.dynamic_pool(ref.schema->pool_id); }
     return nullptr;
 }
 
@@ -92,17 +97,20 @@ struct ScriptWorld
 {
     core::Registry* reg;
     std::shared_ptr<BindingTable> table;
-    ScriptComponentRegistry* scripts;
     sol::state_view lua;
 
-    // world:each(a, b, ...) -> iterator over EntityHandles owning all components.
+    // world:each(H, ...) -> iterator over EntityHandles owning all components.
     sol::object each(sol::variadic_args va)
     {
         std::vector<core::SparseSet*> pools;
         pools.reserve(va.size());
         for (const sol::stack_proxy arg : va) {
-            core::SparseSet* p = resolve_pool(arg, *reg, *table, *scripts);
-            pools.push_back(p); // nullptr => empty result
+            if (!arg.is<ComponentRef>()) {
+                throw std::runtime_error("world:each expects component handles (got a "
+                                         + std::string(sol::type_name(lua.lua_state(), arg.get_type()))
+                                         + ")");
+            }
+            pools.push_back(resolve_pool(arg.as<ComponentRef>(), *reg, *table));
         }
 
         const core::SparseSet* lead = nullptr;
@@ -146,9 +154,11 @@ struct ScriptWorld
 void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
 {
     sol::state& lua = host.lua();
-    host.scripts().bind(&world_reg); // define_component allocates pools in this registry
+    host.scripts().bind(&world_reg); // mod:component allocates pools in this registry
     auto table = std::make_shared<BindingTable>();
+    host.state().bindings = table; // spawn path + game server dispatch through this
 
+    // Kernel components, in engine_component_names order (= prelude tags).
     register_component<Position>(lua, *table, "Position",
       [](const sol::table& t) { return Position{ .x = t.get_or("x", 0.0f), .y = t.get_or("y", 0.0f) }; },
       "x", &Position::x, "y", &Position::y);
@@ -173,7 +183,6 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     register_component<Damage>(lua, *table, "Damage",
       [](const sol::table& t) { return Damage{ .per_second = t.get_or("per_second", 0.0f) }; },
       "per_second", &Damage::per_second);
-    // (Aura / SlowField are Lua script components now — not engine bindings.)
     register_component<Weapon>(lua, *table, "Weapon",
       [](const sol::table& t) {
           return Weapon{ .cooldown_max = t.get_or("cooldown_max", 0.0f),
@@ -201,84 +210,95 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                        .charges = static_cast<std::uint8_t>(t.get_or("charges", 1)),
                        .max_charges = static_cast<std::uint8_t>(t.get_or("max_charges", 1)) };
       },
-      "cooldown_max", &Dash::cooldown_max, "cooldown", &Dash::cooldown, "shockwave", &Dash::shockwave,
+      "cooldown_max", &Dash::cooldown_max, "cooldown", &Dash::cooldown,
+      "burst_remaining", &Dash::burst_remaining, "shockwave", &Dash::shockwave,
       "charges", &Dash::charges, "max_charges", &Dash::max_charges);
     register_component<Crit>(lua, *table, "Crit",
       [](const sol::table& t) {
           return Crit{ .chance = t.get_or("chance", 0.0f), .multiplier = t.get_or("multiplier", 1.5f) };
       },
       "chance", &Crit::chance, "multiplier", &Crit::multiplier);
+    register_component<XpReward>(lua, *table, "XpReward",
+      [](const sol::table& t) {
+          return XpReward{ .value = static_cast<std::uint32_t>(t.get_or("value", 1)) };
+      },
+      "value", &XpReward::value);
     // Tag components — no fields; used for membership in queries (`Enemy`, `Player`).
     register_component<EnemyTag>(lua, *table, "Enemy", [](const sol::table&) { return EnemyTag{}; });
     register_component<PlayerTag>(lua, *table, "Player", [](const sol::table&) { return PlayerTag{}; });
 
-    // Write-through proxy for script component fields.
+    // Write-through proxy for script component fields (strict on unknowns).
     lua.new_usertype<ScriptFieldProxy>(
       "_ScriptFieldProxy", sol::no_constructor,
       sol::meta_function::index,
       [](ScriptFieldProxy& p, const std::string& key, sol::this_state ts) -> sol::object {
           const int i = p.schema->field_index(key);
-          double* row = (i >= 0) ? p.pool->row(p.entity) : nullptr;
+          if (i < 0) {
+              throw std::runtime_error("component '" + p.schema->id + "' has no field '" + key + "'");
+          }
+          double* row = p.pool->row(p.entity);
           return row ? sol::make_object(ts, row[i]) : sol::lua_nil;
       },
       sol::meta_function::new_index, [](ScriptFieldProxy& p, const std::string& key, double v) {
           const int i = p.schema->field_index(key);
-          if (i < 0) { return; }
+          if (i < 0) {
+              throw std::runtime_error("component '" + p.schema->id + "' has no field '" + key + "'");
+          }
           if (double* row = p.pool->row(p.entity)) { row[i] = v; }
       });
 
-    ScriptComponentRegistry* scripts = &host.scripts();
-
-    // Entity handle: engine components by int tag, script components by string id.
+    // Entity handle: one verb set, handles only.
     lua.new_usertype<EntityHandle>(
       "Entity", sol::no_constructor,
-      "has", sol::overload(
-               [table](EntityHandle& h, int tag) {
-                   return tag >= 0 && tag < static_cast<int>(table->size()) && (*table)[tag].has(*h.reg, h.entity);
-               },
-               [scripts](EntityHandle& h, const std::string& id) {
-                   ScriptSchema* s = scripts->by_id(id);
-                   if (s == nullptr || !s->has_pool) { return false; }
-                   core::DynamicPool* p = h.reg->dynamic_pool(s->pool_id);
-                   return p != nullptr && p->row(h.entity) != nullptr;
-               }),
-      "get", sol::overload(
-               [table](EntityHandle& h, int tag, sol::this_state ts) -> sol::object {
-                   if (tag < 0 || tag >= static_cast<int>(table->size())) { return sol::lua_nil; }
-                   return (*table)[tag].get(ts, *h.reg, h.entity);
-               },
-               [scripts](EntityHandle& h, const std::string& id, sol::this_state ts) -> sol::object {
-                   ScriptSchema* s = scripts->by_id(id);
-                   if (s == nullptr || !s->has_pool) { return sol::lua_nil; }
-                   core::DynamicPool* p = h.reg->dynamic_pool(s->pool_id);
-                   if (p == nullptr || p->row(h.entity) == nullptr) { return sol::lua_nil; }
-                   return sol::make_object(ts, ScriptFieldProxy{ .pool = p, .entity = h.entity, .schema = s });
-               }),
-      "assign", [table](EntityHandle& h, int tag, sol::table fields) {
-          if (tag >= 0 && tag < static_cast<int>(table->size())) { (*table)[tag].assign(*h.reg, h.entity, fields); }
+      "has", [table](EntityHandle& h, const ComponentRef& ref) {
+          if (ref.is_engine()) {
+              return ref.engine_tag < static_cast<int>(table->size())
+                     && (*table)[ref.engine_tag].has(*h.reg, h.entity);
+          }
+          if (ref.schema == nullptr || !ref.schema->has_pool) { return false; }
+          core::DynamicPool* p = h.reg->dynamic_pool(ref.schema->pool_id);
+          return p != nullptr && p->row(h.entity) != nullptr;
       },
-      "set", [scripts](EntityHandle& h, const std::string& id, sol::table fields) {
-          ScriptSchema* s = scripts->by_id(id);
-          if (s == nullptr || !s->has_pool) { return; }
-          core::DynamicPool* p = h.reg->dynamic_pool(s->pool_id);
+      "get", [table](EntityHandle& h, const ComponentRef& ref, sol::this_state ts) -> sol::object {
+          if (ref.is_engine()) {
+              if (ref.engine_tag >= static_cast<int>(table->size())) { return sol::lua_nil; }
+              return (*table)[ref.engine_tag].get(ts, *h.reg, h.entity);
+          }
+          if (ref.schema == nullptr || !ref.schema->has_pool) { return sol::lua_nil; }
+          core::DynamicPool* p = h.reg->dynamic_pool(ref.schema->pool_id);
+          if (p == nullptr || p->row(h.entity) == nullptr) { return sol::lua_nil; }
+          return sol::make_object(ts, ScriptFieldProxy{ .pool = p, .entity = h.entity, .schema = ref.schema });
+      },
+      "set", [table](EntityHandle& h, const ComponentRef& ref, const sol::table& fields) {
+          if (ref.is_engine()) {
+              if (ref.engine_tag < static_cast<int>(table->size())) {
+                  (*table)[ref.engine_tag].assign(*h.reg, h.entity, fields);
+              }
+              return;
+          }
+          if (ref.schema == nullptr || !ref.schema->has_pool) { return; }
+          core::DynamicPool* p = h.reg->dynamic_pool(ref.schema->pool_id);
           if (p == nullptr) { return; }
-          double* row = p->emplace_default(h.entity);
-          for (std::size_t i = 0; i < s->fields.size(); ++i) { row[i] = fields.get_or(s->fields[i], 0.0); }
+          fill_script_row(p->emplace_default(h.entity), *ref.schema, fields, /*strict=*/true);
       },
-      "remove", sol::overload(
-                  [table](EntityHandle& h, int tag) {
-                      if (tag >= 0 && tag < static_cast<int>(table->size())) { (*table)[tag].remove(*h.reg, h.entity); }
-                  },
-                  [scripts](EntityHandle& h, const std::string& id) {
-                      ScriptSchema* s = scripts->by_id(id);
-                      if (s != nullptr && s->has_pool) {
-                          if (core::DynamicPool* p = h.reg->dynamic_pool(s->pool_id)) { p->remove(h.entity); }
-                      }
-                  }));
+      "remove", [table](EntityHandle& h, const ComponentRef& ref) {
+          if (ref.is_engine()) {
+              if (ref.engine_tag < static_cast<int>(table->size())) {
+                  (*table)[ref.engine_tag].remove(*h.reg, h.entity);
+              }
+              return;
+          }
+          if (ref.schema != nullptr && ref.schema->has_pool) {
+              if (core::DynamicPool* p = h.reg->dynamic_pool(ref.schema->pool_id)) { p->remove(h.entity); }
+          }
+      },
+      "destroy", [](EntityHandle& h) {
+          if (h.reg->valid(h.entity)) { h.reg->destroy(h.entity); }
+      });
 
     // The `world` query facade.
     lua.new_usertype<ScriptWorld>("_ScriptWorld", sol::no_constructor, "each", &ScriptWorld::each);
-    lua["world"] = ScriptWorld{ .reg = &world_reg, .table = table, .scripts = scripts, .lua = lua };
+    lua["world"] = ScriptWorld{ .reg = &world_reg, .table = table, .lua = lua };
 
     // Spawn factories (for content that creates entities).
     core::Registry* reg = &world_reg;
@@ -294,33 +314,38 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     const EnemyRegistry* enemies = &host.enemies(); // heap-stable (lives in ModState)
     lua.set_function(
       "spawn_enemy",
-      [reg, enemies, scripts](float x, float y, const std::string& id, sol::this_state ts) -> sol::object {
+      [reg, enemies, table](float x, float y, const std::string& id, sol::this_state ts) -> sol::object {
           const EnemyDef* def = enemies->by_id(id);
           if (def == nullptr) {
               std::fprintf(stderr, "[mod] spawn_enemy: unknown enemy id '%s'\n", id.c_str());
               return sol::lua_nil;
           }
+          std::uint16_t wave = 1;
+          reg->view<GameStats>().each([&](core::Entity, const GameStats& stats) { wave = stats.wave; });
+          const auto inits = def->inits_at(wave);
           return sol::make_object(
-            ts, EntityHandle{ .reg = reg, .entity = spawn_enemy(*reg, x, y, *def, def->stats, *scripts) });
+            ts, EntityHandle{ .reg = reg, .entity = spawn_enemy(*reg, x, y, *def, inits, *table) });
       });
 }
 
-core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def, const EnemyStats& stats,
-                         ScriptComponentRegistry& scripts)
+core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def,
+                         const std::vector<std::pair<const ComponentRef*, sol::table>>& inits,
+                         const BindingTable& bindings)
 {
-    const core::Entity enemy = create_enemy(reg, x, y, stats, def.wire_id);
-    // Builder-declared components go straight through the script-ECS pools —
-    // no Lua on the spawn path.
-    for (const EnemyComponentInit& init : def.components) {
-        ScriptSchema* schema = scripts.by_id(init.component_id);
-        if (schema == nullptr || !schema->has_pool) { continue; }
-        core::DynamicPool* pool = reg.dynamic_pool(schema->pool_id);
-        if (pool == nullptr) { continue; }
-        double* row = pool->emplace_default(enemy);
-        for (const auto& [name, value] : init.fields) {
-            const int field = schema->field_index(name);
-            if (field >= 0) { row[field] = value; }
+    const core::Entity enemy = create_enemy(reg, x, y, def.wire_id);
+    // The archetype's component bag — kernel comps dispatch through the binding
+    // table, Lua comps go straight into the script-ECS pools. No Lua calls here.
+    for (const auto& [ref, fields] : inits) {
+        if (ref->is_engine()) {
+            if (ref->engine_tag < static_cast<int>(bindings.size())) {
+                bindings[ref->engine_tag].assign(reg, enemy, fields);
+            }
+            continue;
         }
+        if (ref->schema == nullptr || !ref->schema->has_pool) { continue; }
+        core::DynamicPool* pool = reg.dynamic_pool(ref->schema->pool_id);
+        if (pool == nullptr) { continue; }
+        fill_script_row(pool->emplace_default(enemy), *ref->schema, fields, /*strict=*/false);
     }
     if (def.on_spawn.valid()) {
         sol::protected_function_result res = def.on_spawn(EntityHandle{ .reg = &reg, .entity = enemy });

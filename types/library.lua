@@ -4,65 +4,70 @@
 -- Point your editor's Lua library path at the `types/` folder for autocomplete.
 
 --=============================================================================
--- Engine components (built-in, C++). Each has a tag global (e.g. `Weapon`) you
--- pass to Entity:get/has/assign/remove. Mods can also define their OWN script
--- components with Mod:define_component (referenced by string id, e.g. "core:aura").
+-- Component handles. EVERY component — kernel (C++) or Lua-defined — is a
+-- Component handle: the prelude globals below, or the value returned by
+-- Mod:component(). All APIs take handles; there are no string component ids.
 --=============================================================================
 
----@class Position
+---@class Component
+---@field id string  # full id, e.g. "Position" or "core:ranged" (read-only)
+
+-- Kernel component field shapes (what e:get(Handle) returns for each prelude
+-- handle; mutate fields in place).
+
+---@class PositionFields
 ---@field x number
 ---@field y number
 
----@class Velocity
+---@class VelocityFields
 ---@field dx number
 ---@field dy number
 
----@class Speed
+---@class SpeedFields
 ---@field value number  # movement speed, px/s
 
----@class Health   # enemies (float HP; players use Hearts)
+---@class HealthFields   # enemies (float HP; players use Hearts)
 ---@field current number
 ---@field max number
 
----@class Hearts   # player heart life (discrete; hits cost whole hearts)
+---@class HeartsFields   # player heart life (discrete; hits cost whole hearts)
 ---@field current integer
 ---@field max integer
 
----@class Dash
----@field cooldown_max number  # seconds per charge refill
----@field cooldown number      # time until the next charge
----@field shockwave number     # damage to enemies passed through (0 = off)
----@field charges integer
----@field max_charges integer
-
----@class Crit
----@field chance number      # 0..1 roll per shot
----@field multiplier number  # damage x on a crit
-
----@class Radius
+---@class RadiusFields
 ---@field value number  # collision radius, px
 
----@class Damage
+---@class DamageFields
 ---@field per_second number  # enemies: HEARTS removed per contact hit
 
----@class Weapon
+---@class WeaponFields
 ---@field cooldown_max number
 ---@field cooldown_current number
 ---@field bullet_speed number
 ---@field damage number
 ---@field projectile_lifetime number
 
----@class AimState
+---@class AimStateFields
 ---@field dx number
 ---@field dy number
 ---@field firing integer  # 1 while the trigger is held
 
----@class EnemyTag   # membership-only tag (no fields)
----@class PlayerTag  # membership-only tag (no fields)
+---@class DashFields
+---@field cooldown_max number     # seconds per charge refill
+---@field cooldown number         # time until the next charge
+---@field burst_remaining number  # > 0 while dashing
+---@field shockwave number        # damage to enemies passed through (0 = off)
+---@field charges integer
+---@field max_charges integer
 
----@alias Component Position|Velocity|Speed|Health|Hearts|Radius|Damage|Weapon|AimState|Dash|Crit|EnemyTag|PlayerTag
+---@class CritFields
+---@field chance number      # 0..1 roll per shot
+---@field multiplier number  # damage x on a crit
 
--- Component tag globals (pass these to Entity/world methods).
+---@class XpRewardFields
+---@field value integer  # XP orb dropped on death
+
+-- The kernel prelude (same handles in both VMs).
 ---@type Component
 Position = nil
 ---@type Component
@@ -72,6 +77,8 @@ Speed = nil
 ---@type Component
 Health = nil
 ---@type Component
+Hearts = nil
+---@type Component
 Radius = nil
 ---@type Component
 Damage = nil
@@ -80,45 +87,44 @@ Weapon = nil
 ---@type Component
 AimState = nil
 ---@type Component
-Hearts = nil
----@type Component
 Dash = nil
 ---@type Component
 Crit = nil
 ---@type Component
-Enemy = nil
+XpReward = nil
 ---@type Component
-Player = nil
+Enemy = nil -- membership-only tag
+---@type Component
+Player = nil -- membership-only tag
 
 --=============================================================================
--- Entity handle (passed into sim callbacks and yielded by world:each). Engine
--- components are addressed by their tag global; script components by string id.
+-- Entity handle (passed into sim callbacks and yielded by world:each).
 --=============================================================================
 
 ---@class Entity
 local Entity = {}
 
 ---Return the component (mutate its fields in place), or nil if absent.
----@param component Component|string
----@return any
+---Lua-defined components are strict: reading/writing an unknown field errors.
+---@param component Component
+---@return table|nil
 function Entity:get(component) end
 
----@param component Component|string
+---@param component Component
 ---@return boolean
 function Entity:has(component) end
 
----Add or replace an ENGINE component from a table of its fields.
+---Add or replace a component. Lua-defined components fill unset fields from
+---their declared defaults; unknown field names raise an error (typo guard).
 ---@param component Component
 ---@param fields table
-function Entity:assign(component, fields) end
+function Entity:set(component, fields) end
 
----Add or replace a SCRIPT component (by string id) from a table of its fields.
----@param id string
----@param fields table
-function Entity:set(id, fields) end
-
----@param component Component|string
+---@param component Component
 function Entity:remove(component) end
+
+---Destroy the entity (safe on already-dead handles).
+function Entity:destroy() end
 
 --=============================================================================
 -- The `world` query facade (sim VM; use inside systems).
@@ -127,9 +133,9 @@ function Entity:remove(component) end
 ---@class World
 world = {}
 
----Iterate every entity owning ALL of the given components (tag globals or script
----ids). Use in a generic for: `for e in world:each(Enemy, Position) do ... end`.
----@param ... Component|string
+---Iterate every entity owning ALL of the given components.
+---`for e in world:each(Enemy, Position, C.Ranged) do ... end`
+---@param ... Component
 ---@return fun(): Entity|nil
 function world:each(...) end
 
@@ -141,15 +147,32 @@ function world:each(...) end
 function spawn_projectile(x, y, vx, vy, damage, lifetime, hostile) end
 ---@return Entity
 function spawn_xp_orb(x, y, value) end
----Spawn a registered enemy archetype (fires its on_spawn hook).
+---Spawn a registered enemy archetype (applies its component bag at the
+---current wave + fires its on_spawn hook).
 ---@param id string  # a registered enemy id, e.g. "core:brute"
 ---@return Entity|nil # nil (and a logged error) if the id is unknown
 function spawn_enemy(x, y, id) end
 
 --=============================================================================
+-- Cross-plugin: import.
+--=============================================================================
+
+---Run a file relative to the current plugin's folder and return its value.
+---@param path string
+---@return any
+function include(path) end
+
+---Load another plugin (by its mods/<name> folder name) and return its exports
+---(whatever its main() returned — by convention a table of Component handles).
+---Lazy + memoized; circular imports error. `local core = import("core")`
+---@param name string
+---@return any
+function import(name) end
+
+--=============================================================================
 -- Draw context + view (render VM; passed into an object's `draw` hook). `x,y`
--- are screen-space. `view:get(id)` returns the entity's networked script
--- component as a table of fields (or nil).
+-- are screen-space. `view:get(H)` returns the entity's networked component as
+-- a plain table of fields (or nil).
 --=============================================================================
 
 ---@class DrawView
@@ -157,9 +180,9 @@ function spawn_enemy(x, y, id) end
 ---@field y number
 local DrawView = {}
 
----@param id string  # a networked script component id, e.g. "core:aura"
+---@param component Component  # a NETWORKED Lua-defined component
 ---@return table|nil
-function DrawView:get(id) end
+function DrawView:get(component) end
 
 ---@class DrawContext
 local DrawContext = {}
@@ -183,7 +206,7 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@alias DrawFn fun(ctx: DrawContext, view: DrawView)
 ---@alias SystemFn fun(dt: number)
 
----@class StatUpgradeOpts
+---@class UpgradeOpts
 ---@field available? AvailableFn
 ---@field sprite? string
 ---@field value_format? string   # fmt-style, applied to the rarity amount, e.g. "+{} DMG"
@@ -196,31 +219,6 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@field draw? DrawFn
 ---@field rarity? string  # tier the object rolls at: "common".."legendary" (default "epic")
 
----@class EnemyStats
----@field health number
----@field speed number   # px/s
----@field damage number  # HEARTS removed per contact hit
----@field radius number  # collision radius, px
----@field xp integer     # dropped as an orb on death
-
----Archetype handle returned by Mod:add_enemy.
----@class EnemyArchetype
-local EnemyArchetype = {}
-
----Attach a script component (with these field values) to every spawned
----instance of the archetype. Chainable. Applied without Lua on the spawn path.
----@param id string     # a defined script component, e.g. "core:ranged"
----@param fields table<string, number>
----@return EnemyArchetype
-function EnemyArchetype:component(id, fields) end
-
----@class EnemyOpts
----@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)
----@field scale? number    # sprite scale (default 1.0)
----@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
----@field sprite? string   # own sprite path (default: the shared enemy sprite)
----@field on_spawn? fun(e: Entity) # sim VM: attach extra components etc.
-
 ---@class ComponentOpts
 ---@field networked? boolean  # sync to clients so draw hooks can read it
 
@@ -228,66 +226,94 @@ function EnemyArchetype:component(id, fields) end
 ---@field phase? string   # "motion" (before Movement) or "update" (default, after Combat)
 ---@field rate? number    # optional throttle in Hz (default: every tick)
 
+---@class EnemyOpts
+---@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)
+---@field scale? number    # sprite scale (default 1.0)
+---@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
+---@field sprite? string   # own sprite path (default: the shared enemy sprite)
+---@field on_spawn? fun(e: Entity) # escape hatch for dynamic per-spawn logic (prefer :component())
+
 --=============================================================================
--- Mod handle + registration.
+-- Mod handle + registration. All names are auto-namespaced with the mod's
+-- namespace ("damage" in mod "core" -> "core:damage").
 --=============================================================================
+
+---Archetype handle returned by Mod:enemy — the enemy's component bag.
+---@class EnemyArchetype
+local EnemyArchetype = {}
+
+---Attach a component to every spawned instance. `fields` may be a function of
+---the wave (re-resolved once per wave — the wave-scaling mechanism). Chainable.
+---Every enemy needs at least Health and Radius.
+---@param component Component
+---@param fields table|fun(wave: integer): table
+---@return EnemyArchetype
+function EnemyArchetype:component(component, fields) end
 
 ---@class Mod
 local Mod = {}
 
+---Define a component: fields with their defaults. Returns THE handle — store
+---it, use it everywhere, export it for other plugins.
+---@param name string  # bare name; auto-namespaced
+---@param fields table<string, number>  # field -> default value
+---@param opts? ComponentOpts
+---@return Component
+function Mod:component(name, fields, opts) end
+
+---Define a system: fn(dt) run each tick (or throttled) at a pipeline phase.
+---@param name string
+---@param opts SystemOpts
+---@param fn SystemFn
+function Mod:system(name, opts, fn) end
+
 ---Register a repeatable, rarity-scaled stat upgrade.
----@param id string       # namespaced, e.g. "core:damage"
+---@param name string
 ---@param label string
 ---@param amounts number[] # per tier { common, uncommon, rare, epic, legendary }; missing/0 = not offered at that tier
 ---@param apply ApplyFn
----@param opts? StatUpgradeOpts
-function Mod:add_stat_upgrade(id, label, amounts, apply, opts) end
+---@param opts? UpgradeOpts
+function Mod:upgrade(name, label, amounts, apply, opts) end
 
 ---Register a one-time object (no rarity scaling; the engine enforces "once").
----@param id string
+---@param name string
 ---@param label string
 ---@param acquire AcquireFn
 ---@param opts? ObjectOpts
-function Mod:add_object(id, label, acquire, opts) end
+function Mod:object(name, label, acquire, opts) end
 
----Register an enemy archetype: stats drive the sim, weight the wave spawner,
----scale/tint/sprite the client. Stats can be a function of the wave (per-wave
----scaling, evaluated once per wave). See mods/core/enemies.lua.
----@param id string   # namespaced, e.g. "core:brute"
+---Register an enemy archetype: identity + visuals + spawn weight. Chain
+---:component(...) for everything gameplay-defining. See mods/core/enemies.lua.
+---@param name string
 ---@param label string
----@param stats EnemyStats|fun(wave: integer): EnemyStats
 ---@param opts? EnemyOpts
----@return EnemyArchetype  # chain :component(id, fields) to attach components
-function Mod:add_enemy(id, label, stats, opts) end
+---@return EnemyArchetype
+function Mod:enemy(name, label, opts) end
 
----Define a component: a named list of number fields, optionally networked.
----@param id string
----@param fields string[]
----@param opts? ComponentOpts
-function Mod:define_component(id, fields, opts) end
-
----Define a system: fn(dt) run each tick (or throttled) at a pipeline phase.
----@param id string
----@param opts SystemOpts
----@param fn SystemFn
-function Mod:define_system(id, opts, fn) end
-
----Subscribe to a game event. Known events (server-side):
+---Subscribe to a game event. Engine events (server-side):
 ---  "on_wave_start"    fun(wave: integer)
 ---  "on_enemy_death"   fun(victim: { x: number, y: number, variant: integer, xp: integer })
 ---  "on_player_downed" fun(player: Entity)
 ---  "on_level_up"      fun(level: integer)
+---Custom events use their emitter's full name, e.g. "core:boss_spawned".
 ---@param event string
 ---@param handler function
 function Mod:subscribe(event, handler) end
 
----Create a mod. Call once from `main()` and return the handle.
+---Fire a custom event other plugins can subscribe to. Bare names are
+---auto-namespaced ("boss_spawned" -> "core:boss_spawned").
+---@param event string
+function Mod:emit(event, ...) end
+
+---Create a mod. Call once from `main()`. The namespace MUST equal the plugin's
+---folder name (it's the import name).
 ---@param namespace string
 ---@param description string
 ---@param author string
 ---@return Mod
 function register_mod(namespace, description, author) end
 
----Plugin entry point. Define this in your mod.lua; the loader calls it once.
----@return Mod
+---Plugin entry point. Define this in your mod.lua; the loader (or an import)
+---calls it once. Its return value is the plugin's exports.
+---@return any
 function main() end

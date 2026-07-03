@@ -40,6 +40,21 @@ public:
         }
     }
 
+    // Variadic form for Lua-originated events (mod:emit) — forwards the caller's
+    // arguments to every handler unchanged.
+    void emit_variadic(const std::string& name, sol::variadic_args args) const
+    {
+        const auto it = handlers_.find(name);
+        if (it == handlers_.end()) { return; }
+        for (const sol::protected_function& fn : it->second) {
+            sol::protected_function_result res = fn(args);
+            if (!res.valid()) {
+                const sol::error err = res;
+                std::fprintf(stderr, "[mod] event '%s' handler error: %s\n", name.c_str(), err.what());
+            }
+        }
+    }
+
     [[nodiscard]] bool has(const std::string& name) const { return handlers_.contains(name); }
 
 private:

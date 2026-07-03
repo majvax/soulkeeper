@@ -8,13 +8,23 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "shared/mod/bindings_table.hpp"
+#include "shared/mod/component_ref.hpp"
 #include "shared/mod/events.hpp"
 #include "shared/mod/registry.hpp"
 #include "shared/mod/script_ecs.hpp"
 
 namespace mod {
+
+// A discovered plugin whose main() hasn't run yet (import()/pass 2 runs it).
+struct PendingPlugin
+{
+    sol::protected_function main;
+    std::string dir;
+};
 
 // Everything a plugin can register into, in one heap block so the registration
 // closures capture a stable pointer (not `this`, which would dangle when the
@@ -26,7 +36,17 @@ struct ModState
     EventBus events;
     ScriptComponentRegistry scripts;
     std::vector<ScriptSystem> script_systems;
-    std::string current_dir; // dir of the mod being loaded (for include())
+
+    // Plugin loader state (import()).
+    std::vector<std::string> plugin_order;                    // discovery order (folder names)
+    std::unordered_map<std::string, PendingPlugin> pending;   // folder name -> unrun main()
+    std::unordered_map<std::string, sol::object> exports;     // folder name -> main()'s return
+    std::vector<std::string> import_stack;                    // cycle detection
+    std::string current_plugin;                               // folder of the running main()
+    std::string current_dir;                                  // its dir (for include())
+
+    // Engine component dispatch (filled by install_sim_bindings; sim VM only).
+    std::shared_ptr<BindingTable> bindings;
 };
 
 class LuaHost
@@ -43,6 +63,8 @@ public:
     [[nodiscard]] const EventBus& events() const noexcept { return state_->events; }
     [[nodiscard]] ScriptComponentRegistry& scripts() noexcept { return state_->scripts; }
     [[nodiscard]] std::vector<ScriptSystem>& script_systems() noexcept { return state_->script_systems; }
+    [[nodiscard]] ModState& state() noexcept { return *state_; }
+    [[nodiscard]] const std::shared_ptr<BindingTable>& bindings() const noexcept { return state_->bindings; }
 
     // Discover every `<dir>/*/mod.lua`, run it, call its global main(), then
     // finalize the registry (sort ids -> deterministic wire ids). Safe to call
@@ -56,7 +78,8 @@ public:
     [[nodiscard]] std::uint64_t plugin_hash() const noexcept { return plugin_hash_; }
 
 private:
-    void install_registration_api(); // register_mod + the Mod usertype
+    void install_registration_api(); // register_mod/import/prelude + the Mod usertype
+    void finalize_content();         // sort registries -> wire ids, then hash
     void compute_plugin_hash();      // cache plugin_hash_ (end of load_dir)
 
     sol::state lua_;

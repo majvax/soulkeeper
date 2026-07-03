@@ -22,7 +22,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 2;
+inline constexpr std::uint16_t protocol_version = 3;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;

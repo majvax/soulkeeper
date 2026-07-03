@@ -6,7 +6,12 @@
 // server). The client uses render_bindings instead.
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "core/ecs.hpp"
+#include "shared/mod/bindings_table.hpp"
+#include "shared/mod/component_ref.hpp"
 #include "shared/mod/lua_host.hpp"
 #include "shared/mod/registry.hpp"
 
@@ -29,12 +34,13 @@ struct EntityHandle
 // authoritative registry). Call once, before load_dir().
 void install_sim_bindings(LuaHost& host, core::Registry& world_reg);
 
-// Create an enemy from a registered def with the given (possibly wave-scaled)
-// stats: attach its builder-declared script components, then fire the optional
-// on_spawn hook (protected; errors logged). Used by the wave spawner and the
-// Lua spawn_enemy global so scripted spawns behave exactly like natural ones.
-core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def, const EnemyStats& stats,
-                         ScriptComponentRegistry& scripts);
+// Create an enemy from a registered def: kernel comps from the factory, then
+// the archetype's (possibly wave-resolved) component inits, then the optional
+// on_spawn hook (protected; errors logged). Used by the wave spawner (cached
+// per-wave inits) and the Lua spawn_enemy global (ad-hoc resolution).
+core::Entity spawn_enemy(core::Registry& reg, float x, float y, const EnemyDef& def,
+                         const std::vector<std::pair<const ComponentRef*, sol::table>>& inits,
+                         const BindingTable& bindings);
 
 // After load_dir(): add every Lua-defined system to the World's pipeline (at its
 // phase order, honoring an optional rate throttle). Server-only.
