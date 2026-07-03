@@ -463,32 +463,34 @@ std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgra
         if (mod::run_available(d, handle)) { pool.push_back(d.wire_id); }
     }
 
-    const std::array<mod::Rarity, 3> rarities{ mod::Rarity::Common, mod::Rarity::Uncommon,
-                                               mod::Rarity::Legendary };
-    const std::array<float, 3> rarity_weights{ mod::rarity_weight(mod::Rarity::Common),
-                                               mod::rarity_weight(mod::Rarity::Uncommon),
-                                               mod::rarity_weight(mod::Rarity::Legendary) };
-    const auto roll_rarity = [&] {
-        std::discrete_distribution<std::size_t> dist{ rarity_weights.begin(), rarity_weights.end() };
-        return rarities[dist(rng_)];
-    };
+    std::array<float, mod::rarity_count> rarity_weights{};
+    for (std::uint8_t r = 0; r < mod::rarity_count; ++r) {
+        rarity_weights[r] = mod::rarity_weight(static_cast<mod::Rarity>(r));
+    }
 
+    // Per card: roll the tier FIRST, then pick among content offered at that
+    // tier (stat upgrades with a nonzero amount, objects with that declared
+    // rarity). No candidates -> fall back a tier (L->E->R->U->C). This is what
+    // keeps legendaries actually rare — objects no longer force gold cards.
     std::array<proto::LevelUpChoice, proto::level_up_choices> out{};
     for (std::size_t k = 0; k < proto::level_up_choices; ++k) {
-        proto::LevelUpChoice choice{};
-        if (!pool.empty()) {
-            std::uniform_int_distribution<std::size_t> pick{ 0, pool.size() - 1 };
-            const std::size_t idx = pick(rng_);
-            const std::uint8_t wire = pool[idx];
+        proto::LevelUpChoice choice{}; // pool exhausted -> pad with content 0 at Common
+        std::discrete_distribution<std::size_t> tier_dist{ rarity_weights.begin(), rarity_weights.end() };
+        int tier = static_cast<int>(tier_dist(rng_));
+        for (; tier >= 0; --tier) {
+            std::vector<std::size_t> candidates; // indices into pool
+            for (std::size_t i = 0; i < pool.size(); ++i) {
+                const mod::ContentDef* d = registry.by_wire(pool[i]);
+                if (d != nullptr && mod::offered_at(*d, static_cast<mod::Rarity>(tier))) {
+                    candidates.push_back(i);
+                }
+            }
+            if (candidates.empty()) { continue; }
+            std::uniform_int_distribution<std::size_t> pick{ 0, candidates.size() - 1 };
+            const std::size_t idx = candidates[pick(rng_)];
+            choice = { .id = pool[idx], .rarity = static_cast<std::uint8_t>(tier) };
             pool.erase(pool.begin() + static_cast<std::ptrdiff_t>(idx)); // no duplicates
-            const mod::ContentDef* d = registry.by_wire(wire);
-            // Objects don't scale with rarity — always Legendary.
-            const mod::Rarity rarity =
-              (d != nullptr && d->kind == mod::ContentKind::Object) ? mod::Rarity::Legendary : roll_rarity();
-            choice = { .id = wire, .rarity = static_cast<std::uint8_t>(rarity) };
-        } else {
-            // Fewer than 3 available: pad with the first content at Common.
-            choice = { .id = 0, .rarity = static_cast<std::uint8_t>(mod::Rarity::Common) };
+            break;
         }
         out[k] = choice;
     }

@@ -25,17 +25,19 @@
 namespace mod {
 
 // Upgrade rarity. Kept here (rather than in progression/) so the registry — the
-// lowest layer of the content system — owns it. Common/Uncommon/Legendary = 0/1/2.
-enum class Rarity : std::uint8_t { Common, Uncommon, Legendary };
-inline constexpr std::uint8_t rarity_count = 3;
+// lowest layer of the content system — owns it. Common..Legendary = 0..4.
+enum class Rarity : std::uint8_t { Common, Uncommon, Rare, Epic, Legendary };
+inline constexpr std::uint8_t rarity_count = 5;
 
 // Roll weights: commons are frequent, legendaries rare.
 [[nodiscard]] inline float rarity_weight(Rarity r)
 {
     switch (r) {
-    case Rarity::Common:    return 0.70f;
-    case Rarity::Uncommon:  return 0.25f;
-    case Rarity::Legendary: return 0.05f;
+    case Rarity::Common:    return 0.45f;
+    case Rarity::Uncommon:  return 0.28f;
+    case Rarity::Rare:      return 0.16f;
+    case Rarity::Epic:      return 0.08f;
+    case Rarity::Legendary: return 0.03f;
     }
     return 0.0f;
 }
@@ -59,6 +61,10 @@ struct ContentDef
 
     std::string sprite; // optional card sprite path (relative to repo root)
 
+    // Objects only: the tier the object rolls at (no amount scaling). Stat
+    // upgrades ignore this — their tiers come from nonzero rarity_amounts.
+    Rarity object_rarity = Rarity::Epic;
+
     // Callbacks (populated per-VM; may be empty — check .valid()).
     sol::protected_function available; // (Entity) -> bool           [sim]
     sol::protected_function apply;     // (Entity, rarity, amount)    [sim, stat]
@@ -67,6 +73,15 @@ struct ContentDef
 
     std::uint8_t wire_id = 0; // assigned by finalize()
 };
+
+// Whether a piece of content can be offered at a tier: stat upgrades need a
+// nonzero amount there (missing/0 in the Lua table = "not at this tier");
+// objects roll only at their declared rarity.
+[[nodiscard]] inline bool offered_at(const ContentDef& def, Rarity tier)
+{
+    if (def.kind == ContentKind::Object) { return def.object_rarity == tier; }
+    return def.rarity_amounts[static_cast<std::size_t>(tier)] != 0.0f;
+}
 
 // Holds all registered content and the string-id -> wire-id map.
 class ContentRegistry

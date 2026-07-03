@@ -52,9 +52,23 @@ struct ModHandle
 
     static void read_amounts(ContentDef& d, const sol::table& amounts)
     {
+        // Lua tables are 1-based. Missing entries stay 0 = "not offered at
+        // that tier" (e.g. { 5, 10, 15 } exists only at Common/Uncommon/Rare).
         for (std::uint8_t r = 0; r < rarity_count; ++r) {
-            d.rarity_amounts[r] = amounts.get_or(r + 1, 0.0f); // Lua tables are 1-based
+            d.rarity_amounts[r] = amounts.get_or(r + 1, 0.0f);
         }
+    }
+
+    // Object rarity opt: "common" | "uncommon" | "rare" | "epic" | "legendary".
+    static Rarity parse_rarity(const std::string& name, const std::string& id)
+    {
+        if (name == "common") { return Rarity::Common; }
+        if (name == "uncommon") { return Rarity::Uncommon; }
+        if (name == "rare") { return Rarity::Rare; }
+        if (name == "epic") { return Rarity::Epic; }
+        if (name == "legendary") { return Rarity::Legendary; }
+        std::fprintf(stderr, "[mod] '%s' unknown rarity '%s' — using epic\n", id.c_str(), name.c_str());
+        return Rarity::Epic;
     }
 
     void add_stat_upgrade(std::string id, std::string label, sol::table amounts,
@@ -90,6 +104,8 @@ struct ModHandle
             d.sprite = opts->get_or<std::string>("sprite", "");
             d.value_fn = opts->get_or<sol::protected_function>("value_text", {});
             d.draw = opts->get_or<sol::protected_function>("draw", {});
+            const std::string rarity = opts->get_or<std::string>("rarity", "");
+            if (!rarity.empty()) { d.object_rarity = parse_rarity(rarity, d.id); }
         }
         state->registry.add(std::move(d));
     }

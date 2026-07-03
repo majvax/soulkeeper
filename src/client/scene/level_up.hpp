@@ -143,9 +143,11 @@ private:
     static SDL_Color rarity_color(mod::Rarity rarity)
     {
         switch (rarity) {
-        case mod::Rarity::Common:    return { .r = 150, .g = 150, .b = 150, .a = 255 };
-        case mod::Rarity::Uncommon:  return { .r = 90, .g = 200, .b = 90, .a = 255 };
-        case mod::Rarity::Legendary: return { .r = 230, .g = 190, .b = 60, .a = 255 };
+        case mod::Rarity::Common:    return { .r = 150, .g = 150, .b = 150, .a = 255 }; // grey
+        case mod::Rarity::Uncommon:  return { .r = 90, .g = 200, .b = 90, .a = 255 };   // green
+        case mod::Rarity::Rare:      return { .r = 90, .g = 140, .b = 255, .a = 255 };  // blue
+        case mod::Rarity::Epic:      return { .r = 190, .g = 90, .b = 230, .a = 255 };  // purple
+        case mod::Rarity::Legendary: return { .r = 230, .g = 190, .b = 60, .a = 255 };  // gold
         }
         return { .r = 150, .g = 150, .b = 150, .a = 255 };
     }
@@ -155,6 +157,8 @@ private:
         switch (rarity) {
         case mod::Rarity::Common:    return "COMMON";
         case mod::Rarity::Uncommon:  return "UNCOMMON";
+        case mod::Rarity::Rare:      return "RARE";
+        case mod::Rarity::Epic:      return "EPIC";
         case mod::Rarity::Legendary: return "LEGENDARY";
         }
         return "";

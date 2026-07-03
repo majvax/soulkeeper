@@ -3,6 +3,7 @@ return function(mod)
     mod:add_object("core:onion", "Onion",
         function(e) e:set("core:aura", { radius = 120, per_second = 25 }) end,
         {
+            rarity = "epic",
             value_text = function() return "damage aura" end,
             draw = function(ctx, view)
                 local a = view:get("core:aura")
@@ -15,6 +16,7 @@ return function(mod)
     mod:add_object("core:frostbelt", "Frost Belt",
         function(e) e:set("core:slow", { radius = 140, factor = 0.5 }) end,
         {
+            rarity = "epic",
             value_text = function() return "slows enemies" end,
             draw = function(ctx, view)
                 local s = view:get("core:slow")
