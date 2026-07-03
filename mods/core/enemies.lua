@@ -24,4 +24,21 @@ return function(mod)
             scale = 1.5,
             tint = { 255, 110, 100 }, -- red
         })
+
+    -- Ranged: hangs back and pelts players with hostile projectiles. Behaviour
+    -- comes from the core:ranged component + systems (see systems.lua).
+    mod:add_enemy("core:slinger", "Slinger",
+        { health = 15, speed = 100, damage = 5, radius = 9, xp = 2 },
+        {
+            weight = function(wave) return math.max(0, wave - 2) * 1.2 end, -- from wave 3
+            scale = 0.9,
+            tint = { 150, 255, 140 }, -- green
+            on_spawn = function(e)
+                e:set("core:ranged", {
+                    range = 340, standoff = 260,
+                    cooldown = 1.6, bullet_speed = 260, damage = 8,
+                    timer = 1.0, -- brief grace period after spawning
+                })
+            end,
+        })
 end

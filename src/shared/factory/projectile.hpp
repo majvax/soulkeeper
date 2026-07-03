@@ -4,8 +4,9 @@
 #include "shared/components/physics.hpp"
 
 // Spawn a bullet at (x,y) moving at (vx,vy). Despawns on hit or after `lifetime`.
+// Hostile bullets are enemy-fired: they hit players instead of enemies.
 inline core::Entity create_projectile(core::Registry& registry, float x, float y, float vx, float vy,
-                                      float damage, float lifetime)
+                                      float damage, float lifetime, bool hostile = false)
 {
     const core::Entity bullet = registry.create();
     registry.assign(bullet, Position{ .x = x, .y = y });
@@ -14,5 +15,6 @@ inline core::Entity create_projectile(core::Registry& registry, float x, float y
     registry.assign(bullet, Projectile{ .damage = damage });
     registry.assign(bullet, Lifetime{ .remaining = lifetime });
     registry.assign(bullet, Radius{ .value = 4 });
+    if (hostile) { registry.assign(bullet, Hostile{}); }
     return bullet;
 }

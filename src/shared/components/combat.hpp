@@ -66,6 +66,12 @@ struct Projectile
     float damage;
 };
 
+// Marks a projectile as enemy-fired: it hits players instead of enemies (and
+// the client draws it hostile-tinted via snapshot variant 1).
+struct Hostile
+{
+};
+
 // Time (seconds) an entity has left before it despawns.
 struct Lifetime
 {

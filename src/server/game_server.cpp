@@ -382,6 +382,8 @@ void GameServer::broadcast_snapshot()
             }
         } else if (kind == proto::EntityKind::Enemy) {
             if (const Archetype* arch = registry.try_get<Archetype>(entity)) { variant = arch->id; }
+        } else if (kind == proto::EntityKind::Projectile) {
+            if (registry.has<Hostile>(entity)) { variant = 1; } // enemy-fired -> hostile tint
         }
 
         entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,

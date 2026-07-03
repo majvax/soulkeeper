@@ -258,8 +258,11 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
 
     // Spawn factories (for content that creates entities).
     core::Registry* reg = &world_reg;
-    lua.set_function("spawn_projectile", [reg](float x, float y, float vx, float vy, float dmg, float life) {
-        return EntityHandle{ .reg = reg, .entity = create_projectile(*reg, x, y, vx, vy, dmg, life) };
+    lua.set_function("spawn_projectile", [reg](float x, float y, float vx, float vy, float dmg, float life,
+                                               sol::optional<bool> hostile) {
+        return EntityHandle{ .reg = reg,
+                             .entity = create_projectile(*reg, x, y, vx, vy, dmg, life,
+                                                         hostile.value_or(false)) };
     });
     lua.set_function("spawn_xp_orb", [reg](float x, float y, int value) {
         return EntityHandle{ .reg = reg, .entity = create_xp_orb(*reg, x, y, static_cast<std::uint32_t>(value)) };

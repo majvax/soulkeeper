@@ -2,13 +2,16 @@
 #include "core/ecs.hpp"
 #include "core/spatial.hpp"
 #include "shared/components/combat.hpp"
+#include "shared/components/gameplay.hpp"
 #include "shared/components/physics.hpp"
+#include "shared/components/progression.hpp"
 #include <cmath>
 #include <vector>
 
-// Advance bullets: expire them by lifetime, and on overlap with an enemy deal
-// their damage and despawn (no pierce). Enemies are bucketed into a spatial grid
-// so each bullet only checks nearby ones.
+// Advance bullets: expire them by lifetime, and on overlap deal their damage
+// and despawn (no pierce). Friendly bullets hit enemies (bucketed into a
+// spatial grid); Hostile (enemy-fired) bullets hit players — few enough (<=4)
+// to check directly.
 class ProjectileSystem
 {
 public:
@@ -18,6 +21,19 @@ public:
         registry.view<EnemyTag, Position>().each(
           [&](core::Entity enemy, const EnemyTag&, const Position& pos) { grid.insert(enemy, pos.x, pos.y); });
 
+        struct PlayerTarget
+        {
+            core::Entity entity;
+            float x, y, radius;
+        };
+        std::vector<PlayerTarget> players;
+        registry.view<PlayerTag, Position, Radius>().each(
+          [&](core::Entity player, const PlayerTag&, const Position& pos, const Radius& rad) {
+              if (registry.try_get<Downed>(player) == nullptr) { // downed = out of combat
+                  players.push_back({ .entity = player, .x = pos.x, .y = pos.y, .radius = rad.value });
+              }
+          });
+
         std::vector<core::Entity> dead_bullets;
 
         registry.view<Projectile, Position, Radius, Lifetime>().each(
@@ -25,6 +41,22 @@ public:
               life.remaining -= dt;
               if (life.remaining <= 0.0f) {
                   dead_bullets.push_back(bullet);
+                  return;
+              }
+
+              if (registry.has<Hostile>(bullet)) {
+                  for (const PlayerTarget& target : players) {
+                      const float dx = target.x - bpos.x;
+                      const float dy = target.y - bpos.y;
+                      const float hit = brad.value + target.radius;
+                      if ((dx * dx) + (dy * dy) < hit * hit) {
+                          if (Health* php = registry.try_get<Health>(target.entity)) {
+                              php->current -= proj.damage;
+                          }
+                          dead_bullets.push_back(bullet);
+                          break; // one hit, bullet is consumed
+                      }
+                  }
                   return;
               }
 

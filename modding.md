@@ -201,9 +201,12 @@ e:remove(Weapon) / e:remove("core:aura")
 Engine component globals & fields: `Position{x,y}`, `Velocity{dx,dy}`, `Speed{value}`,
 `Health{current,max}`, `Radius{value}`, `Damage{per_second}`, `Weapon{cooldown_max, cooldown_current,
 bullet_speed, damage, projectile_lifetime}`, `AimState{dx,dy,firing}`. Tag globals for queries:
-`Enemy`, `Player`. Spawn helpers: `spawn_projectile(x,y,vx,vy,damage,lifetime)`,
+`Enemy`, `Player`. Spawn helpers: `spawn_projectile(x,y,vx,vy,damage,lifetime[,hostile])` (pass
+`hostile = true` for enemy-fired bullets — they hit players instead of enemies),
 `spawn_xp_orb(x,y,value)`, `spawn_enemy(x,y,id)` (`id` = a registered enemy like `"core:brute"`;
-returns nil + logs on an unknown id).
+returns nil + logs on an unknown id). The Slinger in `mods/core/` is the worked example of a
+ranged attacker: a sim-only `core:ranged` component, a motion-phase standoff system, and an
+update-phase firing system — no C++.
 
 ### Defining a component
 A component is a named list of **number** fields. Flag it `networked` to sync it to clients (so draw

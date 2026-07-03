@@ -113,8 +113,11 @@ world = {}
 function world:each(...) end
 
 -- Spawn factories (sim VM). Return an Entity for further configuration.
+---Spawn a bullet. Pass hostile = true for enemy-fired bullets: they hit
+---players instead of enemies (and render hostile-tinted).
+---@param hostile? boolean
 ---@return Entity
-function spawn_projectile(x, y, vx, vy, damage, lifetime) end
+function spawn_projectile(x, y, vx, vy, damage, lifetime, hostile) end
 ---@return Entity
 function spawn_xp_orb(x, y, value) end
 ---Spawn a registered enemy archetype (fires its on_spawn hook).

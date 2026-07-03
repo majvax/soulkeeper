@@ -30,8 +30,8 @@ src/
     spatial.hpp    #   SpatialGrid uniform hash (insert/query AABB), broad-phase
     systems.hpp    #   SystemManager (ordered vector of void(Registry&,float))
   shared/          # SDL-free, used by client AND server
-    components/    #   physics(Position,PrevPosition,Velocity,Speed) combat(Health,Radius,Damage,Aura,
-                   #   Weapon,AimState,Projectile,Lifetime,EnemyTag,EnemyType,Archetype) gameplay(PlayerTag)
+    components/    #   physics(Position,PrevPosition,Velocity,Speed) combat(Health,Radius,Damage,Weapon,
+                   #   AimState,Projectile,Hostile,Lifetime,EnemyTag,Archetype,XpReward) gameplay(PlayerTag)
                    #   progression(GameStats{xp,wave}, XpOrb, Downed{respawn_wave})
     system/        #   pure systems: targeting, shooting, movement, projectile, combat, pickup, death
                    #   + input.hpp (apply_input(vel,mx,my,speed) helper, PLAYER_SPEED)
@@ -90,8 +90,10 @@ Upgrades, objects, and even components/systems are **Lua 5.4 plugins** (sol2), n
 - Every Lua callback is a protected call — a broken mod logs and is skipped, never crashes.
 
 ## Gameplay implemented
-Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes **Bandit/Scout/Brute**
-(per-wave spawn weights, tint+scale on one sprite — `mods/core/enemies.lua`) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
+Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes
+**Bandit/Scout/Brute/Slinger** (per-wave spawn weights, tint+scale on one sprite —
+`mods/core/enemies.lua`; the Slinger stands off and fires **hostile projectiles** via Lua
+`core:ranged` systems) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
 card scene** with **rarity** upgrades — all defined in `mods/core/` Lua (stat upgrades + **Onion**
 aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn a few waves later** ·
 `/pause` `/resume` console.
@@ -112,7 +114,7 @@ aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- Game-over/win, XP magnet, weapon variety, delta/quantized snapshots, F11 fullscreen toggle.
+- Game-over/win, XP magnet, delta/quantized snapshots, F11 fullscreen toggle.
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

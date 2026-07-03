@@ -272,7 +272,7 @@ private:
                   health_bar(r, x, y, rem.health);
                   label(x, y, engine_->session().name_of(rem.net_id));
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
-                  draw_projectile(r, x, y);
+                  draw_projectile(r, x, y, rem.variant);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
                   draw_xp_orb(r, x, y);
               } else {
@@ -320,10 +320,14 @@ private:
         SDL_RenderFillRect(r, &rect);
     }
 
-    static void draw_projectile(SDL_Renderer* r, float cx, float cy)
+    static void draw_projectile(SDL_Renderer* r, float cx, float cy, std::uint8_t variant)
     {
         constexpr float size = 7.0f;
-        SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
+        if (variant == 1) {
+            SDL_SetRenderDrawColor(r, 255, 90, 70, 255); // hostile (enemy-fired)
+        } else {
+            SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
+        }
         const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
         SDL_RenderFillRect(r, &rect);
     }
