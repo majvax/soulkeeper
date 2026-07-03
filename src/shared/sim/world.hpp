@@ -4,19 +4,20 @@
 
 namespace shared {
 
-// System ordering phases. Core systems occupy fixed slots; Lua (mod) systems map
-// their `phase` to Motion (velocity tweaks, before Movement) or Update (general
-// per-tick logic, after Combat). Gaps leave room for future phases.
+// System ordering phases. The kernel occupies Grid/Motion/Movement; every
+// other slot is where Lua (mod) systems run, selected by their `phase` name
+// (see lua_host). Gaps leave room for future phases.
 namespace phase {
-inline constexpr int Targeting = 100;
-inline constexpr int Motion = 150;    // mod "motion": after Targeting, before Movement
-inline constexpr int Shooting = 200;
-inline constexpr int Movement = 300;
-inline constexpr int Projectile = 400;
-inline constexpr int Combat = 500;
-inline constexpr int Update = 550;    // mod "update": after Combat, before Pickup/Death
-inline constexpr int Pickup = 600;
-inline constexpr int Death = 700;
+inline constexpr int Grid = 50;       // kernel: spatial hash rebuild
+inline constexpr int Targeting = 100; // mod "targeting": steer enemies
+inline constexpr int Motion = 150;    // kernel dash + mod "motion": velocity tweaks pre-Movement
+inline constexpr int Shooting = 200;  // mod "shooting": spawn bullets
+inline constexpr int Movement = 300;  // kernel: integrate velocity
+inline constexpr int Projectile = 400; // mod "projectile": bullet flight/hits
+inline constexpr int Combat = 500;    // mod "combat": contact damage
+inline constexpr int Update = 550;    // mod "update" (default): general logic
+inline constexpr int Pickup = 600;    // mod "pickup": collect drops
+inline constexpr int Death = 700;     // mod "death": deaths, drops, respawns
 } // namespace phase
 
 // Headless simulation container: the authoritative ECS registry plus the

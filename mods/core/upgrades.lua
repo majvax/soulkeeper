@@ -7,14 +7,14 @@ local MIN_COOLDOWN = 0.08 -- fire-rate floor (keeps the game fun)
 return function(mod, C)
     mod:upgrade("damage", "Sharp Rounds", { 3, 5, 8, 12, 20 },
         function(e, _, amount)
-            local w = e:get(Weapon)
+            local w = e:get(C.Weapon)
             if w then w.damage = w.damage + amount end
         end,
         { value_format = "+{} DMG", sprite = "assets/icons/dmg.png" })
 
     mod:upgrade("firerate", "Rapid Fire", { 0.02, 0.04, 0.06, 0.09, 0.14 },
         function(e, _, amount)
-            local w = e:get(Weapon)
+            local w = e:get(C.Weapon)
             if w then w.cooldown_max = math.max(MIN_COOLDOWN, w.cooldown_max - amount) end
         end,
         { value_text = function(amount) return "-" .. math.floor(amount * 1000 + 0.5) .. "ms CD" end })
@@ -30,7 +30,7 @@ return function(mod, C)
     mod:upgrade("maxhp", "Vitality", { 0, 0, 1, 1, 2 },
         function(e, _, amount)
             local h = e:get(Hearts)
-            if h then h.max = h.max + amount end
+            if h then h.max = math.floor(h.max + amount) end -- kernel int field
         end,
         { value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png" })
 
@@ -50,28 +50,28 @@ return function(mod, C)
 
     mod:upgrade("bulletspeed", "Bullet Velocity", { 40, 70, 110, 160, 250 },
         function(e, _, amount)
-            local w = e:get(Weapon)
+            local w = e:get(C.Weapon)
             if w then w.bullet_speed = w.bullet_speed + amount end
         end,
         { value_format = "+{} BULLET SPD" })
 
     mod:upgrade("range", "Long Barrel", { 0.10, 0.18, 0.28, 0.42, 0.65 },
         function(e, _, amount)
-            local w = e:get(Weapon)
-            if w then w.projectile_lifetime = w.projectile_lifetime + amount end
+            local w = e:get(C.Weapon)
+            if w then w.lifetime = w.lifetime + amount end
         end,
         { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) / 100 .. "s RANGE" end })
 
     mod:upgrade("critchance", "Keen Eye", { 0.02, 0.04, 0.07, 0.11, 0.18 },
         function(e, _, amount)
-            local c = e:get(Crit)
+            local c = e:get(C.Crit)
             if c then c.chance = c.chance + amount end
         end,
         { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) .. "% CRIT" end })
 
     mod:upgrade("critdamage", "Lethality", { 0.10, 0.20, 0.35, 0.55, 0.90 },
         function(e, _, amount)
-            local c = e:get(Crit)
+            local c = e:get(C.Crit)
             if c then c.multiplier = c.multiplier + amount end
         end,
         { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) .. "% CRIT DMG" end })
@@ -89,8 +89,8 @@ return function(mod, C)
         function(e, _, amount)
             local d = e:get(Dash)
             if d then
-                d.max_charges = d.max_charges + amount
-                d.charges = d.charges + amount
+                d.max_charges = math.floor(d.max_charges + amount) -- kernel int fields
+                d.charges = math.floor(d.charges + amount)
             end
         end,
         { value_format = "+{} DASH" })

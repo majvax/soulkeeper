@@ -29,46 +29,44 @@ local function xp(base)
 end
 
 return function(mod, C)
-    mod:enemy("bandit", "Bandit", { weight = 6, tint = { 230, 120, 230 } }) -- magenta, always
+    mod:enemy("bandit", "Bandit", { weight = 6, tint = { 230, 120, 230 } })
         :component(Health, health(20))
         :component(Speed, speed(120))
-        :component(Damage, { per_second = 1 }) -- 1 heart per contact hit
+        :component(C.Touch, { hearts = 1 })
         :component(Radius, { value = 10 })
         :component(XpReward, xp(1))
 
     mod:enemy("scout", "Scout", {
-            weight = function(wave) return math.max(0, wave - 1) * 1.5 end, -- from wave 2
-            scale = 0.8,
-            tint = { 120, 220, 255 }, -- cyan
-        })
+        weight = function(wave) return math.max(0, wave - 1) * 1.5 end,
+        scale = 0.8,
+        tint = { 120, 220, 255 },
+    })
         :component(Health, health(10))
         :component(Speed, speed(200))
-        :component(Damage, { per_second = 1 })
+        :component(C.Touch, { hearts = 1 })
         :component(Radius, { value = 8 })
         :component(XpReward, xp(1))
 
     mod:enemy("brute", "Brute", {
-            weight = function(wave) return math.max(0, wave - 3) * 1.0 end, -- from wave 4
-            scale = 1.5,
-            tint = { 255, 110, 100 }, -- red
-        })
+        weight = function(wave) return math.max(0, wave - 3) * 1.0 end,
+        scale = 1.5,
+        tint = { 255, 110, 100 },
+    })
         :component(Health, health(60))
         :component(Speed, speed(70))
-        :component(Damage, { per_second = 2 }) -- heavy: 2 hearts
+        :component(C.Touch, { hearts = 2 }) -- heavy hit
         :component(Radius, { value = 16 })
         :component(XpReward, xp(3))
 
-    -- Ranged: hangs back and pelts players with hostile projectiles. Behaviour
-    -- comes from the core Ranged component + its systems (see systems.lua).
     mod:enemy("slinger", "Slinger", {
-            weight = function(wave) return math.max(0, wave - 2) * 1.2 end, -- from wave 3
-            scale = 0.9,
-            tint = { 150, 255, 140 }, -- green
-        })
+        weight = function(wave) return math.max(0, wave - 2) * 1.2 end,
+        scale = 0.9,
+        tint = { 150, 255, 140 },
+    })
         :component(Health, health(15))
         :component(Speed, speed(100))
-        :component(Damage, { per_second = 1 })
+        :component(C.Touch, { hearts = 1 })
         :component(Radius, { value = 9 })
         :component(XpReward, xp(2))
-        :component(C.Ranged, {}) -- all defaults (range 340, 1 heart bullets, ...)
+        :component(C.Ranged, {})
 end

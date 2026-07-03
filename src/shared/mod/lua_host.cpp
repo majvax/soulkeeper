@@ -169,11 +169,26 @@ struct ModHandle
         return ComponentRef{ .engine_tag = -1, .schema = schema, .id = std::move(id) };
     }
 
-    // Define a system: fn(dt) run each tick at a phase, optionally throttled.
+    // Define a system: fn(dt) run each tick at a pipeline phase, optionally
+    // throttled. The whole gameplay pipeline is Lua now — phases pick the slot
+    // relative to the kernel (grid -> ... -> Movement -> ...).
     void system(const std::string& name, sol::table opts, sol::protected_function fn)
     {
         const std::string phase = opts.get_or<std::string>("phase", "update");
-        const int order = (phase == "motion") ? shared::phase::Motion : shared::phase::Update;
+        const int order = [&] {
+            if (phase == "targeting") { return shared::phase::Targeting; }
+            if (phase == "motion") { return shared::phase::Motion; }
+            if (phase == "shooting") { return shared::phase::Shooting; }
+            if (phase == "projectile") { return shared::phase::Projectile; }
+            if (phase == "combat") { return shared::phase::Combat; }
+            if (phase == "pickup") { return shared::phase::Pickup; }
+            if (phase == "death") { return shared::phase::Death; }
+            if (phase != "update") {
+                std::fprintf(stderr, "[mod] system '%s': unknown phase '%s' — using update\n",
+                             name.c_str(), phase.c_str());
+            }
+            return shared::phase::Update;
+        }();
         const double rate = opts.get_or("rate", 0.0);
         state->script_systems.push_back(
           { .id = qualify(name), .order = order, .rate = rate, .fn = std::move(fn) });
@@ -285,6 +300,10 @@ void LuaHost::install_registration_api()
         const char* name = engine_component_names[i];
         lua_[name] = ComponentRef{ .engine_tag = static_cast<int>(i), .schema = nullptr, .id = name };
     }
+
+    // Render.kind values (proto::EntityKind) for Lua-spawned drawables.
+    lua_["KIND"] = lua_.create_table_with("mover", 0, "player", 1, "enemy", 2, "bullet", 3,
+                                          "orb", 4, "heart", 5);
 
     lua_.new_usertype<EnemyBuilder>(
       "EnemyArchetype", sol::no_constructor,

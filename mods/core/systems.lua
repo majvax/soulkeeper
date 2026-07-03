@@ -1,35 +1,225 @@
--- mods/core/systems.lua — systems that tick the core components each frame.
+-- mods/core/systems.lua — THE game rules. The entire gameplay pipeline is Lua:
+--   targeting -> (kernel dash/motion) -> shooting -> (kernel movement)
+--   -> projectile -> combat -> update -> pickup -> death
+-- The kernel provides motion, the spatial hash (world:nearby), snapshots.
 return function(mod, C)
-    -- Damage aura: hurt enemies inside any player's aura, every tick.
-    mod:system("aura_sys", { phase = "update" }, function(dt)
-        for p in world:each(C.Aura, Position, Player) do
-            local a = p:get(C.Aura)
-            local pp = p:get(Position)
-            for e in world:each(Enemy, Position, Health) do
-                local ep = e:get(Position)
-                local dx, dy = ep.x - pp.x, ep.y - pp.y
-                if dx * dx + dy * dy < a.radius * a.radius then
-                    local h = e:get(Health)
-                    h.current = h.current - a.per_second * dt
+    -- Nearest live player to (x, y), or nil. Downed players are ignored.
+    local function nearest_player(x, y)
+        local best, best_d2 = nil, math.huge
+        for p in world:each(Player, Position) do
+            if not p:has(Downed) then
+                local pp = p:get(Position)
+                local dx, dy = pp.x - x, pp.y - y
+                local d2 = dx * dx + dy * dy
+                if d2 < best_d2 then best, best_d2 = p, d2 end
+            end
+        end
+        return best, best_d2
+    end
+
+    -- Deal hearts to a player, honoring i-frames. Returns true if it landed.
+    -- (Hearts fields are kernel INTEGERS — floor the Lua float arithmetic.)
+    local function hurt_player(p, hearts)
+        if p:has(Downed) or p:has(C.IFrames) then return false end
+        local h = p:get(Hearts)
+        if not h then return false end
+        h.current = math.floor(h.current - hearts)
+        p:set(C.IFrames, {}) -- 1 s of invulnerability (component default)
+        return true
+    end
+
+    ----------------------------------------------------------------- targeting
+    -- Steer every enemy toward the nearest live player at its Speed.
+    mod:system("targeting", { phase = "targeting" }, function(dt)
+        for e in world:each(Enemy, Position, Velocity, Speed) do
+            local ep = e:get(Position)
+            local target = nearest_player(ep.x, ep.y)
+            if target then
+                local tp = target:get(Position)
+                local dx, dy = tp.x - ep.x, tp.y - ep.y
+                local len = math.sqrt(dx * dx + dy * dy)
+                local v, s = e:get(Velocity), e:get(Speed)
+                if len > 0 then
+                    v.dx, v.dy = dx / len * s.value, dy / len * s.value
                 end
             end
         end
     end)
 
-    -- Nearest player to (x, y), or nil. Shared by the two ranged systems.
-    local function nearest_player(x, y)
-        local best, best_d2 = nil, math.huge
-        for p in world:each(Player, Position) do
-            local pp = p:get(Position)
-            local dx, dy = pp.x - x, pp.y - y
-            local d2 = dx * dx + dy * dy
-            if d2 < best_d2 then best, best_d2 = p, d2 end
-        end
-        return best, best_d2
-    end
+    ------------------------------------------------------------------ shooting
+    -- Players fire toward their aim every Weapon.cooldown_max seconds. Each
+    -- shot rolls Crit: a crit multiplies damage and renders bigger/orange.
+    mod:system("shooting", { phase = "shooting" }, function(dt)
+        for p in world:each(Player, Position, C.Weapon, AimState) do
+            local w = p:get(C.Weapon)
+            if w.cooldown > 0 then w.cooldown = w.cooldown - dt end
+            local aim = p:get(AimState)
+            if aim.firing == 1 and w.cooldown <= 0 and (aim.dx ~= 0 or aim.dy ~= 0) then
+                local pp = p:get(Position)
+                local damage = w.damage
+                local crit = p:get(C.Crit)
+                local is_crit = crit and math.random() < crit.chance
+                if is_crit then damage = damage * crit.multiplier end
 
-    -- Ranged enemies hold position once close enough (runs before Movement, so
-    -- it overrides the chase velocity from targeting).
+                local b = spawn_bullet(pp.x, pp.y, aim.dx * w.bullet_speed, aim.dy * w.bullet_speed)
+                b:set(C.Bullet, { damage = damage, lifetime = w.lifetime })
+                if is_crit then b:get(Render).variant = 2 end -- orange
+                w.cooldown = w.cooldown_max
+            end
+        end
+    end)
+
+    ---------------------------------------------------------------- projectile
+    -- Bullet flight: expire by lifetime; friendly bullets hit the first enemy
+    -- they overlap, hostile ones the first vulnerable player. One hit each.
+    mod:system("bullets", { phase = "projectile" }, function(dt)
+        for b in world:each(C.Bullet, Position, Radius) do
+            local bullet = b:get(C.Bullet)
+            bullet.lifetime = bullet.lifetime - dt
+            if bullet.lifetime <= 0 then
+                b:destroy()
+            else
+                local bp = b:get(Position)
+                local br = b:get(Radius).value
+                if bullet.hostile == 1 then
+                    for p in world:each(Player, Position, Hearts, Radius) do
+                        local pp = p:get(Position)
+                        local dx, dy = pp.x - bp.x, pp.y - bp.y
+                        local hit = br + p:get(Radius).value
+                        if dx * dx + dy * dy < hit * hit and hurt_player(p, bullet.damage) then
+                            b:destroy()
+                            break
+                        end
+                    end
+                else
+                    for e in world:nearby(bp.x, bp.y, br + 40, Enemy, Health, Position, Radius) do
+                        local ep = e:get(Position)
+                        local dx, dy = ep.x - bp.x, ep.y - bp.y
+                        local hit = br + e:get(Radius).value
+                        if dx * dx + dy * dy < hit * hit then
+                            local h = e:get(Health)
+                            h.current = h.current - bullet.damage
+                            b:destroy()
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -------------------------------------------------------------------- combat
+    -- Tick down i-frames, then resolve enemy contact: a touching enemy costs
+    -- Touch.hearts and grants the i-frame window (so contact can't melt you).
+    mod:system("iframes", { phase = "combat" }, function(dt)
+        for p in world:each(C.IFrames) do
+            local inv = p:get(C.IFrames)
+            inv.remaining = inv.remaining - dt
+            if inv.remaining <= 0 then p:remove(C.IFrames) end
+        end
+    end)
+
+    mod:system("contact", { phase = "combat" }, function(dt)
+        for p in world:each(Player, Position, Hearts, Radius) do
+            if not p:has(Downed) and not p:has(C.IFrames) then
+                local pp = p:get(Position)
+                local pr = p:get(Radius).value
+                for e in world:nearby(pp.x, pp.y, pr + 40, Enemy, C.Touch, Position, Radius) do
+                    local ep = e:get(Position)
+                    local dx, dy = ep.x - pp.x, ep.y - pp.y
+                    local reach = pr + e:get(Radius).value
+                    if dx * dx + dy * dy < reach * reach then
+                        hurt_player(p, e:get(C.Touch).hearts)
+                        break -- one hit per window; i-frames cover the rest
+                    end
+                end
+            end
+        end
+    end)
+
+    -- Shockwave Dash (legendary object): while bursting, damage + shove
+    -- enemies the player passes through. The shove exits the overlap, so a
+    -- burst hits each enemy once.
+    mod:system("shockwave", { phase = "combat" }, function(dt)
+        for p in world:each(Player, Dash, Position) do
+            local d = p:get(Dash)
+            if d.burst_remaining > 0 and d.shockwave > 0 then
+                local pp = p:get(Position)
+                for e in world:nearby(pp.x, pp.y, 40, Enemy, Health, Position) do
+                    local ep = e:get(Position)
+                    local h = e:get(Health)
+                    h.current = h.current - d.shockwave
+                    local dx, dy = ep.x - pp.x, ep.y - pp.y
+                    local len = math.sqrt(dx * dx + dy * dy)
+                    if len < 1 then dx, dy, len = 1, 0, 1 end
+                    ep.x = ep.x + dx / len * 60
+                    ep.y = ep.y + dy / len * 60
+                end
+            end
+        end
+    end)
+
+    -------------------------------------------------------------------- pickup
+    -- Collect XP orbs into the team pool; hearts only while hurt.
+    mod:system("pickups", { phase = "pickup" }, function(dt)
+        for p in world:each(Player, Position) do
+            if p:has(Downed) then return end
+            local pp = p:get(Position)
+            for orb in world:nearby(pp.x, pp.y, 45, C.Xp) do
+                world:add_xp(math.tointeger(orb:get(C.Xp).value)) -- crashes without tointeger
+                orb:destroy()
+            end
+            local h = p:get(Hearts)
+            if h and h.current < h.max then
+                for heart in world:nearby(pp.x, pp.y, 45, C.Heal) do
+                    h.current = math.floor(math.min(h.max, h.current + heart:get(C.Heal).amount))
+                    heart:destroy()
+                    if h.current >= h.max then break end
+                end
+            end
+        end
+    end)
+
+    --------------------------------------------------------------------- death
+    -- Enemies at 0 HP drop an XP orb (and rarely a healing heart) and die.
+    -- Players at 0 hearts go Downed and respawn two waves later, fully healed.
+    mod:system("death", { phase = "death" }, function(dt)
+        for e in world:each(Enemy, Health, Position) do
+            if e:get(Health).current <= 0 then
+                local ep = e:get(Position)
+                local xp_value = 1
+                if e:has(XpReward) then xp_value = e:get(XpReward).value end
+                local orb = spawn_entity(ep.x, ep.y)
+                orb:get(Render).kind = KIND.orb
+                orb:set(C.Xp, { value = xp_value })
+                if math.random() < 0.04 then
+                    local heart = spawn_entity(ep.x + 14, ep.y)
+                    heart:get(Render).kind = KIND.heart
+                    heart:set(C.Heal, {})
+                end
+                e:destroy()
+            end
+        end
+
+        for p in world:each(Player, Hearts, Position) do
+            if p:has(Downed) then
+                if world:wave() >= p:get(Downed).respawn_wave then
+                    p:remove(Downed)
+                    local h = p:get(Hearts)
+                    h.current = h.max
+                    local pp = p:get(Position)
+                    pp.x, pp.y = 0, 0
+                end
+            elseif p:get(Hearts).current <= 0 then
+                p:set(Downed, { respawn_wave = world:wave() + 2 })
+                local v = p:get(Velocity)
+                if v then v.dx, v.dy = 0, 0 end
+            end
+        end
+    end)
+
+    ----------------------------------------------------------- ranged / object
+    -- Ranged enemies hold position once close enough (before Movement).
     mod:system("ranged_standoff", { phase = "motion" }, function(dt)
         for e in world:each(C.Ranged, Position, Velocity, Enemy) do
             local r = e:get(C.Ranged)
@@ -42,7 +232,7 @@ return function(mod, C)
         end
     end)
 
-    -- Ranged enemies fire a hostile projectile at the nearest player in range.
+    -- Ranged enemies fire a hostile bullet at the nearest player in range.
     mod:system("ranged_fire", { phase = "update" }, function(dt)
         for e in world:each(C.Ranged, Position, Enemy) do
             local r = e:get(C.Ranged)
@@ -55,9 +245,14 @@ return function(mod, C)
                     local dx, dy = tp.x - ep.x, tp.y - ep.y
                     local len = math.sqrt(dx * dx + dy * dy)
                     if len > 0 then
-                        spawn_projectile(ep.x, ep.y,
-                            dx / len * r.bullet_speed, dy / len * r.bullet_speed,
-                            r.damage, r.range / r.bullet_speed + 0.5, true) -- hostile
+                        local b = spawn_bullet(ep.x, ep.y,
+                            dx / len * r.bullet_speed, dy / len * r.bullet_speed)
+                        b:set(C.Bullet, {
+                            damage = r.damage,
+                            hostile = 1,
+                            lifetime = r.range / r.bullet_speed + 0.5
+                        })
+                        b:get(Render).variant = 1 -- hostile: red
                         r.timer = r.cooldown
                     end
                 end
@@ -65,19 +260,27 @@ return function(mod, C)
         end
     end)
 
-    -- Slow field: scale the velocity of enemies inside it (runs before Movement).
+    -- Damage aura (Onion): hurt enemies inside any player's aura, every tick.
+    mod:system("aura_sys", { phase = "update" }, function(dt)
+        for p in world:each(C.Aura, Position, Player) do
+            local a = p:get(C.Aura)
+            local pp = p:get(Position)
+            for e in world:nearby(pp.x, pp.y, a.radius, Enemy, Health) do
+                local h = e:get(Health)
+                h.current = h.current - a.per_second * dt
+            end
+        end
+    end)
+
+    -- Slow field (Frost Belt): scale enemy velocity inside it (before Movement).
     mod:system("slow_sys", { phase = "motion" }, function(dt)
         for p in world:each(C.Slow, Position, Player) do
             local s = p:get(C.Slow)
             local pp = p:get(Position)
-            for e in world:each(Enemy, Position, Velocity) do
-                local ep = e:get(Position)
-                local dx, dy = ep.x - pp.x, ep.y - pp.y
-                if dx * dx + dy * dy < s.radius * s.radius then
-                    local v = e:get(Velocity)
-                    v.dx = v.dx * s.factor
-                    v.dy = v.dy * s.factor
-                end
+            for e in world:nearby(pp.x, pp.y, s.radius, Enemy, Velocity) do
+                local v = e:get(Velocity)
+                v.dx = v.dx * s.factor
+                v.dy = v.dy * s.factor
             end
         end
     end)

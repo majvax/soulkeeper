@@ -3,10 +3,12 @@
 #include "shared/components/combat.hpp"
 #include "shared/components/gameplay.hpp"
 #include "shared/components/physics.hpp"
+#include "shared/protocol.hpp"
 #include "shared/system/input.hpp"
 
-// Spawn a player entity. Players shoot bullets toward their aim; the aura is a
-// later upgrade and is intentionally not assigned here.
+// Spawn the KERNEL part of a player: motion, hearts, dash, aim, render kind.
+// The loadout (weapon, crit, ...) is Lua content — mods/core attaches it in
+// its on_player_spawn handler.
 inline core::Entity create_player(core::Registry& registry, float x, float y)
 {
     const core::Entity player = registry.create();
@@ -17,15 +19,11 @@ inline core::Entity create_player(core::Registry& registry, float x, float y)
     registry.assign(player, Hearts{ .current = 3, .max = 3 });
     registry.assign(player, Radius{ .value = 12 });
     registry.assign(player, Speed{ .value = PLAYER_SPEED });
-    registry.assign(player, Weapon{ .cooldown_max = 0.35f,
-                                    .cooldown_current = 0.0f,
-                                    .bullet_speed = 550.0f,
-                                    .damage = 10.0f,
-                                    .projectile_lifetime = 1.2f });
     registry.assign(player, AimState{ .dx = 1.0f, .dy = 0.0f, .firing = 0 });
     registry.assign(player, Dash{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f,
                                   .burst_remaining = 0.0f, .dir_x = 1.0f, .dir_y = 0.0f,
                                   .shockwave = 0.0f, .charges = 1, .max_charges = 1 });
-    registry.assign(player, Crit{ .chance = 0.05f, .multiplier = 1.5f });
+    registry.assign(player, Render{ .kind = static_cast<std::uint8_t>(proto::EntityKind::Player),
+                                    .variant = 0 });
     return player;
 }

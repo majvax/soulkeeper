@@ -37,15 +37,12 @@
 ---@class RadiusFields
 ---@field value number  # collision radius, px
 
----@class DamageFields
----@field per_second number  # enemies: HEARTS removed per contact hit
+---@class RenderFields
+---@field kind integer     # proto::EntityKind (see the KIND table)
+---@field variant integer  # per-kind byte (enemy archetype / bullet tint)
 
----@class WeaponFields
----@field cooldown_max number
----@field cooldown_current number
----@field bullet_speed number
----@field damage number
----@field projectile_lifetime number
+---@class DownedFields
+---@field respawn_wave integer
 
 ---@class AimStateFields
 ---@field dx number
@@ -59,10 +56,6 @@
 ---@field shockwave number        # damage to enemies passed through (0 = off)
 ---@field charges integer
 ---@field max_charges integer
-
----@class CritFields
----@field chance number      # 0..1 roll per shot
----@field multiplier number  # damage x on a crit
 
 ---@class XpRewardFields
 ---@field value integer  # XP orb dropped on death
@@ -81,21 +74,23 @@ Hearts = nil
 ---@type Component
 Radius = nil
 ---@type Component
-Damage = nil
----@type Component
-Weapon = nil
----@type Component
 AimState = nil
 ---@type Component
 Dash = nil
 ---@type Component
-Crit = nil
----@type Component
 XpReward = nil
+---@type Component
+Render = nil
+---@type Component
+Downed = nil
 ---@type Component
 Enemy = nil -- membership-only tag
 ---@type Component
 Player = nil -- membership-only tag
+
+---Render.kind values for Lua-spawned drawables.
+---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }
+KIND = nil
 
 --=============================================================================
 -- Entity handle (passed into sim callbacks and yielded by world:each).
@@ -139,14 +134,32 @@ world = {}
 ---@return fun(): Entity|nil
 function world:each(...) end
 
--- Spawn factories (sim VM). Return an Entity for further configuration.
----Spawn a bullet. Pass hostile = true for enemy-fired bullets: they hit
----players instead of enemies (and render hostile-tinted).
----@param hostile? boolean
+---Iterate entities within `radius` px (center distance) owning ALL of the
+---given components — served by the kernel spatial hash. Add collision radii
+---into `radius` yourself.
+---@param x number
+---@param y number
+---@param radius number
+---@param ... Component
+---@return fun(): Entity|nil
+function world:nearby(x, y, radius, ...) end
+
+---@return integer # the current wave number
+function world:wave() end
+
+---Add to the shared team XP pool.
+---@param value integer
+function world:add_xp(value) end
+
+-- Kernel spawn primitives (sim VM). Return an Entity to attach components to.
+---Spawn a kinetic drawable (Position/Velocity/Radius 4/Render bullet kind).
+---Attach your bullet component for behavior; set Render.variant for tint.
 ---@return Entity
-function spawn_projectile(x, y, vx, vy, damage, lifetime, hostile) end
+function spawn_bullet(x, y, vx, vy) end
+---Spawn a bare drawable (Position + Render). Set Render.kind (see KIND) and
+---attach components — how drops/markers are made.
 ---@return Entity
-function spawn_xp_orb(x, y, value) end
+function spawn_entity(x, y) end
 ---Spawn a registered enemy archetype (applies its component bag at the
 ---current wave + fires its on_spawn hook).
 ---@param id string  # a registered enemy id, e.g. "core:brute"

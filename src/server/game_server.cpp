@@ -185,10 +185,10 @@ void GameServer::snapshot_enemies()
 {
     core::Registry& registry = world_.registry();
     pre_step_enemies_.clear();
-    registry.view<EnemyTag, Position, Archetype, XpReward>().each(
-      [&](core::Entity e, const EnemyTag&, const Position& pos, const Archetype& arch, const XpReward& reward) {
+    registry.view<EnemyTag, Position, Render, XpReward>().each(
+      [&](core::Entity e, const EnemyTag&, const Position& pos, const Render& render, const XpReward& reward) {
           pre_step_enemies_.push_back(
-            { .entity = e, .x = pos.x, .y = pos.y, .variant = arch.id, .xp = reward.value });
+            { .entity = e, .x = pos.x, .y = pos.y, .variant = render.variant, .xp = reward.value });
       });
 }
 
@@ -263,6 +263,9 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
         sessions_[join->token] = session;
         peer_token_[peer_id] = join->token;
         spdlog::info("'{}' joined -> entity {}{}", name, player, session.is_host ? " (host)" : "");
+        // The loadout (weapon, crit, ...) is Lua content — mods attach it here.
+        lua_host_.events().emit("on_player_spawn",
+                                mod::EntityHandle{ .reg = &registry, .entity = player });
     }
 
     const Session& session = sessions_[join->token];
@@ -383,17 +386,13 @@ void GameServer::broadcast_snapshot()
     core::Registry& registry = world_.registry();
     std::vector<proto::SnapshotEntry> entries;
     registry.view<Position>().each([&](core::Entity entity, const Position& pos) {
-        proto::EntityKind kind = proto::EntityKind::Mover;
-        if (registry.has<PlayerTag>(entity)) {
-            kind = proto::EntityKind::Player;
-        } else if (registry.has<EnemyTag>(entity)) {
-            kind = proto::EntityKind::Enemy;
-        } else if (registry.has<Projectile>(entity)) {
-            kind = proto::EntityKind::Projectile;
-        } else if (registry.has<XpOrb>(entity)) {
-            kind = proto::EntityKind::XpOrb;
-        } else if (registry.has<HeartPickup>(entity)) {
-            kind = proto::EntityKind::Heart;
+        // Kind + variant come straight from the kernel Render component
+        // (stamped by factories, variant mutated freely by Lua).
+        std::uint8_t kind = static_cast<std::uint8_t>(proto::EntityKind::Mover);
+        std::uint8_t variant = 0;
+        if (const Render* render = registry.try_get<Render>(entity)) {
+            kind = render->kind;
+            variant = render->variant;
         }
 
         std::uint8_t health = 255;
@@ -402,9 +401,8 @@ void GameServer::broadcast_snapshot()
             health = static_cast<std::uint8_t>(frac * 255.0f);
         }
 
-        std::uint8_t variant = 0;
         std::uint16_t move_speed = 0;
-        if (kind == proto::EntityKind::Player) {
+        if (kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
             // Players use discrete hearts: health byte = current, variant = max.
             if (const Hearts* hearts = registry.try_get<Hearts>(entity)) {
                 health = static_cast<std::uint8_t>(std::clamp<int>(hearts->current, 0, 255));
@@ -413,15 +411,10 @@ void GameServer::broadcast_snapshot()
             if (const Speed* speed = registry.try_get<Speed>(entity)) {
                 move_speed = static_cast<std::uint16_t>(speed->value);
             }
-        } else if (kind == proto::EntityKind::Enemy) {
-            if (const Archetype* arch = registry.try_get<Archetype>(entity)) { variant = arch->id; }
-        } else if (kind == proto::EntityKind::Projectile) {
-            if (registry.has<Hostile>(entity)) { variant = 1; }       // enemy-fired -> hostile tint
-            else if (registry.has<CritTag>(entity)) { variant = 2; }  // crit -> bigger/orange
         }
 
         entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,
-                            .kind = static_cast<std::uint8_t>(kind), .health = health, .variant = variant,
+                            .kind = kind, .health = health, .variant = variant,
                             .move_speed = move_speed });
     });
 

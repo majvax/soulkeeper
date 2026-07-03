@@ -20,6 +20,12 @@ public:
         cells_[key(cell(x), cell(y))].push_back(entity);
     }
 
+    // Drop all entries but keep bucket capacity — for per-tick rebuilds.
+    void clear()
+    {
+        for (auto& [cell_key, bucket] : cells_) { bucket.clear(); }
+    }
+
     // Entities in every cell overlapping the [left,top]..[right,bottom] box.
     [[nodiscard]] std::vector<Entity> query(float left, float top, float right, float bottom) const
     {

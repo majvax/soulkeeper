@@ -30,17 +30,19 @@ src/
     spatial.hpp    #   SpatialGrid uniform hash (insert/query AABB), broad-phase
     systems.hpp    #   SystemManager (ordered vector of void(Registry&,float))
   shared/          # SDL-free, used by client AND server
-    components/    #   physics(Position,PrevPosition,Velocity,Speed) combat(Health[enemies],Hearts[players],
-                   #   Invulnerable,HeartPickup,Radius,Damage[hearts/hit],Weapon,AimState,Dash,Crit,CritTag,
-                   #   Projectile,Hostile,Lifetime,EnemyTag,Archetype,XpReward) gameplay(PlayerTag)
-                   #   progression(GameStats{xp,wave}, XpOrb, Downed{respawn_wave})
-    system/        #   pure systems: targeting, dash, shooting, movement, projectile, combat, pickup, death
+    components/    #   KERNEL comps only: physics(Position,PrevPosition,Velocity,Speed) combat(Health[enemies],
+                   #   Hearts[players],Radius,AimState,Dash,Render{kind,variant},XpReward,EnemyTag)
+                   #   gameplay(PlayerTag, ObjectInventory, WorldGrid[spatial-hash singleton])
+                   #   progression(GameStats{xp,wave}, Downed{respawn_wave})
+    system/        #   KERNEL systems only: grid (spatial rebuild), dash, movement
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
-    factory/       #   create_player / create_enemy(x,y,stats,variant) / create_projectile / create_xp_orb / create_heart
-    sim/           #   World (Registry+SystemManager); make_game_world() registers the pipeline + GameStats singleton
-    mod/           #   Lua modding layer (SDL-free): registry (ContentDef/ContentRegistry, string-id ->
-                   #   deterministic wire-id), lua_host (sol::state, register_mod, mods/*/mod.lua discovery),
-                   #   events (bus), script_ecs (Lua components + net sync), sim_bindings (entity/world API)
+    factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
+    sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
+                   #   world.hpp phase constants (grid/targeting/motion/shooting/movement/projectile/combat/update/pickup/death)
+    mod/           #   Lua modding layer (SDL-free): component_ref (THE handle type), bindings_table (engine
+                   #   dispatch + prelude list), registry (content/enemy defs -> deterministic wire-id),
+                   #   lua_host (sol::state, register_mod, import() loader, mod verbs), events (bus),
+                   #   script_ecs (Lua components + net sync), sim_bindings (entity/world API + services)
     net/           #   net.hpp/.cpp — ENet wrapper (PImpl, enet only in .cpp): Server, Client, ScopedInit, Event
     protocol.hpp   #   MsgType, EntityKind, GameState, Command; ByteWriter/Reader (little-endian); packet structs; Snapshot{Header,Entry}
   server/          # SDL-free authoritative host (namespace server)
@@ -60,11 +62,13 @@ modding.md         # the full modding guide (API reference, performance model, i
 ```
 
 ## Runtime model (how it actually works)
-- **Server-authoritative.** Server owns the World + runs the system pipeline
-  (`Targeting → Dash/Motion → Shooting → Movement → Projectile → Combat → Pickup → Death`) at 120 Hz, broadcasts
-  full snapshots at 60 Hz. Clients **predict** the local player (same `apply_input`, corrected by
-  snapshots) and **interpolate** remotes. `Session` on the client mirrors control state; `GameScene`
-  keeps a render-only `Registry`.
+- **Server-authoritative; C++ is the engine, Lua is the game.** The kernel pipeline is
+  `Grid → Dash → Movement` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
+  damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
+  slotted into named phases between the kernel systems. Snapshots broadcast at 60 Hz carry
+  `Render{kind,variant}` bytes (Lua-controlled visuals). Clients **predict** the local player
+  (same `apply_input`/`tick_dash`, corrected by snapshots) and **interpolate** remotes. `Session`
+  on the client mirrors control state; `GameScene` keeps a render-only `Registry`.
 - **Scenes self-drive transitions** via `engine_->scenes()` (deferred push/pop, applied at safe
   points): Lobby→Game on `Playing`; GameScene TAB pushes Console (pops itself); GameScene pushes
   LevelUp on level-up (pops itself). The Engine only hardcodes the initial `LobbyScene`.
@@ -75,19 +79,22 @@ modding.md         # the full modding guide (API reference, performance model, i
   the config size — UI must center against these (fullscreen / any aspect ratio).
 - Reconnect identity = `token = hash(player name)`; a dropped player's entity is kept and resumed.
 
-## Modding layer (content = Lua plugins)
-Upgrades, objects, and even components/systems are **Lua 5.4 plugins** (sol2), not C++ — see
-`modding.md` (full guide), `mods/core/` (all built-in content), `types/library.lua` (LSP stubs).
-- **Two VMs, same `mod.lua`**: the server runs the **sim VM** (apply/acquire/available, events,
-  Lua-defined systems), the client the **render VM** (draw hooks + card metadata). Each side only
-  fires its own callbacks.
-- **Deterministic wire ids** = lexicographic sort index of namespaced string ids (`core:damage`).
-  No runtime counter → identical on every process. The `mods/` set must match across machines and
-  is **validated at join**: `LuaHost::plugin_hash()` travels in `Join`; a mismatch gets
-  `JoinDenied` + kick, and the lobby shows both hashes.
-- **Perf model**: continuous effects are Lua-defined components ticked by Lua-defined systems
-  (dynamic pools live in `core::Registry`; `networked` components ride snapshots); event callbacks
-  fire only on discrete moments (level-up roll, pick, game events).
+## Modding layer (the game = Lua plugins)
+ALL game logic is **Lua 5.4 plugins** (sol2) over kernel services — see `modding.md` (full
+guide), `mods/core/` (Soulkeeper's entire gameplay), `types/library.lua` (LSP stubs).
+- **Handle-based API (v2, no strings)**: `mod:component("ranged", {range=340,...})` returns a
+  `ComponentRef` handle; `e:get/set/has/remove`, `world:each/nearby`, the enemy builder and
+  `view:get` take handles only. Kernel comps are prelude handles (`Position`, `Hearts`, ...).
+  Field access is **strict** — unknown names raise. NOTE: kernel integer fields (Hearts, Dash
+  charges) need `math.floor(...)` on float arithmetic before writing back.
+- **import("name")** = require-style lazy plugin loading (folder name = namespace = import name);
+  a plugin's exports are its `main()`'s return. Component-library plugins are first-class.
+- **Services**: `world:nearby(x,y,r,H…)` (kernel spatial hash), `world:wave()/add_xp`,
+  `spawn_bullet/spawn_entity/spawn_enemy`, `KIND` table, `on_player_spawn` event (loadout hook).
+- **Two VMs, same `mod.lua`**: sim VM (server: systems/events/apply) + render VM (client: draw
+  hooks + card metadata).
+- **Deterministic wire ids** = lexicographic sort index of namespaced ids; the `mods/` set is
+  **validated at join** (`plugin_hash()` in `Join` → `JoinDenied` + kick on mismatch).
 - Every Lua callback is a protected call — a broken mod logs and is skipped, never crashes.
 
 ## Gameplay implemented

@@ -1,6 +1,7 @@
 // src/shared/mod/sim_bindings.cpp
 #include "shared/mod/sim_bindings.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
@@ -13,9 +14,8 @@
 #include "shared/components/physics.hpp"
 #include "shared/components/progression.hpp"
 #include "shared/factory/enemy.hpp"
-#include "shared/factory/projectile.hpp"
-#include "shared/factory/xp_orb.hpp"
 #include "shared/mod/script_ecs.hpp"
+#include "shared/protocol.hpp" // EntityKind for spawn_bullet
 #include "shared/sim/world.hpp"
 #include "shared/system/input.hpp" // DASH_COOLDOWN default for the Dash binding
 
@@ -129,16 +129,61 @@ struct ScriptWorld
             }
         }
 
+        return make_iter(ents, others);
+    }
+
+    // world:nearby(x, y, radius, H, ...) -> iterator over entities within
+    // `radius` (center distance) owning all components. Served by the shared
+    // spatial hash GridSystem rebuilds each tick — the broad-phase workhorse
+    // behind the Lua combat/bullet/pickup systems.
+    sol::object nearby(float x, float y, float radius, sol::variadic_args va)
+    {
+        std::vector<core::SparseSet*> pools;
+        pools.reserve(va.size());
+        bool empty = false;
+        for (const sol::stack_proxy arg : va) {
+            if (!arg.is<ComponentRef>()) {
+                throw std::runtime_error("world:nearby expects component handles after (x, y, radius)");
+            }
+            core::SparseSet* p = resolve_pool(arg.as<ComponentRef>(), *reg, *table);
+            if (p == nullptr) { empty = true; }
+            pools.push_back(p);
+        }
+
+        auto ents = std::make_shared<std::vector<core::Entity>>();
+        auto others = std::make_shared<std::vector<core::SparseSet*>>();
+        if (!empty) {
+            reg->view<WorldGrid>().each([&](core::Entity, WorldGrid& world_grid) {
+                *ents = world_grid.grid.query(x - radius, y - radius, x + radius, y + radius);
+            });
+            // Distance filter here (cheap, C++); membership filter in the iterator.
+            const float r2 = radius * radius;
+            std::erase_if(*ents, [&](core::Entity e) {
+                const Position* pos = reg->try_get<Position>(e);
+                if (pos == nullptr) { return true; }
+                const float dx = pos->x - x;
+                const float dy = pos->y - y;
+                return (dx * dx) + (dy * dy) > r2;
+            });
+            *others = pools;
+        }
+        return make_iter(ents, others);
+    }
+
+private:
+    sol::object make_iter(std::shared_ptr<std::vector<core::Entity>> ents,
+                          std::shared_ptr<std::vector<core::SparseSet*>> pools)
+    {
         core::Registry* rr = reg;
         sol::state_view sv = lua;
         auto idx = std::make_shared<std::size_t>(0);
         std::function<sol::object(sol::variadic_args)> iter =
-          [rr, ents, others, idx, sv](sol::variadic_args) -> sol::object {
+          [rr, ents, pools, idx, sv](sol::variadic_args) -> sol::object {
               while (*idx < ents->size()) {
                   const core::Entity e = (*ents)[(*idx)++];
                   if (!rr->valid(e)) { continue; }
                   bool ok = true;
-                  for (core::SparseSet* p : *others) {
+                  for (core::SparseSet* p : *pools) {
                       if (!p->contains(e)) { ok = false; break; }
                   }
                   if (ok) { return sol::make_object(sv, EntityHandle{ .reg = rr, .entity = e }); }
@@ -180,20 +225,6 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     register_component<Radius>(lua, *table, "Radius",
       [](const sol::table& t) { return Radius{ .value = t.get_or("value", 0.0f) }; },
       "value", &Radius::value);
-    register_component<Damage>(lua, *table, "Damage",
-      [](const sol::table& t) { return Damage{ .per_second = t.get_or("per_second", 0.0f) }; },
-      "per_second", &Damage::per_second);
-    register_component<Weapon>(lua, *table, "Weapon",
-      [](const sol::table& t) {
-          return Weapon{ .cooldown_max = t.get_or("cooldown_max", 0.0f),
-                         .cooldown_current = t.get_or("cooldown_current", 0.0f),
-                         .bullet_speed = t.get_or("bullet_speed", 0.0f),
-                         .damage = t.get_or("damage", 0.0f),
-                         .projectile_lifetime = t.get_or("projectile_lifetime", 0.0f) };
-      },
-      "cooldown_max", &Weapon::cooldown_max, "cooldown_current", &Weapon::cooldown_current,
-      "bullet_speed", &Weapon::bullet_speed, "damage", &Weapon::damage,
-      "projectile_lifetime", &Weapon::projectile_lifetime);
     register_component<AimState>(lua, *table, "AimState",
       [](const sol::table& t) {
           return AimState{ .dx = t.get_or("dx", 0.0f), .dy = t.get_or("dy", 0.0f),
@@ -213,16 +244,22 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
       "cooldown_max", &Dash::cooldown_max, "cooldown", &Dash::cooldown,
       "burst_remaining", &Dash::burst_remaining, "shockwave", &Dash::shockwave,
       "charges", &Dash::charges, "max_charges", &Dash::max_charges);
-    register_component<Crit>(lua, *table, "Crit",
-      [](const sol::table& t) {
-          return Crit{ .chance = t.get_or("chance", 0.0f), .multiplier = t.get_or("multiplier", 1.5f) };
-      },
-      "chance", &Crit::chance, "multiplier", &Crit::multiplier);
     register_component<XpReward>(lua, *table, "XpReward",
       [](const sol::table& t) {
           return XpReward{ .value = static_cast<std::uint32_t>(t.get_or("value", 1)) };
       },
       "value", &XpReward::value);
+    register_component<Render>(lua, *table, "Render",
+      [](const sol::table& t) {
+          return Render{ .kind = static_cast<std::uint8_t>(t.get_or("kind", 0)),
+                         .variant = static_cast<std::uint8_t>(t.get_or("variant", 0)) };
+      },
+      "kind", &Render::kind, "variant", &Render::variant);
+    register_component<Downed>(lua, *table, "Downed",
+      [](const sol::table& t) {
+          return Downed{ .respawn_wave = static_cast<std::uint16_t>(t.get_or("respawn_wave", 0)) };
+      },
+      "respawn_wave", &Downed::respawn_wave);
     // Tag components — no fields; used for membership in queries (`Enemy`, `Player`).
     register_component<EnemyTag>(lua, *table, "Enemy", [](const sol::table&) { return EnemyTag{}; });
     register_component<PlayerTag>(lua, *table, "Player", [](const sol::table&) { return PlayerTag{}; });
@@ -296,20 +333,44 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
           if (h.reg->valid(h.entity)) { h.reg->destroy(h.entity); }
       });
 
-    // The `world` query facade.
-    lua.new_usertype<ScriptWorld>("_ScriptWorld", sol::no_constructor, "each", &ScriptWorld::each);
+    // The `world` query facade + engine services.
+    core::Registry* reg = &world_reg;
+    lua.new_usertype<ScriptWorld>("_ScriptWorld", sol::no_constructor,
+                                  "each", &ScriptWorld::each,
+                                  "nearby", &ScriptWorld::nearby,
+                                  "wave", [reg](ScriptWorld&) {
+                                      int wave = 1;
+                                      reg->view<GameStats>().each(
+                                        [&](core::Entity, const GameStats& stats) { wave = stats.wave; });
+                                      return wave;
+                                  },
+                                  "add_xp", [reg](ScriptWorld&, int value) {
+                                      reg->view<GameStats>().each([&](core::Entity, GameStats& stats) {
+                                          stats.xp += static_cast<std::uint32_t>(std::max(0, value));
+                                      });
+                                  });
     lua["world"] = ScriptWorld{ .reg = &world_reg, .table = table, .lua = lua };
 
-    // Spawn factories (for content that creates entities).
-    core::Registry* reg = &world_reg;
-    lua.set_function("spawn_projectile", [reg](float x, float y, float vx, float vy, float dmg, float life,
-                                               sol::optional<bool> hostile) {
-        return EntityHandle{ .reg = reg,
-                             .entity = create_projectile(*reg, x, y, vx, vy, dmg, life,
-                                                         hostile.value_or(false)) };
+    // Kernel spawn primitives. Bullets are kinetic + drawable; their behavior
+    // (damage, lifetime, allegiance) is a Lua component the caller attaches.
+    lua.set_function("spawn_bullet", [reg](float x, float y, float vx, float vy) {
+        const core::Entity bullet = reg->create();
+        reg->assign(bullet, Position{ .x = x, .y = y });
+        reg->assign(bullet, PrevPosition{ .x = x, .y = y });
+        reg->assign(bullet, Velocity{ .dx = vx, .dy = vy });
+        reg->assign(bullet, Radius{ .value = 4 });
+        reg->assign(bullet, Render{ .kind = static_cast<std::uint8_t>(proto::EntityKind::Projectile),
+                                    .variant = 0 });
+        return EntityHandle{ .reg = reg, .entity = bullet };
     });
-    lua.set_function("spawn_xp_orb", [reg](float x, float y, int value) {
-        return EntityHandle{ .reg = reg, .entity = create_xp_orb(*reg, x, y, static_cast<std::uint32_t>(value)) };
+    // A bare drawable entity (drops, markers): position it, set(Render, ...),
+    // attach your components.
+    lua.set_function("spawn_entity", [reg](float x, float y) {
+        const core::Entity entity = reg->create();
+        reg->assign(entity, Position{ .x = x, .y = y });
+        reg->assign(entity, PrevPosition{ .x = x, .y = y });
+        reg->assign(entity, Render{ .kind = 0, .variant = 0 });
+        return EntityHandle{ .reg = reg, .entity = entity };
     });
     const EnemyRegistry* enemies = &host.enemies(); // heap-stable (lives in ModState)
     lua.set_function(

@@ -31,9 +31,9 @@ using BindingTable = std::vector<ComponentBinding>;
 
 // Prelude globals, in engine-tag order. install_sim_bindings must register its
 // BindingTable entries in exactly this order (asserted there).
-inline constexpr std::array<const char*, 14> engine_component_names = {
-    "Position", "Velocity", "Speed", "Health", "Hearts", "Radius", "Damage",
-    "Weapon", "AimState", "Dash", "Crit", "XpReward", "Enemy", "Player",
+inline constexpr std::array<const char*, 13> engine_component_names = {
+    "Position", "Velocity", "Speed", "Health", "Hearts", "Radius", "AimState",
+    "Dash", "XpReward", "Render", "Downed", "Enemy", "Player",
 };
 
 } // namespace mod
