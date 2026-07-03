@@ -167,6 +167,21 @@ mod:enemy("slinger", "Slinger", {
 Every enemy needs at least `Health` and `Radius` (the server warns otherwise). `on_spawn` in opts
 remains the escape hatch for dynamic per-spawn logic.
 
+### Visuals: animation packs (zero animation code)
+`sprite` (enemies) and `mod:player_sprite(path)` accept an **animation-pack folder** — a directory
+of horizontal strip PNGs named `<Clip>_<N>x1.png` (N frames; a character-name prefix like
+`Goblin_Regular_01_Move_10x1.png` is fine). Declare the folder and you're done — **the engine does
+everything else in C++**: it discovers the clips, slices frames from the filename, plays `Move`
+while the entity moves and `Idle` while it stands, mirrors the sprite when heading left (packs
+face right), staggers animation phases so a wave doesn't move in lockstep, and scales to `scale`
+keeping pixel aspect. A plain `.png` path still works as a static sprite, and a missing pack falls
+back gracefully (static texture → colored rect).
+
+```lua
+mod:player_sprite("assets/sprite/Knight_LVL1")
+mod:enemy("brute", "Brute", { sprite = "assets/sprite/RhinoMonster_01_Regular", scale = 1.5 })
+```
+
 ### The `opts` tables
 | Key | Kind | VM | Meaning |
 |-----|------|----|---------|
@@ -176,7 +191,7 @@ remains the escape hatch for dynamic per-spawn logic.
 | `value_text(amount, rarity) -> string` | both | — | compute the card text yourself |
 | `rarity` (string) | object | sim | `"common"`…`"legendary"` (default `"epic"`) |
 | `weight` (number or `fun(wave)`) | enemy | sim | spawn weight, re-evaluated once per wave |
-| `scale` / `tint` / `sprite` | enemy | render | visuals |
+| `scale` / `tint` / `sprite` | enemy | render | visuals; `sprite` may be an animation-pack folder |
 | `on_spawn(e)` | enemy | sim | dynamic per-spawn hook |
 
 ## 5. Events

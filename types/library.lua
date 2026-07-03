@@ -241,9 +241,9 @@ function DrawContext:world_to_screen(wx, wy) end
 
 ---@class EnemyOpts
 ---@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)
----@field scale? number    # sprite scale (default 1.0)
+---@field scale? number    # on-screen size factor (default 1.0)
 ---@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
----@field sprite? string   # own sprite path (default: the shared enemy sprite)
+---@field sprite? string   # an animation-pack FOLDER of <Clip>_<N>x1.png strips (the engine slices frames, plays Idle/Move, flips for facing) or a static .png path (default: the shared enemy sprite)
 ---@field on_spawn? fun(e: Entity) # escape hatch for dynamic per-spawn logic (prefer :component())
 
 --=============================================================================
@@ -302,6 +302,13 @@ function Mod:object(name, label, acquire, opts) end
 ---@param opts? EnemyOpts
 ---@return EnemyArchetype
 function Mod:enemy(name, label, opts) end
+
+---Declare the player character's visuals: an animation-pack folder (of
+---<Clip>_<N>x1.png strips) or a static .png. The engine handles frame
+---slicing, Idle/Move switching and facing — no animation code in Lua.
+---Render-VM metadata only (not part of the plugin hash); last call wins.
+---@param path string  # e.g. "assets/sprite/Knight_LVL1"
+function Mod:player_sprite(path) end
 
 ---Subscribe to a game event. Engine events (server-side):
 ---  "on_wave_start"    fun(wave: integer)

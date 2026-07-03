@@ -13,6 +13,10 @@ function main()
     include("objects.lua")(mod, C)
     include("enemies.lua")(mod, C)
 
+    -- The player's look: an animation pack (a folder of <Clip>_<N>x1.png
+    -- strips). The engine handles frames, Idle/Move switching and facing.
+    mod:player_sprite("assets/sprite/Knight_LVL1")
+
     -- The player loadout: the kernel spawns bodies (position/hearts/dash),
     -- content decides what they fight with.
     mod:subscribe("on_player_spawn", function(e)

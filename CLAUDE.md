@@ -53,6 +53,8 @@ src/
     scene.hpp      #   Scene base (handle_event/update/render -> Propagation Continue/Stop) + SceneManager (DEFERRED push/pop/clear + apply_pending)
     session.hpp    #   client net control-plane: connect/reconnect, drains net, roster/state/id, latest snapshot, send_*
     ui.hpp / renderer.hpp   # ImGuiLayer RAII; Textures cache (stb_image, image-or-rect fallback)
+    sprites.hpp             # SpritePacks: auto-discovers <Clip>_<N>x1.png strip folders; draw_clip
+                            #   (frame slicing, Idle/Move, right-facing flip) — Lua only names the folder
     mod/render_bindings.*   # render VM bindings: draw ctx (texture/rect/circle/text) + player view
     scene/{lobby,game,console,level_up}.hpp
   client.cpp       # ~15-line bootstrap: argv host/name -> Engine::create -> run()
@@ -99,9 +101,10 @@ guide), `mods/core/` (Soulkeeper's entire gameplay), `types/library.lua` (LSP st
 
 ## Gameplay implemented
 Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes
-**Bandit/Scout/Brute/Slinger** (per-wave spawn weights, tint+scale on one sprite —
-`mods/core/enemies.lua`; the Slinger stands off and fires **hostile projectiles** via Lua
-`core:ranged` systems) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
+**Bandit/Scout/Mushroom/Brute/Slinger/Slasher/Vampire** (per-wave spawn weights, each with its own
+**animated sprite pack** — `mods/core/enemies.lua`; Slinger + Vampire stand off and fire
+**hostile projectiles** via Lua `core:ranged` systems; the player is the animated Knight via
+`mod:player_sprite`) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
 card scene** with **5 rarity tiers** (grey/green/blue/purple/gold; rarity-first roll, per-tier
 amounts, objects declare their tier) — all content in `mods/core/` Lua (13 stat upgrades incl.
 crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **heart life** (3 hearts,
@@ -116,6 +119,9 @@ later** · `/pause` `/resume` console.
 - Run: `./bin/server` then `./bin/client [host] [name]`; host presses **ENTER** in the lobby. Client
   is **fullscreen** and loads assets by **relative path** → run from the repo root. Assets:
   `assets/sprite/{player,enemy}.png`, `assets/background.png`, optional `assets/ui/card_*.png`.
+  **Animation packs**: `assets/sprite/<Pack>/` folders of `<Clip>_<N>x1.png` horizontal strips
+  (every pack has Idle+Move; all face RIGHT). An enemy's `sprite` opt or `mod:player_sprite(path)`
+  names the folder — `client/sprites.hpp` handles frames/state/facing; Lua never animates.
 - **Testing without a display:**
   - Gameplay logic → standalone sim test, SDL-free: `g++ -std=c++26 -I src test.cpp` (build a World,
     step it, assert on components).

@@ -259,6 +259,10 @@ struct ModHandle
         return EnemyBuilder{ .state = state, .id = std::move(id) };
     }
 
+    // Declare the player character's visuals: an animation-pack folder of
+    // <Clip>_<N>x1.png strips (or a plain .png). Render-VM metadata only.
+    void player_sprite(const std::string& path) { state->player_sprite = path; }
+
     void subscribe(std::string event, sol::protected_function handler)
     {
         state->events.subscribe(std::move(event), std::move(handler));
@@ -316,6 +320,7 @@ void LuaHost::install_registration_api()
       "upgrade", &ModHandle::upgrade,
       "object", &ModHandle::object,
       "enemy", &ModHandle::enemy,
+      "player_sprite", &ModHandle::player_sprite,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);
 

@@ -47,6 +47,10 @@ struct ModState
 
     // Engine component dispatch (filled by install_sim_bindings; sim VM only).
     std::shared_ptr<BindingTable> bindings;
+
+    // Player visuals declared by mods (mod:player_sprite). Pure render-VM
+    // metadata — never hashed, never simulated. Last declaration wins.
+    std::string player_sprite;
 };
 
 class LuaHost
@@ -64,6 +68,7 @@ public:
     [[nodiscard]] ScriptComponentRegistry& scripts() noexcept { return state_->scripts; }
     [[nodiscard]] std::vector<ScriptSystem>& script_systems() noexcept { return state_->script_systems; }
     [[nodiscard]] ModState& state() noexcept { return *state_; }
+    [[nodiscard]] const std::string& player_sprite() const noexcept { return state_->player_sprite; }
     [[nodiscard]] const std::shared_ptr<BindingTable>& bindings() const noexcept { return state_->bindings; }
 
     // Discover every `<dir>/*/mod.lua`, run it, call its global main(), then

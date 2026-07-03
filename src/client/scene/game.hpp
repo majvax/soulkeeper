@@ -6,6 +6,7 @@
 #include "client/scene.hpp"
 #include "client/scene/console.hpp"
 #include "client/scene/level_up.hpp"
+#include "client/sprites.hpp"
 #include "shared/components/combat.hpp"
 #include "shared/components/physics.hpp"
 #include "shared/protocol.hpp"
@@ -29,6 +30,8 @@ struct Remote
     std::uint32_t net_id; // server id, for the name label
     std::uint8_t health;  // 0..255 fraction of max, for the health bar
     std::uint8_t variant; // enemies: archetype wire id (mod EnemyRegistry)
+    float face = 1.0f;    // last horizontal direction (packs face right; -1 flips)
+    bool moving = false;  // position changed last snapshot -> Move vs Idle clip
 };
 
 class GameScene : public client::Scene
@@ -101,6 +104,7 @@ public:
         }
 
         send_and_predict(dt);
+        anim_time_ += dt; // shared clock for all animation clips
         return Continue;
     }
 
@@ -175,6 +179,14 @@ private:
         engine_->session().send_input(proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x,
                                                     .aim_y = aim_y, .firing = firing, .dash = dash_flag });
 
+        // The local character faces the cursor (twin-stick), not its velocity.
+        if (aim_x > 0.05f) {
+            my_face_ = 1.0f;
+        } else if (aim_x < -0.05f) {
+            my_face_ = -1.0f;
+        }
+        my_moving_ = false;
+
         if (has_player_ && !downed) {
             const float speed = my_move_speed_ > 0 ? static_cast<float>(my_move_speed_) : PLAYER_SPEED;
             Velocity& vel = registry_.get<Velocity>(player_);
@@ -183,6 +195,7 @@ private:
             Position& pos = registry_.get<Position>(player_);
             pos.x += vel.dx * dt;
             pos.y += vel.dy * dt;
+            my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
     }
 
@@ -224,8 +237,17 @@ private:
             } else {
                 Position& pos = registry_.get<Position>(it->second);
                 registry_.get<PrevPosition>(it->second) = { .x = pos.x, .y = pos.y };
-                pos = { .x = entry->x, .y = entry->y };
                 Remote& rem = registry_.get<Remote>(it->second);
+                // Animation state from the snapshot delta: Move vs Idle + facing.
+                const float step_x = entry->x - pos.x;
+                const float step_y = entry->y - pos.y;
+                rem.moving = std::abs(step_x) + std::abs(step_y) > 0.1f;
+                if (step_x > 0.1f) {
+                    rem.face = 1.0f;
+                } else if (step_x < -0.1f) {
+                    rem.face = -1.0f;
+                }
+                pos = { .x = entry->x, .y = entry->y };
                 rem.health = entry->health;
             }
         }
@@ -279,7 +301,6 @@ private:
         ImGui::ProgressBar(static_cast<float>(xp_frac_) / 255.0f, ImVec2(160.0f, 0.0f), "XP");
         ImGui::End();
 
-        SDL_Texture* player_tex = textures_.get(asset_player);
         SDL_Texture* enemy_tex = textures_.get(asset_enemy);
 
         const float t = std::min(time_since_snapshot_ * static_cast<float>(proto::snapshot_hz), 1.0f);
@@ -288,11 +309,12 @@ private:
               const float x = ox + prev.x + ((p.x - prev.x) * t);
               const float y = oy + prev.y + ((p.y - prev.y) * t);
               if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
-                  draw_enemy(r, x, y, enemy_tex, rem.variant);
+                  draw_enemy(r, x, y, enemy_tex, rem);
                   health_bar(r, x, y, rem.health);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   draw_object_hooks(x, y, script_state_for(rem.net_id));
-                  draw_entity(r, x, y, player_tex, SDL_Color{ 220, 200, 80, 255 });
+                  draw_player(r, x, y, rem.moving, rem.face, rem.net_id,
+                              SDL_Color{ 220, 200, 80, 255 });
                   // Player bytes are hearts (current/max) -> bar fraction.
                   health_bar(r, x, y,
                              static_cast<std::uint8_t>(rem.health * 255
@@ -313,7 +335,8 @@ private:
         if (has_player_) {
             const Position& p = registry_.get<Position>(player_);
             draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
-            draw_entity(r, ox + p.x, oy + p.y, player_tex, SDL_Color{ 80, 220, 100, 255 });
+            draw_player(r, ox + p.x, oy + p.y, my_moving_, my_face_, my_net_id_,
+                        SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
             label(ox + p.x, oy + p.y, engine_->session().name());
         }
@@ -364,17 +387,37 @@ private:
         SDL_RenderFillRect(r, &rect);
     }
 
-    // Archetypes are Lua-defined (mod:add_enemy): scale/tint/sprite come from
-    // the render VM's enemy registry, keyed by the snapshot variant (wire id).
-    void draw_enemy(SDL_Renderer* r, float cx, float cy, SDL_Texture* shared_tex, std::uint8_t variant)
+    // Move while moving, Idle while still — whichever the pack actually has.
+    static const client::AnimClip* pick_clip(const client::SpritePack& pack, bool moving)
+    {
+        const client::AnimClip* clip = pack.clip(moving ? "Move" : "Idle");
+        if (clip == nullptr) { clip = pack.clip(moving ? "Idle" : "Move"); }
+        return clip;
+    }
+
+    // Desynchronize identical archetypes so a wave doesn't animate in lockstep.
+    static float phase_offset(std::uint32_t net_id) { return static_cast<float>(net_id % 16U) * 0.37f; }
+
+    // Archetypes are Lua-defined (mod:enemy): scale/tint/sprite come from the
+    // render VM's enemy registry, keyed by the snapshot variant (wire id). A
+    // sprite naming an animation-pack FOLDER animates (Idle/Move + facing);
+    // a .png path stays a static texture; no sprite -> shared enemy.png.
+    void draw_enemy(SDL_Renderer* r, float cx, float cy, SDL_Texture* shared_tex, const Remote& rem)
     {
         float scale = 1.0f;
         SDL_Color tint{ 255, 255, 255, 255 };
         SDL_Texture* tex = shared_tex;
-        if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(variant)) {
+        if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
             scale = def->scale;
             tint = SDL_Color{ def->tint[0], def->tint[1], def->tint[2], 255 };
             if (!def->sprite.empty()) {
+                if (const client::SpritePack* pack = packs_.get(def->sprite)) {
+                    if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
+                        client::draw_clip(r, *clip, cx, cy, sprite_size * scale,
+                                          anim_time_ + phase_offset(rem.net_id), rem.face < 0, tint);
+                        return;
+                    }
+                }
                 if (SDL_Texture* own = textures_.get(def->sprite)) { tex = own; }
             }
         }
@@ -388,6 +431,24 @@ private:
             const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
             SDL_RenderFillRect(r, &rect);
         }
+    }
+
+    // Players: the pack declared by mods via mod:player_sprite (animated),
+    // falling back to the static player.png, then a colored square.
+    void draw_player(SDL_Renderer* r, float cx, float cy, bool moving, float face,
+                     std::uint32_t net_id, SDL_Color fallback)
+    {
+        const std::string& pack_path = engine_->mods().player_sprite();
+        if (!pack_path.empty()) {
+            if (const client::SpritePack* pack = packs_.get(pack_path)) {
+                if (const client::AnimClip* clip = pick_clip(*pack, moving)) {
+                    client::draw_clip(r, *clip, cx, cy, sprite_size,
+                                      anim_time_ + phase_offset(net_id), face < 0);
+                    return;
+                }
+            }
+        }
+        draw_entity(r, cx, cy, textures_.get(asset_player), fallback);
     }
 
     // HUD hearts row: hearth icons (tinted dark when empty), red squares fallback.
@@ -490,6 +551,7 @@ private:
     void clear_input() { input_ = {}; }
 
     client::Textures textures_;
+    client::SpritePacks packs_{ &textures_ }; // animation packs (Idle/Move strips)
     client::DrawContext draw_ctx_;  // reused surface for plugin draw hooks
     sol::object ctx_obj_;           // persistent Lua handle to draw_ctx_
     InputState input_;
@@ -511,4 +573,7 @@ private:
     std::uint8_t xp_frac_ = 0;
     std::uint16_t wave_ = 1;
     float time_since_snapshot_ = 0.0f;
+    float anim_time_ = 0.0f;   // drives every animation clip
+    float my_face_ = 1.0f;     // local character faces the cursor
+    bool my_moving_ = false;
 };
