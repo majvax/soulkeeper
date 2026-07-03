@@ -50,6 +50,7 @@ void Engine::run()
     install_render_bindings(render_host_);
     render_host_.load_dir("mods");
 
+    session_.set_mods_hash(render_host_.plugin_hash()); // sent in Join; must match the server
     session_.connect();
     scenes_.push<LobbyScene>(this); // the only hardcoded scene; the rest self-drive
     scenes_.apply_pending();

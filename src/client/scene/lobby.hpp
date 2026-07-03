@@ -37,6 +37,14 @@ public:
 
         client::Session& session = engine_->session();
         ImGui::Begin("Lobby");
+        if (session.join_denied()) {
+            ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "Mod set mismatch — join refused.");
+            ImGui::Text("server mods: %016llx", static_cast<unsigned long long>(session.server_mods_hash()));
+            ImGui::Text("your mods:   %016llx", static_cast<unsigned long long>(session.mods_hash()));
+            ImGui::TextUnformatted("Your mods/ folder must match the server's. Fix it and restart.");
+            ImGui::End();
+            return Continue;
+        }
         if (!session.connected()) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "connecting...");
         }

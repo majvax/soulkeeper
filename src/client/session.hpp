@@ -34,12 +34,17 @@ public:
       : host_{ std::move(host) }, name_{ std::move(name) }, token_{ std::hash<std::string>{}(name_) }
     {}
 
+    // Set before connect(): the local plugin-set hash sent in Join. The server
+    // denies the join if it differs from its own.
+    void set_mods_hash(std::uint64_t hash) noexcept { mods_hash_ = hash; }
+
     void connect() { try_connect(); }
 
     // Drive the connection once per frame: reconnect if dropped, then drain the
     // socket and fold control messages into our state.
     void poll(float dt)
     {
+        if (denied_) { return; } // mod mismatch is not transient — don't hammer the server
         if (!client_) {
             reconnect_timer_ += dt;
             if (reconnect_timer_ >= 1.0f) {
@@ -66,6 +71,9 @@ public:
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] const std::vector<RosterRow>& roster() const noexcept { return roster_; }
     [[nodiscard]] bool leveling() const noexcept { return leveling_; }
+    [[nodiscard]] bool join_denied() const noexcept { return denied_; }
+    [[nodiscard]] std::uint64_t mods_hash() const noexcept { return mods_hash_; }
+    [[nodiscard]] std::uint64_t server_mods_hash() const noexcept { return server_mods_hash_; }
     [[nodiscard]] const std::array<proto::LevelUpChoice, proto::level_up_choices>& choices() const noexcept
     {
         return choices_;
@@ -132,7 +140,7 @@ private:
             return;
         }
         client_ = std::move(*opened);
-        proto::Join join{ .token = token_, .name = {} };
+        proto::Join join{ .token = token_, .mods_hash = mods_hash_, .name = {} };
         proto::write_name(join.name, name_);
         proto::ByteWriter writer;
         writer.put(proto::MsgType::Join);
@@ -164,6 +172,12 @@ private:
         } else if (type == proto::MsgType::Snapshot) {
             // Keep the payload after the 1-byte MsgType for GameScene to apply.
             latest_snapshot_ = std::vector<std::byte>(payload.begin() + 1, payload.end());
+        } else if (type == proto::MsgType::JoinDenied) {
+            if (const auto denied = reader.get<proto::JoinDenied>()) {
+                denied_ = true;
+                server_mods_hash_ = denied->server_hash;
+                client_.reset(); // the server kicks us anyway; stop cleanly
+            }
         }
     }
 
@@ -186,6 +200,9 @@ private:
     std::string host_;
     std::string name_;
     std::uint64_t token_;
+    std::uint64_t mods_hash_ = 0;
+    std::uint64_t server_mods_hash_ = 0;
+    bool denied_ = false;
     std::optional<net::Client> client_;
     float reconnect_timer_ = 0.0f;
 

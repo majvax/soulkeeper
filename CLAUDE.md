@@ -81,8 +81,9 @@ Upgrades, objects, and even components/systems are **Lua 5.4 plugins** (sol2), n
   Lua-defined systems), the client the **render VM** (draw hooks + card metadata). Each side only
   fires its own callbacks.
 - **Deterministic wire ids** = lexicographic sort index of namespaced string ids (`core:damage`).
-  No runtime counter → identical on every process, but the `mods/` set **must match** across
-  machines (join-time validation not yet implemented).
+  No runtime counter → identical on every process. The `mods/` set must match across machines and
+  is **validated at join**: `LuaHost::plugin_hash()` travels in `Join`; a mismatch gets
+  `JoinDenied` + kick, and the lobby shows both hashes.
 - **Perf model**: continuous effects are Lua-defined components ticked by Lua-defined systems
   (dynamic pools live in `core::Registry`; `networked` components ride snapshots); event callbacks
   fire only on discrete moments (level-up roll, pick, game events).
@@ -111,8 +112,7 @@ aura / **Frost Belt** objects with Lua draw hooks) · co-op **downed → respawn
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- **Plugin-set validation at join** — hash the sorted id list, reject mismatched clients.
-- Later: game-over/win, XP magnet, weapon variety, delta/quantized snapshots, F11 fullscreen toggle.
+- Game-over/win, XP magnet, weapon variety, delta/quantized snapshots, F11 fullscreen toggle.
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

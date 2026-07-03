@@ -49,11 +49,19 @@ public:
     // once, after bindings are installed. Errors are logged, never fatal.
     void load_dir(const std::string& dir);
 
+    // Deterministic FNV-1a hash of the registered plugin identity (content ids
+    // + kinds, enemy ids, script schemas), seeded with proto::protocol_version.
+    // Sent in Join so the server can reject a mismatched mods/ set before it
+    // silently desyncs. Valid after load_dir().
+    [[nodiscard]] std::uint64_t plugin_hash() const noexcept { return plugin_hash_; }
+
 private:
     void install_registration_api(); // register_mod + the Mod usertype
+    void compute_plugin_hash();      // cache plugin_hash_ (end of load_dir)
 
     sol::state lua_;
     std::unique_ptr<ModState> state_ = std::make_unique<ModState>();
+    std::uint64_t plugin_hash_ = 0;
 };
 
 } // namespace mod

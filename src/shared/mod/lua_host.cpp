@@ -7,11 +7,30 @@
 #include <string>
 #include <vector>
 
+#include "shared/protocol.hpp"  // protocol_version (plugin-hash seed)
 #include "shared/sim/world.hpp" // shared::phase constants
 
 namespace mod {
 
 namespace {
+
+// FNV-1a 64 accumulator for the plugin-set hash. Strings are folded with their
+// terminating NUL so ("ab","c") and ("a","bc") can't collide.
+struct Fnv1a
+{
+    std::uint64_t hash = 14695981039346656037ULL;
+
+    void byte(std::uint8_t value) noexcept
+    {
+        hash ^= value;
+        hash *= 1099511628211ULL;
+    }
+    void str(const std::string& s) noexcept
+    {
+        for (const char c : s) { byte(static_cast<std::uint8_t>(c)); }
+        byte(0);
+    }
+};
 
 // The `Mod` handle plugins get from register_mod(). Holds a stable pointer to
 // the host's ModState (survives a LuaHost move) plus the mod's namespace.
@@ -195,6 +214,7 @@ void LuaHost::load_dir(const std::string& dir)
         std::fprintf(stderr, "[mod] no mods directory '%s' — no content loaded\n", dir.c_str());
         state_->registry.finalize();
         state_->enemies.finalize();
+        compute_plugin_hash();
         return;
     }
 
@@ -233,6 +253,35 @@ void LuaHost::load_dir(const std::string& dir)
     state_->registry.finalize();
     state_->enemies.finalize();
     state_->scripts.finalize();
+    compute_plugin_hash();
+}
+
+// Hash the registered identity — everything the wire depends on (content and
+// enemy wire-id maps, networked schema layouts) — NOT Lua behavior. Registries
+// are already finalized (sorted); schemas are hashed in sorted-by-id order
+// since the deque keeps load order.
+void LuaHost::compute_plugin_hash()
+{
+    Fnv1a fnv;
+    fnv.byte(static_cast<std::uint8_t>(proto::protocol_version & 0xFF));
+    fnv.byte(static_cast<std::uint8_t>(proto::protocol_version >> 8));
+
+    for (const ContentDef& def : state_->registry.defs()) {
+        fnv.str(def.id);
+        fnv.byte(static_cast<std::uint8_t>(def.kind));
+    }
+    for (const EnemyDef& def : state_->enemies.defs()) { fnv.str(def.id); }
+
+    std::vector<const ScriptSchema*> schemas;
+    for (const ScriptSchema& schema : state_->scripts.all()) { schemas.push_back(&schema); }
+    std::sort(schemas.begin(), schemas.end(),
+              [](const ScriptSchema* a, const ScriptSchema* b) { return a->id < b->id; });
+    for (const ScriptSchema* schema : schemas) {
+        fnv.str(schema->id);
+        for (const std::string& field : schema->fields) { fnv.str(field); }
+        fnv.byte(schema->networked ? 1 : 0);
+    }
+    plugin_hash_ = fnv.hash;
 }
 
 } // namespace mod

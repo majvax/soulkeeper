@@ -111,6 +111,13 @@ void Server::broadcast(std::span<const std::byte> data, bool reliable)
     enet_host_broadcast(impl_->host, channel, make_packet(data, reliable));
 }
 
+void Server::kick(std::uint32_t peer_id)
+{
+    const auto it = impl_->peers.find(peer_id);
+    if (it == impl_->peers.end()) { return; }
+    enet_peer_disconnect_later(it->second, 0); // flush queued packets first
+}
+
 // --- Client ----------------------------------------------------------------
 struct Client::Impl
 {

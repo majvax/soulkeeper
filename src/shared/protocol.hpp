@@ -20,6 +20,10 @@ inline constexpr std::uint16_t default_port = 1234;
 inline constexpr std::size_t max_name_len = 24;
 inline constexpr std::size_t max_players = 4;
 
+// Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
+// so a version skew is denied cleanly instead of mis-parsing packets.
+inline constexpr std::uint16_t protocol_version = 1;
+
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
 inline constexpr int snapshot_every_n_ticks = 2;
@@ -37,6 +41,7 @@ enum class MsgType : std::uint8_t {
     State = 8,         // S2C: lobby vs playing (reliable)
     LevelUp = 9,       // S2C: 3 upgrade choices to pick from (reliable)
     Snapshot = 10,     // S2C: world state (unreliable)
+    JoinDenied = 11,   // S2C: plugin-set hash mismatch; peer is then kicked (reliable)
 };
 
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4 };
@@ -106,8 +111,16 @@ private:
 // --- message payloads (each preceded by a MsgType byte) --------------------
 struct Join
 {
-    std::uint64_t token; // stable per client, lets the server resume your player
+    std::uint64_t token;     // stable per client, lets the server resume your player
+    std::uint64_t mods_hash; // LuaHost::plugin_hash() — must match the server's
     Name name;
+};
+
+// Join refused: the client's plugin set doesn't match. Carries the server's
+// hash (the client knows its own) so the mismatch can be shown.
+struct JoinDenied
+{
+    std::uint64_t server_hash;
 };
 
 struct Input

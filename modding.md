@@ -41,8 +41,11 @@ map to a small integer that travels over the network; **the mapping is the lexic
 of all registered ids**, so the server and client always agree, regardless of load order. You never
 touch the integer — just pick a unique `namespace:name`.
 
-> ⚠️ The client and server **must load the same set of plugins**. (Automatic plugin-set validation at
-> join time is planned; for now keep `mods/` identical on all machines in a session.)
+> The client and server **must load the same set of plugins**, and the engine enforces it: the
+> client sends a deterministic hash of its registered content (upgrade/object ids + kinds, enemy
+> ids, script component schemas) when joining, and the server refuses a mismatch. The lobby then
+> shows both hashes so you can tell whose `mods/` folder is off. Lua *code* isn't hashed — only the
+> registered identity that the wire format depends on.
 
 ---
 

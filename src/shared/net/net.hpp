@@ -51,6 +51,9 @@ public:
     [[nodiscard]] std::vector<Event> poll();
     void send(std::uint32_t peer_id, std::span<const std::byte> data, bool reliable);
     void broadcast(std::span<const std::byte> data, bool reliable);
+    // Graceful disconnect: queued reliable packets are delivered first, then
+    // the peer surfaces as a Disconnect event in a later poll().
+    void kick(std::uint32_t peer_id);
 
 private:
     struct Impl;

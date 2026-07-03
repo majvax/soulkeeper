@@ -210,6 +210,20 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
     const auto join = reader.get<proto::Join>();
     if (!join) { return; }
     const std::string name = proto::read_name(join->name);
+
+    // Validate the plugin set BEFORE the token lookup: a reconnecting player
+    // whose mods/ changed would desync just like a fresh mismatched client.
+    if (join->mods_hash != lua_host_.plugin_hash()) {
+        spdlog::warn("denied '{}': plugin-set hash {:016x} != ours {:016x}", name, join->mods_hash,
+                     lua_host_.plugin_hash());
+        proto::ByteWriter writer;
+        writer.put(proto::MsgType::JoinDenied);
+        writer.put(proto::JoinDenied{ .server_hash = lua_host_.plugin_hash() });
+        server_.send(peer_id, writer.bytes(), true);
+        server_.kick(peer_id);
+        return;
+    }
+
     core::Registry& registry = world_.registry();
 
     if (const auto it = sessions_.find(join->token); it != sessions_.end()) {
