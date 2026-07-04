@@ -2,6 +2,22 @@
 --   targeting -> (kernel dash/motion) -> shooting -> (kernel movement)
 --   -> projectile -> combat -> update -> pickup -> death
 -- The kernel provides motion, the spatial hash (world:nearby), snapshots.
+
+local function auto_aim(player)
+    local pp = player:get(Position)
+    local aim = player:get(AimState)
+    local e, _, ex, ey = world:closest(pp.x, pp.y, Enemy)
+    if not e then
+        aim.firing = 0
+        return
+    end
+    local dx, dy = ex - pp.x, ey - pp.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len <= 0 then return end
+    aim.dx, aim.dy = dx / len, dy / len
+    aim.firing = 1
+end
+
 return function(mod, C)
     -- Nearest live player to (x, y), or nil (+ squared distance). Downed
     -- players are ignored. world:closest is a single engine call — never loop
@@ -76,6 +92,7 @@ return function(mod, C)
     -- shot rolls Crit: a crit multiplies damage and renders bigger/orange.
     mod:system("shooting", { phase = "shooting" }, function(dt)
         for p in world:each(Player, Position, C.Weapon, AimState) do
+            if p:has(C.AutoTarget) then auto_aim(p) end
             local w = p:get(C.Weapon)
             if w.cooldown > 0 then w.cooldown = w.cooldown - dt end
             local aim = p:get(AimState)
@@ -93,35 +110,8 @@ return function(mod, C)
             end
         end
     end)
-    -- mod:system("shooting", { phase = "shooting" }, function(dt)
-    --     for p in world:each(Player, Position, C.Weapon, AimState) do
-    --         local w = p:get(C.Weapon)
-    --         if w.cooldown > 0 then w.cooldown = w.cooldown - dt end
-    --         local pp = p:get(Position)
-    --         local aim = p:get(AimState)
 
-    --         local e, _, ex, ey = world:closest(pp.x, pp.y, Enemy)
-    --         if e then
-    --             local dx, dy = ex - pp.x, ey - pp.y
-    --             local len = math.sqrt(dx * dx + dy * dy)
-    --             if len > 0 and len < 500 then
-    --                 aim.dx, aim.dy = dx / len, dy / len
-    --                 aim.firing = 1
-    --             end
-    --         end
 
-    --         if aim.firing == 1 and w.cooldown <= 0 and (aim.dx ~= 0 or aim.dy ~= 0) then
-    --             local damage = w.damage
-    --             local crit = p:get(C.Crit)
-    --             local is_crit = crit and math.random() < crit.chance
-    --             if is_crit then damage = damage * crit.multiplier end
-    --             local b = spawn_bullet(pp.x, pp.y, aim.dx * w.bullet_speed, aim.dy * w.bullet_speed)
-    --             b:set(C.Bullet, { damage = damage, lifetime = w.lifetime })
-    --             if is_crit then b:get(Render).variant = 2 end
-    --             w.cooldown = w.cooldown_max
-    --         end
-    --     end
-    -- end)
 
     ---------------------------------------------------------------- projectile
     -- Bullet flight: expire by lifetime; friendly bullets hit the first enemy

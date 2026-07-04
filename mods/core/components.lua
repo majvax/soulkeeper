@@ -9,8 +9,11 @@ return function(mod)
 
     -- Player loadout (attached in on_player_spawn; mutated by upgrades).
     C.Weapon = mod:component("weapon", {
-        cooldown_max = 0.35, cooldown = 0,
-        bullet_speed = 550, damage = 10, lifetime = 1.2,
+        cooldown_max = 0.35,
+        cooldown = 0,
+        bullet_speed = 550,
+        damage = 10,
+        lifetime = 1.2,
     })
     C.Crit = mod:component("crit", { chance = 0.05, multiplier = 1.5 })
 
@@ -25,7 +28,7 @@ return function(mod)
     C.IFrames = mod:component("iframes", { remaining = 1.0 })
 
     -- Drops.
-    C.Xp = mod:component("xp", { value = 1 })     -- orb: team XP on pickup
+    C.Xp = mod:component("xp", { value = 1 })      -- orb: team XP on pickup
     C.Heal = mod:component("heal", { amount = 1 }) -- heart: +hearts while hurt
 
     -- Objects.
@@ -35,10 +38,14 @@ return function(mod)
     -- Ranged-attacker state: stands off at `standoff`, fires a hostile
     -- projectile every `cooldown` s at players within `range`.
     C.Ranged = mod:component("ranged", {
-        range = 340, standoff = 260,
-        cooldown = 1.6, bullet_speed = 260, damage = 1,
+        range = 340,
+        standoff = 260,
+        cooldown = 1.6,
+        bullet_speed = 260,
+        damage = 1,
         timer = 1.0, -- brief grace period after spawning
     })
+    C.AutoTarget = mod:component("autotarget", { enabled = 1 })
 
     return C
 end

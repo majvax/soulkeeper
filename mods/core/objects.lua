@@ -36,4 +36,11 @@ return function(mod, C)
                 ctx:circle(view.x, view.y, s.radius, 180, 235, 255, 140, 2)
             end,
         })
+
+    mod:object("autotarget", "Auto Target",
+        function(e) e:set(C.AutoTarget, {}) end,
+        {
+            rarity = "legendary",
+            value_text = function() return "auto-targets enemies" end,
+        })
 end
