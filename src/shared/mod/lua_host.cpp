@@ -353,7 +353,10 @@ void LuaHost::install_registration_api()
                                            "folder name is the import name; keep them identical\n",
                                            st->current_plugin.c_str(), ns.c_str());
                           }
-                          std::fprintf(stdout, "[mod] loaded '%s' — %s by %s\n", ns.c_str(),
+                          // stderr like every other [mod] line: stdout is fully
+                          // buffered under redirection and a SIGTERM'd server
+                          // never flushes it (the line silently vanished).
+                          std::fprintf(stderr, "[mod] loaded '%s' — %s by %s\n", ns.c_str(),
                                        description.value_or("(no description)").c_str(),
                                        author.value_or("(unknown)").c_str());
                           return ModHandle{ .state = st, .ns = std::move(ns) };
