@@ -340,7 +340,7 @@ private:
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   draw_object_hooks(x, y, script_state_for(rem.net_id));
                   draw_player(r, x, y, rem.moving, rem.face, rem.net_id,
-                              SDL_Color{ 220, 200, 80, 255 });
+                              rem.variant, SDL_Color{ 220, 200, 80, 255 });
                   // Player bytes are hearts (current/max) -> bar fraction.
                   health_bar(r, x, y,
                              static_cast<std::uint8_t>(rem.health * 255
@@ -362,7 +362,7 @@ private:
             const Position& p = registry_.get<Position>(player_);
             draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
             draw_player(r, ox + p.x, oy + p.y, my_moving_, my_face_, my_net_id_,
-                        SDL_Color{ 80, 220, 100, 255 });
+                        my_max_hearts_, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
             label(ox + p.x, oy + p.y, engine_->session().name());
         }
@@ -483,21 +483,30 @@ private:
     }
 
     // Players: the pack declared by mods via mod:player_sprite (animated),
-    // falling back to the static player.png, then a colored square.
+    // falling back to the static player.png, then a colored square. Vitality
+    // shows: the character grows ~6% per max heart above the base 3 (capped)
+    // — max hearts ride the snapshot variant byte, so this is render-only.
     void draw_player(SDL_Renderer* r, float cx, float cy, bool moving, float face,
-                     std::uint32_t net_id, SDL_Color fallback)
+                     std::uint32_t net_id, std::uint8_t max_hearts, SDL_Color fallback)
     {
+        const float growth =
+          std::min(1.5f, 1.0f + (0.06f * static_cast<float>(std::max(0, max_hearts - 3))));
+        const float size = sprite_size * growth;
         const std::string& pack_path = engine_->mods().player_sprite();
         if (!pack_path.empty()) {
             if (const client::SpritePack* pack = packs_.get(pack_path)) {
                 if (const client::AnimClip* clip = pick_clip(*pack, moving)) {
-                    client::draw_clip(r, *clip, cx, cy, sprite_size,
+                    client::draw_clip(r, *clip, cx, cy, size,
                                       anim_time_ + phase_offset(net_id), face < 0);
                     return;
                 }
             }
         }
-        draw_entity(r, cx, cy, textures_.get(asset_player), fallback);
+        if (SDL_Texture* tex = textures_.get(asset_player)) {
+            client::draw_centered(r, tex, cx, cy, size, size);
+            return;
+        }
+        draw_entity(r, cx, cy, nullptr, fallback);
     }
 
     // HUD hearts row: hearth icons (tinted dark when empty), red squares fallback.
