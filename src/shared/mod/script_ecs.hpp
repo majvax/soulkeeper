@@ -31,11 +31,13 @@ struct ScriptSchema
     bool has_pool = false;
     int net_id = -1;                 // sorted index among networked comps (both ends agree)
 
+    // Fields are SORTED at definition time (lua_host sorts the declaration —
+    // also what makes the wire layout deterministic), so lookups binary-search.
+    // This runs on every script-component field access from Lua.
     [[nodiscard]] int field_index(const std::string& name) const
     {
-        for (std::size_t i = 0; i < fields.size(); ++i) {
-            if (fields[i] == name) { return static_cast<int>(i); }
-        }
+        const auto it = std::lower_bound(fields.begin(), fields.end(), name);
+        if (it != fields.end() && *it == name) { return static_cast<int>(it - fields.begin()); }
         return -1;
     }
 };
@@ -46,7 +48,9 @@ struct ScriptSystem
 {
     std::string id;
     int order;
-    double rate; // 0 = every tick
+    double rate;         // 0 = every tick
+    double stagger = 0.0; // 0..1 fraction of the interval: offsets which tick a
+                          // throttled system fires on (spreads same-rate systems)
     sol::protected_function fn;
 };
 

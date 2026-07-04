@@ -103,6 +103,10 @@ end)
 - `world:nearby(x, y, radius, H, ...)` — entities within `radius` px (center distance), served by
   the kernel spatial hash. **The broad-phase workhorse** — this is how core does bullet hits,
   contact damage, auras and pickups. Add collision radii into `radius` yourself.
+- `world:closest(x, y, H, ..., { without = H })` — nearest entity owning every component; returns
+  `entity, d², px, py` (all nil on no match). `without` excludes owners of a component (e.g.
+  `Downed` players). **Use this, never a Lua loop, to pick a target inside a per-entity system** —
+  it's one engine call instead of an iterator per entity.
 - `world:wave()`, `world:add_xp(n)`.
 - `spawn_bullet(x, y, vx, vy)` — kinetic drawable (bullet kind); attach your bullet component for
   behavior, set `Render.variant` for tint (1 = hostile red, 2 = crit orange in the core skin).
@@ -222,12 +226,23 @@ ctx:text(x, y, str, r, g, b, a)                ctx:world_to_screen(wx, wy) -> sx
 
 ## 7. Performance model
 
-The sim ticks at 120 Hz with a few hundred entities — Lua 5.4 handles the core pipeline
-comfortably, but stay disciplined:
+The sim ticks at 120 Hz with up to ~500 enemies — Lua 5.4 handles the core pipeline comfortably,
+but the cost that matters is **Lua↔engine boundary crossings** (every `e:get`, every iterator),
+not Lua itself. The discipline that keeps 500 enemies under ~1 ms/tick:
 
-- **Broad-phase first.** Never nest `world:each` over enemies inside a per-entity loop; use
-  `world:nearby` (the core systems are the reference).
-- **Throttle** anything that doesn't need 120 Hz with `rate`.
+- **One query call beats a Lua loop.** `world:closest` picks a target in one crossing; never scan
+  candidates from Lua inside a per-entity system (one nested `world:each` per enemy per tick was
+  the single biggest cost in the whole game before it became `world:closest`).
+- **Broad-phase first.** Use `world:nearby` (kernel spatial hash) for anything area-shaped; the
+  core systems are the reference.
+- **Throttle with `rate`** — most systems don't need 120 Hz (core runs targeting at 30, pickups
+  at 20). The callback receives the *accumulated* dt, so per-second quantities are unchanged.
+- **Spread with `stagger`** — same-rate systems all fire on the same tick by default, and that
+  aligned tick can bust the frame budget by itself. Give heavy systems different `stagger`
+  fractions (see `mods/core/systems.lua`); keep stagger equal only when one system must see
+  another's same-tick writes (targeting → slow_sys).
+- The server logs `tick avg/max ms + entities` every 5 s and warns on budget overruns — watch it
+  while developing a mod.
 - Event callbacks fire on discrete moments — keep per-tick work in systems.
 - If a system still profiles hot, it can move back to C++ without changing the API for anyone
   else.

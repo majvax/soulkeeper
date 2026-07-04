@@ -190,8 +190,9 @@ struct ModHandle
             return shared::phase::Update;
         }();
         const double rate = opts.get_or("rate", 0.0);
-        state->script_systems.push_back(
-          { .id = qualify(name), .order = order, .rate = rate, .fn = std::move(fn) });
+        const double stagger = opts.get_or("stagger", 0.0);
+        state->script_systems.push_back({ .id = qualify(name), .order = order, .rate = rate,
+                                          .stagger = stagger, .fn = std::move(fn) });
     }
 
     void upgrade(const std::string& name, std::string label, const sol::table& amounts,

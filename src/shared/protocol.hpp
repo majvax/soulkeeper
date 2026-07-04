@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -22,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 3;
+inline constexpr std::uint16_t protocol_version = 4;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -80,6 +81,9 @@ public:
         const auto* bytes = reinterpret_cast<const std::byte*>(&value);
         buffer_.insert(buffer_.end(), bytes, bytes + sizeof(T));
     }
+
+    // Size the buffer once up front (snapshots know their entry count).
+    void reserve(std::size_t bytes) { buffer_.reserve(bytes); }
 
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return buffer_; }
 
@@ -167,6 +171,25 @@ struct RosterEntry
     std::uint8_t connected;
 };
 
+// Snapshot positions are quantized: int16 offsets from the header's origin in
+// 0.5 px steps → ±16383 px of playfield around the action (many screens).
+// Entities farther out clamp to the edge; they're way off-camera, and their
+// positions snap back to exact as soon as they re-enter range. This (plus the
+// packed layouts below) cuts a 500-entity snapshot by ~a third — snapshots go
+// out 60×/s and fragment past the UDP MTU, so every byte here is hot.
+inline constexpr float snapshot_pos_scale = 2.0f; // steps per px (1 / 0.5 px)
+
+[[nodiscard]] inline std::int16_t quantize_pos(float v, float origin) noexcept
+{
+    const float q = std::round((v - origin) * snapshot_pos_scale);
+    return static_cast<std::int16_t>(std::clamp(q, -32768.0f, 32767.0f));
+}
+[[nodiscard]] inline float dequantize_pos(std::int16_t q, float origin) noexcept
+{
+    return origin + (static_cast<float>(q) / snapshot_pos_scale);
+}
+
+#pragma pack(push, 1) // wire structs: no padding bytes on the wire
 struct SnapshotHeader
 {
     std::uint32_t server_tick;
@@ -174,17 +197,19 @@ struct SnapshotHeader
     std::uint16_t level;   // shared team level (for the HUD)
     std::uint8_t xp_frac;  // 0..255 progress toward the next level
     std::uint16_t wave;    // current wave number
+    float origin_x, origin_y; // quantization origin (near the players)
 };
 
-struct SnapshotEntry
+struct SnapshotEntry // 13 bytes packed
 {
-    std::uint32_t id; // server entity id == the network id
-    float x, y;
+    std::uint32_t id;         // server entity id == the network id
+    std::int16_t qx, qy;      // quantize_pos(pos, header origin)
+    std::uint16_t move_speed; // players: current move speed px/s (for prediction)
     std::uint8_t kind;        // proto::EntityKind
     std::uint8_t health;      // players: current hearts; others: 0..255 fraction of max health
     std::uint8_t variant;     // enemies: archetype wire id; players: max hearts; 0 otherwise
-    std::uint16_t move_speed; // players: current move speed px/s (for prediction)
 };
+#pragma pack(pop)
 // Each SnapshotEntry is immediately followed on the wire by the entity's
 // networked script components (see mod::write_networked / read_networked):
 //   uint8 count; { uint8 net_comp_id; float fields[schema.field_count] } * count

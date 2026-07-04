@@ -52,6 +52,8 @@ private:
     void send_state(std::uint32_t peer_id);
     void broadcast_snapshot();
 
+    void record_tick_time(double ms); // rolling avg/max log + over-budget warnings
+
     void spawn_enemies(float dt);
     void refresh_spawn_weights(std::uint16_t wave); // re-evaluate enemy defs' weight(wave)
     void check_level_up();
@@ -87,6 +89,14 @@ private:
     std::uint32_t tick_ = 0;
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;
+
+    std::vector<proto::SnapshotEntry> snapshot_entries_; // reused per broadcast
+
+    // Tick-time telemetry window (record_tick_time).
+    double tick_ms_sum_ = 0.0;
+    double tick_ms_max_ = 0.0;
+    std::uint32_t tick_ms_count_ = 0;
+    std::uint32_t tick_ms_over_ = 0;
 
     // Spawn table for the current wave: Lua weight/component-init callbacks run
     // once per wave (refresh_spawn_weights), the per-spawn hot path just samples

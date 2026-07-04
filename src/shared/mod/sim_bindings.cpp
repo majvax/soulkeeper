@@ -2,11 +2,14 @@
 #include "shared/mod/sim_bindings.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "shared/components/combat.hpp"
@@ -92,44 +95,43 @@ core::SparseSet* resolve_pool(const ComponentRef& ref, core::Registry& reg, cons
     return nullptr;
 }
 
+// Reusable per-iterator storage: entity snapshot + membership pools + cursor.
+// each/nearby run thousands of times per second inside Lua systems, so their
+// buffers are pooled on the world (returned by the shared_ptr deleter when the
+// Lua iterator is collected) instead of heap-allocated per call.
+struct IterScratch
+{
+    std::vector<core::Entity> ents;
+    std::vector<core::SparseSet*> pools;
+    std::size_t idx = 0;
+};
+using ScratchPool = std::vector<std::unique_ptr<IterScratch>>;
+
 // The `world` facade handed to Lua systems: runtime queries over components.
 struct ScriptWorld
 {
     core::Registry* reg;
     std::shared_ptr<BindingTable> table;
     sol::state_view lua;
+    std::shared_ptr<ScratchPool> scratch = std::make_shared<ScratchPool>();
 
     // world:each(H, ...) -> iterator over EntityHandles owning all components.
     sol::object each(sol::variadic_args va)
     {
-        std::vector<core::SparseSet*> pools;
-        pools.reserve(va.size());
-        for (const sol::stack_proxy arg : va) {
-            if (!arg.is<ComponentRef>()) {
-                throw std::runtime_error("world:each expects component handles (got a "
-                                         + std::string(sol::type_name(lua.lua_state(), arg.get_type()))
-                                         + ")");
-            }
-            pools.push_back(resolve_pool(arg.as<ComponentRef>(), *reg, *table));
-        }
+        auto s = acquire();
+        gather_pools(s->pools, va, "world:each expects component handles");
 
         const core::SparseSet* lead = nullptr;
-        bool empty = pools.empty();
-        for (core::SparseSet* p : pools) {
+        bool empty = s->pools.empty();
+        for (core::SparseSet* p : s->pools) {
             if (p == nullptr) { empty = true; break; }
             if (lead == nullptr || p->size() < lead->size()) { lead = p; }
         }
-
-        auto ents = std::make_shared<std::vector<core::Entity>>();
-        auto others = std::make_shared<std::vector<core::SparseSet*>>();
         if (!empty && lead != nullptr) {
-            ents->assign(lead->begin(), lead->end()); // snapshot: safe against edits mid-iteration
-            for (core::SparseSet* p : pools) {
-                if (p != lead) { others->push_back(p); }
-            }
+            s->ents.assign(lead->begin(), lead->end()); // snapshot: safe against edits mid-iteration
+            std::erase(s->pools, lead);                 // lead membership is implied
         }
-
-        return make_iter(ents, others);
+        return make_iter(std::move(s));
     }
 
     // world:nearby(x, y, radius, H, ...) -> iterator over entities within
@@ -138,52 +140,150 @@ struct ScriptWorld
     // behind the Lua combat/bullet/pickup systems.
     sol::object nearby(float x, float y, float radius, sol::variadic_args va)
     {
-        std::vector<core::SparseSet*> pools;
-        pools.reserve(va.size());
-        bool empty = false;
-        for (const sol::stack_proxy arg : va) {
-            if (!arg.is<ComponentRef>()) {
-                throw std::runtime_error("world:nearby expects component handles after (x, y, radius)");
-            }
-            core::SparseSet* p = resolve_pool(arg.as<ComponentRef>(), *reg, *table);
-            if (p == nullptr) { empty = true; }
-            pools.push_back(p);
-        }
+        auto s = acquire();
+        const bool empty =
+          gather_pools(s->pools, va, "world:nearby expects component handles after (x, y, radius)");
 
-        auto ents = std::make_shared<std::vector<core::Entity>>();
-        auto others = std::make_shared<std::vector<core::SparseSet*>>();
         if (!empty) {
             reg->view<WorldGrid>().each([&](core::Entity, WorldGrid& world_grid) {
-                *ents = world_grid.grid.query(x - radius, y - radius, x + radius, y + radius);
+                world_grid.grid.query(x - radius, y - radius, x + radius, y + radius, s->ents);
             });
             // Distance filter here (cheap, C++); membership filter in the iterator.
             const float r2 = radius * radius;
-            std::erase_if(*ents, [&](core::Entity e) {
+            std::erase_if(s->ents, [&](core::Entity e) {
                 const Position* pos = reg->try_get<Position>(e);
                 if (pos == nullptr) { return true; }
                 const float dx = pos->x - x;
                 const float dy = pos->y - y;
                 return (dx * dx) + (dy * dy) > r2;
             });
-            *others = pools;
         }
-        return make_iter(ents, others);
+        return make_iter(std::move(s));
+    }
+
+    // world:closest(x, y, H, ..., { without = H }) -> nearest entity owning all
+    // handles, its d² and its position (entity, d2, px, py), or nil. One
+    // boundary crossing replaces the "iterate all candidates from Lua" pattern
+    // that dominated tick time (the per-enemy nearest-player scan); returning
+    // the position spares callers a get(Position) proxy per hit. Entities
+    // without Position are ignored; `without` (a handle or array of handles)
+    // excludes owners, e.g. Downed players.
+    std::tuple<sol::object, sol::object, sol::object, sol::object> closest(float x, float y,
+                                                                           sol::variadic_args va)
+    {
+        // Called per entity from hot systems (targeting runs it per enemy) —
+        // everything lives on the stack, no heap, no scratch acquisition.
+        constexpr std::size_t max_handles = 8;
+        std::array<core::SparseSet*, max_handles> pools{};
+        std::array<core::SparseSet*, max_handles> excludes{};
+        std::size_t pool_count = 0;
+        std::size_t exclude_count = 0;
+        for (const sol::stack_proxy arg : va) {
+            if (arg.is<ComponentRef>() && pool_count < max_handles) {
+                pools[pool_count++] = resolve_pool(arg.as<ComponentRef>(), *reg, *table);
+            } else if (arg.is<sol::table>()) {
+                const sol::object without = arg.as<sol::table>()["without"];
+                if (without.is<ComponentRef>() && exclude_count < max_handles) {
+                    excludes[exclude_count++] = resolve_pool(without.as<ComponentRef>(), *reg, *table);
+                } else if (without.is<sol::table>()) {
+                    for (const auto& [_, v] : without.as<sol::table>()) {
+                        if (v.is<ComponentRef>() && exclude_count < max_handles) {
+                            excludes[exclude_count++] =
+                              resolve_pool(v.as<ComponentRef>(), *reg, *table);
+                        }
+                    }
+                }
+            } else {
+                throw std::runtime_error(
+                  "world:closest expects component handles (+ optional { without = H })");
+            }
+        }
+        const auto miss = [] {
+            return std::tuple<sol::object, sol::object, sol::object, sol::object>{
+                sol::lua_nil, sol::lua_nil, sol::lua_nil, sol::lua_nil
+            };
+        };
+
+        const core::SparseSet* lead = nullptr;
+        for (std::size_t i = 0; i < pool_count; ++i) {
+            if (pools[i] == nullptr) { return miss(); }
+            if (lead == nullptr || pools[i]->size() < lead->size()) { lead = pools[i]; }
+        }
+        if (lead == nullptr) { return miss(); }
+
+        core::Entity best{};
+        Position best_pos{};
+        float best_d2 = std::numeric_limits<float>::max();
+        bool found = false;
+        for (const core::Entity e : *lead) {
+            bool ok = true;
+            for (std::size_t i = 0; i < pool_count && ok; ++i) {
+                ok = pools[i] == lead || pools[i]->contains(e);
+            }
+            for (std::size_t i = 0; i < exclude_count && ok; ++i) {
+                ok = excludes[i] == nullptr || !excludes[i]->contains(e);
+            }
+            if (!ok) { continue; }
+            const Position* pos = reg->try_get<Position>(e);
+            if (pos == nullptr) { continue; }
+            const float dx = pos->x - x;
+            const float dy = pos->y - y;
+            const float d2 = (dx * dx) + (dy * dy);
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = e;
+                best_pos = *pos;
+                found = true;
+            }
+        }
+        if (!found) { return miss(); }
+        return { sol::make_object(lua, EntityHandle{ .reg = reg, .entity = best }),
+                 sol::make_object(lua, best_d2), sol::make_object(lua, best_pos.x),
+                 sol::make_object(lua, best_pos.y) };
     }
 
 private:
-    sol::object make_iter(std::shared_ptr<std::vector<core::Entity>> ents,
-                          std::shared_ptr<std::vector<core::SparseSet*>> pools)
+    // Returns true if any handle resolved to no pool (query can't match).
+    bool gather_pools(std::vector<core::SparseSet*>& pools, sol::variadic_args va, const char* err)
+    {
+        bool empty = false;
+        for (const sol::stack_proxy arg : va) {
+            if (!arg.is<ComponentRef>()) { throw std::runtime_error(err); }
+            core::SparseSet* p = resolve_pool(arg.as<ComponentRef>(), *reg, *table);
+            if (p == nullptr) { empty = true; }
+            pools.push_back(p);
+        }
+        return empty;
+    }
+
+    [[nodiscard]] std::shared_ptr<IterScratch> acquire()
+    {
+        std::shared_ptr<ScratchPool> pool = scratch;
+        std::unique_ptr<IterScratch> owned;
+        if (!pool->empty()) {
+            owned = std::move(pool->back());
+            pool->pop_back();
+        } else {
+            owned = std::make_unique<IterScratch>();
+        }
+        IterScratch* raw = owned.release();
+        raw->ents.clear(); // keep capacity — that's the whole point
+        raw->pools.clear();
+        raw->idx = 0;
+        return { raw, [pool](IterScratch* p) { pool->emplace_back(p); } };
+    }
+
+    sol::object make_iter(std::shared_ptr<IterScratch> s)
     {
         core::Registry* rr = reg;
         sol::state_view sv = lua;
-        auto idx = std::make_shared<std::size_t>(0);
         std::function<sol::object(sol::variadic_args)> iter =
-          [rr, ents, pools, idx, sv](sol::variadic_args) -> sol::object {
-              while (*idx < ents->size()) {
-                  const core::Entity e = (*ents)[(*idx)++];
+          [rr, s, sv](sol::variadic_args) -> sol::object {
+              while (s->idx < s->ents.size()) {
+                  const core::Entity e = s->ents[s->idx++];
                   if (!rr->valid(e)) { continue; }
                   bool ok = true;
-                  for (core::SparseSet* p : *pools) {
+                  for (core::SparseSet* p : s->pools) {
                       if (!p->contains(e)) { ok = false; break; }
                   }
                   if (ok) { return sol::make_object(sv, EntityHandle{ .reg = rr, .entity = e }); }
@@ -338,6 +438,7 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     lua.new_usertype<ScriptWorld>("_ScriptWorld", sol::no_constructor,
                                   "each", &ScriptWorld::each,
                                   "nearby", &ScriptWorld::nearby,
+                                  "closest", &ScriptWorld::closest,
                                   "wave", [reg](ScriptWorld&) {
                                       int wave = 1;
                                       reg->view<GameStats>().each(
@@ -433,7 +534,11 @@ void install_script_systems(LuaHost& host, shared::World& world)
             world.add_system(sys.order, [fn, log](core::Registry&, float dt) { log(fn(dt)); });
         } else {
             const double interval = 1.0 / sys.rate;
-            auto acc = std::make_shared<double>(0.0);
+            // `stagger` pre-fills the accumulator so same-rate systems fire on
+            // DIFFERENT ticks — without it every 30 Hz system lands on one tick
+            // and that aligned tick busts the frame budget. The first firing
+            // sees a slightly inflated dt (the pre-fill); harmless at t≈0.
+            auto acc = std::make_shared<double>(interval * std::clamp(sys.stagger, 0.0, 1.0));
             world.add_system(sys.order, [fn, log, acc, interval](core::Registry&, float dt) {
                 *acc += dt;
                 if (*acc >= interval) {

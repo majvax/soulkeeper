@@ -30,14 +30,21 @@ public:
     [[nodiscard]] std::vector<Entity> query(float left, float top, float right, float bottom) const
     {
         std::vector<Entity> result;
+        query(left, top, right, bottom, result);
+        return result;
+    }
+
+    // Same, appending into a caller-owned buffer — hot paths reuse capacity
+    // instead of allocating a fresh vector per query.
+    void query(float left, float top, float right, float bottom, std::vector<Entity>& out) const
+    {
         for (std::int32_t cy = cell(top); cy <= cell(bottom); ++cy) {
             for (std::int32_t cx = cell(left); cx <= cell(right); ++cx) {
                 if (const auto it = cells_.find(key(cx, cy)); it != cells_.end()) {
-                    result.insert(result.end(), it->second.begin(), it->second.end());
+                    out.insert(out.end(), it->second.begin(), it->second.end());
                 }
             }
         }
-        return result;
     }
 
 private:

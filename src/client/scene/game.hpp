@@ -104,7 +104,8 @@ public:
         }
 
         send_and_predict(dt);
-        anim_time_ += dt; // shared clock for all animation clips
+        anim_time_ += dt;           // shared clock for all animation clips
+        time_since_snapshot_ += dt; // drives remote interpolation (alpha toward the newest snapshot)
         return Continue;
     }
 
@@ -211,11 +212,14 @@ private:
         for (std::uint16_t i = 0; i < header->count; ++i) {
             const auto entry = reader.get<proto::SnapshotEntry>();
             if (!entry) { break; }
+            // Positions travel quantized relative to the header origin.
+            const float ex = proto::dequantize_pos(entry->qx, header->origin_x);
+            const float ey = proto::dequantize_pos(entry->qy, header->origin_y);
             // Every entry is followed by its networked script components.
             std::vector<mod::NetComp> comps = mod::read_networked(reader, engine_->mods().scripts());
 
             if (has_player_ && entry->id == my_net_id_) {
-                registry_.get<Position>(player_) = { .x = entry->x, .y = entry->y }; // snap correction
+                registry_.get<Position>(player_) = { .x = ex, .y = ey }; // snap correction
                 my_health_ = entry->health;      // current hearts
                 my_max_hearts_ = entry->variant; // max hearts
                 my_move_speed_ = entry->move_speed;
@@ -229,8 +233,8 @@ private:
             const auto it = remotes_.find(entry->id);
             if (it == remotes_.end()) {
                 const core::Entity e = registry_.create();
-                registry_.assign(e, Position{ .x = entry->x, .y = entry->y });
-                registry_.assign(e, PrevPosition{ .x = entry->x, .y = entry->y });
+                registry_.assign(e, Position{ .x = ex, .y = ey });
+                registry_.assign(e, PrevPosition{ .x = ex, .y = ey });
                 registry_.assign(e, Remote{ .kind = entry->kind, .net_id = entry->id, .health = entry->health,
                                             .variant = entry->variant });
                 remotes_[entry->id] = e;
@@ -239,15 +243,15 @@ private:
                 registry_.get<PrevPosition>(it->second) = { .x = pos.x, .y = pos.y };
                 Remote& rem = registry_.get<Remote>(it->second);
                 // Animation state from the snapshot delta: Move vs Idle + facing.
-                const float step_x = entry->x - pos.x;
-                const float step_y = entry->y - pos.y;
+                const float step_x = ex - pos.x;
+                const float step_y = ey - pos.y;
                 rem.moving = std::abs(step_x) + std::abs(step_y) > 0.1f;
                 if (step_x > 0.1f) {
                     rem.face = 1.0f;
                 } else if (step_x < -0.1f) {
                     rem.face = -1.0f;
                 }
-                pos = { .x = entry->x, .y = entry->y };
+                pos = { .x = ex, .y = ey };
                 rem.health = entry->health;
             }
         }
@@ -286,6 +290,8 @@ private:
 
         ImGui::Begin("Net", nullptr, ImGuiWindowFlags_NoBackground);
         ImGui::Text("you: %s (id %u)", engine_->session().name().c_str(), my_net_id_);
+        ImGui::Text("%.1f fps (%.2f ms)", static_cast<double>(ImGui::GetIO().Framerate),
+                    1000.0 / std::max(1.0, static_cast<double>(ImGui::GetIO().Framerate)));
         if (my_health_ == 0) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "DOWNED - respawning...");
         } else {

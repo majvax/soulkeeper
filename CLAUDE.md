@@ -68,7 +68,9 @@ modding.md         # the full modding guide (API reference, performance model, i
   `Grid → Dash → Movement` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
   slotted into named phases between the kernel systems. Snapshots broadcast at 60 Hz carry
-  `Render{kind,variant}` bytes (Lua-controlled visuals). Clients **predict** the local player
+  `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
+  (int16 half-px offsets from a player-centroid origin in the header — 13 B/entity, cap 500
+  enemies). Clients **predict** the local player
   (same `apply_input`/`tick_dash`, corrected by snapshots) and **interpolate** remotes. `Session`
   on the client mirrors control state; `GameScene` keeps a render-only `Registry`.
 - **Scenes self-drive transitions** via `engine_->scenes()` (deferred push/pop, applied at safe
@@ -91,8 +93,13 @@ guide), `mods/core/` (Soulkeeper's entire gameplay), `types/library.lua` (LSP st
   charges) need `math.floor(...)` on float arithmetic before writing back.
 - **import("name")** = require-style lazy plugin loading (folder name = namespace = import name);
   a plugin's exports are its `main()`'s return. Component-library plugins are first-class.
-- **Services**: `world:nearby(x,y,r,H…)` (kernel spatial hash), `world:wave()/add_xp`,
+- **Services**: `world:nearby(x,y,r,H…)` (kernel spatial hash), `world:closest(x,y,H…,{without=H})`
+  (nearest entity + d² + pos in ONE call — never target-scan from Lua), `world:wave()/add_xp`,
   `spawn_bullet/spawn_entity/spawn_enemy`, `KIND` table, `on_player_spawn` event (loadout hook).
+- **Perf**: system opts `rate` (Hz throttle, fn gets accumulated dt) + `stagger` (0..1, offsets
+  which tick same-rate systems fire on — unstaggered 30 Hz systems pile onto one tick and bust
+  the 8.3 ms budget). Keep rate+stagger EQUAL only for systems that must see each other's
+  same-tick writes (targeting→slow_sys). Server logs `tick avg/max ms + entities` every 5 s.
 - **Two VMs, same `mod.lua`**: sim VM (server: systems/events/apply) + render VM (client: draw
   hooks + card metadata).
 - **Deterministic wire ids** = lexicographic sort index of namespaced ids; the `mods/` set is
@@ -114,8 +121,12 @@ crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **hear
 later** · `/pause` `/resume` console.
 
 ## Dev workflow & gotchas
-- Build: `cmake -S . -B build && cmake --build build` → `bin/client`, `bin/server`. **Adding a new
-  `.cpp` requires re-running `cmake -S . -B build`** (GLOB re-scan).
+- Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
+  **Use `-j 1` (or at most 2): parallel sol2-heavy TUs OOM-kill this machine.** Adding a new
+  `.cpp` requires re-running `cmake -S . -B build` (GLOB re-scan).
+  **Never benchmark or play a Debug build** — the sol2/Lua sim is 10-50x slower at -O0 and blows
+  the tick budget by itself. The top-level CMakeLists defaults to RelWithDebInfo; a stale cache
+  can still pin Debug (check `grep CMAKE_BUILD_TYPE build/CMakeCache.txt`).
 - Run: `./bin/server` then `./bin/client [host] [name]`; host presses **ENTER** in the lobby. Client
   is **fullscreen** and loads assets by **relative path** → run from the repo root. Assets:
   `assets/sprite/{player,enemy}.png`, `assets/background.png`, optional `assets/ui/card_*.png`.

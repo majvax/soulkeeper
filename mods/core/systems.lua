@@ -3,18 +3,14 @@
 --   -> projectile -> combat -> update -> pickup -> death
 -- The kernel provides motion, the spatial hash (world:nearby), snapshots.
 return function(mod, C)
-    -- Nearest live player to (x, y), or nil. Downed players are ignored.
+    -- Nearest live player to (x, y), or nil (+ squared distance). Downed
+    -- players are ignored. world:closest is a single engine call — never loop
+    -- candidates from Lua inside a per-entity system (that pattern dominated
+    -- tick time before).
+    local LIVE = { without = Downed } -- hoisted: this runs per enemy per tick
     local function nearest_player(x, y)
-        local best, best_d2 = nil, math.huge
-        for p in world:each(Player, Position) do
-            if not p:has(Downed) then
-                local pp = p:get(Position)
-                local dx, dy = pp.x - x, pp.y - y
-                local d2 = dx * dx + dy * dy
-                if d2 < best_d2 then best, best_d2 = p, d2 end
-            end
-        end
-        return best, best_d2
+        local p, d2, px, py = world:closest(x, y, Player, Position, LIVE)
+        return p, d2 or math.huge, px, py -- keep the "no target -> infinite distance" contract
     end
 
     -- Deal hearts to a player, honoring i-frames. Returns true if it landed.
@@ -29,19 +25,48 @@ return function(mod, C)
     end
 
     ----------------------------------------------------------------- targeting
-    -- Steer every enemy toward the nearest live player at its Speed.
-    mod:system("targeting", { phase = "targeting" }, function(dt)
+    -- Steer every enemy toward the nearest live player at its Speed; ranged
+    -- enemies hold position inside their standoff ring (folded in here so the
+    -- heavy tick walks the enemy set ONCE). 30 Hz: steering staleness is
+    -- ≤ 33 ms (~6 px at max speed) — invisible.
+    -- NOTE: slow_sys also runs at 30 Hz stagger 0 ON PURPOSE — it scales the
+    -- velocity targeting just wrote, so the cadences must match exactly.
+    mod:system("targeting", { phase = "targeting", rate = 30 }, function(dt)
+        -- Hoist the (≤4) live players ONCE into plain arrays; the per-enemy
+        -- inner loop is then pure Lua arithmetic — zero engine calls. At 500
+        -- enemies even one engine call per enemy here busts the tick budget.
+        local px, py, pn = {}, {}, 0
+        for p in world:each(Player, Position) do
+            if not p:has(Downed) then
+                local pp = p:get(Position)
+                pn = pn + 1
+                px[pn], py[pn] = pp.x, pp.y
+            end
+        end
+        if pn == 0 then return end
+
         for e in world:each(Enemy, Position, Velocity, Speed) do
             local ep = e:get(Position)
-            local target = nearest_player(ep.x, ep.y)
-            if target then
-                local tp = target:get(Position)
-                local dx, dy = tp.x - ep.x, tp.y - ep.y
-                local len = math.sqrt(dx * dx + dy * dy)
-                local v, s = e:get(Velocity), e:get(Speed)
-                if len > 0 then
-                    v.dx, v.dy = dx / len * s.value, dy / len * s.value
-                end
+            local ex, ey = ep.x, ep.y
+            local best_d2, bx, by = math.huge, 0, 0
+            for i = 1, pn do
+                local dx, dy = px[i] - ex, py[i] - ey
+                local d2 = dx * dx + dy * dy
+                if d2 < best_d2 then best_d2, bx, by = d2, px[i], py[i] end
+            end
+
+            local v = e:get(Velocity)
+            local hold = false
+            if e:has(C.Ranged) then
+                local standoff = e:get(C.Ranged).standoff
+                hold = best_d2 < standoff * standoff
+            end
+            if hold then
+                v.dx, v.dy = 0, 0
+            elseif best_d2 > 0 then
+                local len = math.sqrt(best_d2)
+                local s = e:get(Speed)
+                v.dx, v.dy = (bx - ex) / len * s.value, (by - ey) / len * s.value
             end
         end
     end)
@@ -72,7 +97,10 @@ return function(mod, C)
     ---------------------------------------------------------------- projectile
     -- Bullet flight: expire by lifetime; friendly bullets hit the first enemy
     -- they overlap, hostile ones the first vulnerable player. One hit each.
-    mod:system("bullets", { phase = "projectile" }, function(dt)
+    -- 60 Hz: a bullet moves ≤ ~9 px between checks, well under the summed hit
+    -- radii; lifetimes use the accumulated dt. Staggered opposite `contact` so
+    -- the two 60 Hz systems land on alternating ticks.
+    mod:system("bullets", { phase = "projectile", rate = 60 }, function(dt)
         for b in world:each(C.Bullet, Position, Radius) do
             local bullet = b:get(C.Bullet)
             bullet.lifetime = bullet.lifetime - dt
@@ -119,7 +147,8 @@ return function(mod, C)
         end
     end)
 
-    mod:system("contact", { phase = "combat" }, function(dt)
+    -- 60 Hz: contact windows are tiny next to the 1 s i-frames.
+    mod:system("contact", { phase = "combat", rate = 60, stagger = 0.5 }, function(dt)
         for p in world:each(Player, Position, Hearts, Radius) do
             if not p:has(Downed) and not p:has(C.IFrames) then
                 local pp = p:get(Position)
@@ -161,7 +190,8 @@ return function(mod, C)
 
     -------------------------------------------------------------------- pickup
     -- Collect XP orbs into the team pool; hearts only while hurt.
-    mod:system("pickups", { phase = "pickup" }, function(dt)
+    -- 20 Hz: the 45 px pickup radius dwarfs per-50 ms player movement.
+    mod:system("pickups", { phase = "pickup", rate = 20, stagger = 0.33 }, function(dt)
         for p in world:each(Player, Position) do
             if p:has(Downed) then return end
             local pp = p:get(Position)
@@ -183,7 +213,9 @@ return function(mod, C)
     --------------------------------------------------------------------- death
     -- Enemies at 0 HP drop an XP orb (and rarely a healing heart) and die.
     -- Players at 0 hearts go Downed and respawn two waves later, fully healed.
-    mod:system("death", { phase = "death" }, function(dt)
+    -- 30 Hz: a 33 ms corpse/respawn latency is invisible. Staggered half an
+    -- interval off targeting so the two enemy-wide walks hit different ticks.
+    mod:system("death", { phase = "death", rate = 30, stagger = 0.5 }, function(dt)
         for e in world:each(Enemy, Health, Position) do
             if e:get(Health).current <= 0 then
                 local ep = e:get(Position)
@@ -219,34 +251,21 @@ return function(mod, C)
     end)
 
     ----------------------------------------------------------- ranged / object
-    -- Ranged enemies hold position once close enough (before Movement).
-    mod:system("ranged_standoff", { phase = "motion" }, function(dt)
-        for e in world:each(C.Ranged, Position, Velocity, Enemy) do
-            local r = e:get(C.Ranged)
-            local ep = e:get(Position)
-            local _, d2 = nearest_player(ep.x, ep.y)
-            if d2 < r.standoff * r.standoff then
-                local v = e:get(Velocity)
-                v.dx, v.dy = 0, 0
-            end
-        end
-    end)
-
     -- Ranged enemies fire a hostile bullet at the nearest player in range.
-    mod:system("ranged_fire", { phase = "update" }, function(dt)
+    -- (The standoff behavior lives in targeting — one enemy pass, same tick.)
+    -- 20 Hz: cooldowns are ≥ 1.2 s; the timer uses the accumulated dt.
+    mod:system("ranged_fire", { phase = "update", rate = 20, stagger = 0.66 }, function(dt)
         for e in world:each(C.Ranged, Position, Enemy) do
             local r = e:get(C.Ranged)
             r.timer = r.timer - dt
             if r.timer <= 0 then
                 local ep = e:get(Position)
-                local target, d2 = nearest_player(ep.x, ep.y)
+                local target, d2, tx, ty = nearest_player(ep.x, ep.y)
                 if target and d2 < r.range * r.range then
-                    local tp = target:get(Position)
-                    local dx, dy = tp.x - ep.x, tp.y - ep.y
-                    local len = math.sqrt(dx * dx + dy * dy)
+                    local len = math.sqrt(d2)
                     if len > 0 then
                         local b = spawn_bullet(ep.x, ep.y,
-                            dx / len * r.bullet_speed, dy / len * r.bullet_speed)
+                            (tx - ep.x) / len * r.bullet_speed, (ty - ep.y) / len * r.bullet_speed)
                         b:set(C.Bullet, {
                             damage = r.damage,
                             hostile = 1,
@@ -260,8 +279,9 @@ return function(mod, C)
         end
     end)
 
-    -- Damage aura (Onion): hurt enemies inside any player's aura, every tick.
-    mod:system("aura_sys", { phase = "update" }, function(dt)
+    -- Damage aura (Onion): hurt enemies inside any player's aura.
+    -- 20 Hz: damage scales by the accumulated dt, so DPS is unchanged.
+    mod:system("aura_sys", { phase = "update", rate = 20, stagger = 0.5 }, function(dt)
         for p in world:each(C.Aura, Position, Player) do
             local a = p:get(C.Aura)
             local pp = p:get(Position)
@@ -273,7 +293,8 @@ return function(mod, C)
     end)
 
     -- Slow field (Frost Belt): scale enemy velocity inside it (before Movement).
-    mod:system("slow_sys", { phase = "motion" }, function(dt)
+    -- 30 Hz in lockstep with targeting: it rewrites velocity, we scale it once.
+    mod:system("slow_sys", { phase = "motion", rate = 30 }, function(dt)
         for p in world:each(C.Slow, Position, Player) do
             local s = p:get(C.Slow)
             local pp = p:get(Position)

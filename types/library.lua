@@ -144,6 +144,19 @@ function world:each(...) end
 ---@return fun(): Entity|nil
 function world:nearby(x, y, radius, ...) end
 
+---Nearest entity owning ALL of the given components, with its squared
+---distance and position — ONE engine call. Use this instead of looping
+---candidates from Lua inside a per-entity system (that pattern dominates
+---tick time). An optional trailing `{ without = H }` (or `{ without = {H1,
+---H2} }`) excludes entities owning a component, e.g. Downed players:
+---`local p, d2, px, py = world:closest(x, y, Player, Position, { without = Downed })`
+---Entities without Position are ignored. All four returns are nil on no match.
+---@param x number
+---@param y number
+---@param ... Component|{ without: Component|Component[] }
+---@return Entity|nil entity, number|nil d2, number|nil px, number|nil py
+function world:closest(x, y, ...) end
+
 ---@return integer # the current wave number
 function world:wave() end
 
@@ -237,7 +250,8 @@ function DrawContext:world_to_screen(wx, wy) end
 
 ---@class SystemOpts
 ---@field phase? string   # "motion" (before Movement) or "update" (default, after Combat)
----@field rate? number    # optional throttle in Hz (default: every tick)
+---@field rate? number    # optional throttle in Hz (default: every tick); fn receives the ACCUMULATED dt
+---@field stagger? number # 0..1 fraction of the rate interval: offsets which tick this fires on, so same-rate systems spread across ticks instead of piling onto one (default 0). Systems that must see each other's same-tick writes (e.g. one rewrites a velocity another scales) keep the same rate AND stagger.
 
 ---@class EnemyOpts
 ---@field weight? number|fun(wave: integer): number # relative spawn weight, re-evaluated once per wave (default 0 = never spawns naturally)

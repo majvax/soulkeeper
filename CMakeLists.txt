@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 4.3)
 include(cmake/warning.cmake)
 
+# Default to an optimized build: the Lua/sol2 sim layer is 10-50x slower at
+# -O0, which alone blows the 120 Hz tick budget at a few hundred entities.
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
 if (NOT DEFINED CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 26)
 endif()

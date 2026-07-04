@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -35,7 +36,7 @@ namespace {
 // Spawn / wave tuning.
 constexpr float wave_duration = 15.0f;   // seconds per wave
 constexpr float spawn_distance = 600.0f; // ring radius around a player
-constexpr std::size_t max_enemies = 200;
+constexpr std::size_t max_enemies = 500;
 
 float random_angle()
 {
@@ -107,6 +108,7 @@ void GameServer::update(core::FixedTimestep& timestep)
 {
     while (timestep.consume()) {
         if (state_ != proto::GameState::Playing) { break; }
+        const auto tick_start = std::chrono::steady_clock::now();
         // Frozen while paused or during a level-up selection, but keep streaming
         // the (frozen) world so clients stay consistent.
         if (!paused_ && !leveling_) {
@@ -119,6 +121,37 @@ void GameServer::update(core::FixedTimestep& timestep)
         }
         if (tick_ % proto::snapshot_every_n_ticks == 0) { broadcast_snapshot(); }
         ++tick_;
+        record_tick_time(std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - tick_start)
+                           .count());
+    }
+}
+
+// Rolling tick-time telemetry: a 5 s summary (avg/max ms + entity count) and a
+// warning whenever a single tick blows the fixed-step budget — the yardstick
+// for every sim optimization.
+void GameServer::record_tick_time(double ms)
+{
+    constexpr double budget_ms = 1000.0 / proto::sim_hz;
+    tick_ms_sum_ += ms;
+    tick_ms_max_ = std::max(tick_ms_max_, ms);
+    ++tick_ms_count_;
+    if (ms > budget_ms) { ++tick_ms_over_; }
+    if (tick_ms_count_ >= static_cast<std::uint32_t>(proto::sim_hz) * 5) {
+        std::size_t entities = 0;
+        world_.registry().view<Position>().each([&](core::Entity, const Position&) { ++entities; });
+        if (tick_ms_over_ > 0) {
+            spdlog::warn("tick avg {:.2f}ms max {:.2f}ms ({} over {:.2f}ms budget) | {} entities",
+                         tick_ms_sum_ / tick_ms_count_, tick_ms_max_, tick_ms_over_, budget_ms,
+                         entities);
+        } else {
+            spdlog::info("tick avg {:.2f}ms max {:.2f}ms | {} entities",
+                         tick_ms_sum_ / tick_ms_count_, tick_ms_max_, entities);
+        }
+        tick_ms_sum_ = 0.0;
+        tick_ms_max_ = 0.0;
+        tick_ms_count_ = 0;
+        tick_ms_over_ = 0;
     }
 }
 
@@ -384,7 +417,25 @@ void GameServer::send_state(std::uint32_t peer_id)
 void GameServer::broadcast_snapshot()
 {
     core::Registry& registry = world_.registry();
-    std::vector<proto::SnapshotEntry> entries;
+
+    // Quantization origin: the players' centroid — positions travel as int16
+    // offsets from it (proto::quantize_pos), so it must sit near the action.
+    float origin_x = 0.0f;
+    float origin_y = 0.0f;
+    std::size_t player_count = 0;
+    registry.view<PlayerTag, Position>().each(
+      [&](core::Entity, const PlayerTag&, const Position& pos) {
+          origin_x += pos.x;
+          origin_y += pos.y;
+          ++player_count;
+      });
+    if (player_count > 0) {
+        origin_x /= static_cast<float>(player_count);
+        origin_y /= static_cast<float>(player_count);
+    }
+
+    std::vector<proto::SnapshotEntry>& entries = snapshot_entries_; // reused buffer
+    entries.clear();
     registry.view<Position>().each([&](core::Entity entity, const Position& pos) {
         // Kind + variant come straight from the kernel Render component
         // (stamped by factories, variant mutated freely by Lua).
@@ -413,9 +464,11 @@ void GameServer::broadcast_snapshot()
             }
         }
 
-        entries.push_back({ .id = entity, .x = pos.x, .y = pos.y,
-                            .kind = kind, .health = health, .variant = variant,
-                            .move_speed = move_speed });
+        entries.push_back({ .id = entity,
+                            .qx = proto::quantize_pos(pos.x, origin_x),
+                            .qy = proto::quantize_pos(pos.y, origin_y),
+                            .move_speed = move_speed,
+                            .kind = kind, .health = health, .variant = variant });
     });
 
     // Shared XP progress + wave for the HUD.
@@ -428,12 +481,17 @@ void GameServer::broadcast_snapshot()
     });
 
     proto::ByteWriter writer;
+    // Entry size + a few bytes for the networked-component blob each.
+    writer.reserve(1 + sizeof(proto::SnapshotHeader)
+                   + (entries.size() * (sizeof(proto::SnapshotEntry) + 4)));
     writer.put(proto::MsgType::Snapshot);
     writer.put(proto::SnapshotHeader{ .server_tick = tick_,
                                       .count = static_cast<std::uint16_t>(entries.size()),
                                       .level = level_,
                                       .xp_frac = xp_frac,
-                                      .wave = wave });
+                                      .wave = wave,
+                                      .origin_x = origin_x,
+                                      .origin_y = origin_y });
     // Each entry is followed by the entity's networked script components.
     for (const proto::SnapshotEntry& entry : entries) {
         writer.put(entry);
