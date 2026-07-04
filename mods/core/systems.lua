@@ -93,6 +93,35 @@ return function(mod, C)
             end
         end
     end)
+    -- mod:system("shooting", { phase = "shooting" }, function(dt)
+    --     for p in world:each(Player, Position, C.Weapon, AimState) do
+    --         local w = p:get(C.Weapon)
+    --         if w.cooldown > 0 then w.cooldown = w.cooldown - dt end
+    --         local pp = p:get(Position)
+    --         local aim = p:get(AimState)
+
+    --         local e, _, ex, ey = world:closest(pp.x, pp.y, Enemy)
+    --         if e then
+    --             local dx, dy = ex - pp.x, ey - pp.y
+    --             local len = math.sqrt(dx * dx + dy * dy)
+    --             if len > 0 and len < 500 then
+    --                 aim.dx, aim.dy = dx / len, dy / len
+    --                 aim.firing = 1
+    --             end
+    --         end
+
+    --         if aim.firing == 1 and w.cooldown <= 0 and (aim.dx ~= 0 or aim.dy ~= 0) then
+    --             local damage = w.damage
+    --             local crit = p:get(C.Crit)
+    --             local is_crit = crit and math.random() < crit.chance
+    --             if is_crit then damage = damage * crit.multiplier end
+    --             local b = spawn_bullet(pp.x, pp.y, aim.dx * w.bullet_speed, aim.dy * w.bullet_speed)
+    --             b:set(C.Bullet, { damage = damage, lifetime = w.lifetime })
+    --             if is_crit then b:get(Render).variant = 2 end
+    --             w.cooldown = w.cooldown_max
+    --         end
+    --     end
+    -- end)
 
     ---------------------------------------------------------------- projectile
     -- Bullet flight: expire by lifetime; friendly bullets hit the first enemy
@@ -302,6 +331,28 @@ return function(mod, C)
                 local v = e:get(Velocity)
                 v.dx = v.dx * s.factor
                 v.dy = v.dy * s.factor
+            end
+        end
+    end)
+
+
+    mod:system("gather_all", { phase = "pickup", rate = 5 }, function(dt)
+        -- every 50 waves, collect all
+        if world:wave() % 50 == 0 then
+            for p in world:each(Player, Position) do
+                local pp = p:get(Position)
+                for orb in world:nearby(pp.x, pp.y, 1000, C.Xp) do
+                    world:add_xp(math.tointeger(orb:get(C.Xp).value))
+                    orb:destroy()
+                end
+                local h = p:get(Hearts)
+                if h and h.current < h.max then
+                    for heart in world:nearby(pp.x, pp.y, 1000, C.Heal) do
+                        h.current = math.floor(math.min(h.max, h.current + heart:get(C.Heal).amount))
+                        heart:destroy()
+                        if h.current >= h.max then break end
+                    end
+                end
             end
         end
     end)

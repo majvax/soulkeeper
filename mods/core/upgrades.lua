@@ -33,11 +33,8 @@ return function(mod, C)
         function(e, _, amount)
             local h = e:get(Hearts)
             if h then h.max = math.floor(h.max + amount) end -- kernel int field
-            -- Scale.value is a FLOAT — no math.floor here (it would truncate
-            -- 1.3 back to 1.0 and eat the growth). floor is only for kernel
-            -- integer fields like Hearts/Dash charges.
             local s = e:get(Scale)
-            if s then s.value = math.min(1.5, s.value + 0.06 * amount) end
+            if s then s.value = s.value + 0.20 * amount end
         end,
         { value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png" })
 
