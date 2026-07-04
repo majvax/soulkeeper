@@ -672,7 +672,9 @@ private:
         if (text.empty()) { return; }
         const float tx = cx - (sprite_size * 0.4f);
         const float ty = cy - (sprite_size * 0.5f) - 22.0f;
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(tx, ty), IM_COL32(235, 235, 235, 255), text.c_str());
+        // Background list: over the world, under any window (e.g. the level-up
+        // menu) — a name tag must not float above a scene stacked on top.
+        ImGui::GetBackgroundDrawList()->AddText(ImVec2(tx, ty), IM_COL32(235, 235, 235, 255), text.c_str());
     }
 
     static constexpr float entity_size = 12.0f;

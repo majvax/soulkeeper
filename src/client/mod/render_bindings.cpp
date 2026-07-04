@@ -22,21 +22,25 @@ void DrawContext::rect(float x, float y, float w, float h, int r, int g, int b, 
     SDL_RenderFillRect(renderer, &rc);
 }
 
+// These world overlays draw into the BACKGROUND list: above the SDL-rendered
+// world but BELOW every ImGui window, so an aura or label never covers a scene
+// stacked on top (e.g. the level-up card menu). Matches rect/texture, which go
+// straight through SDL and are likewise behind the UI.
 void DrawContext::circle_filled(float cx, float cy, float radius, int r, int g, int b, int a)
 {
-    ImGui::GetForegroundDrawList()->AddCircleFilled(
+    ImGui::GetBackgroundDrawList()->AddCircleFilled(
       ImVec2(cx, cy), radius, IM_COL32(r, g, b, a));
 }
 
 void DrawContext::circle(float cx, float cy, float radius, int r, int g, int b, int a, float thickness)
 {
-    ImGui::GetForegroundDrawList()->AddCircle(
+    ImGui::GetBackgroundDrawList()->AddCircle(
       ImVec2(cx, cy), radius, IM_COL32(r, g, b, a), 0, thickness);
 }
 
 void DrawContext::text(float x, float y, const std::string& s, int r, int g, int b, int a)
 {
-    ImGui::GetForegroundDrawList()->AddText(ImVec2(x, y), IM_COL32(r, g, b, a), s.c_str());
+    ImGui::GetBackgroundDrawList()->AddText(ImVec2(x, y), IM_COL32(r, g, b, a), s.c_str());
 }
 
 sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) const
