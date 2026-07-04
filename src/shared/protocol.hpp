@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 5;
+inline constexpr std::uint16_t protocol_version = 6;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -197,7 +197,8 @@ struct SnapshotHeader
     std::uint16_t level;   // shared team level (for the HUD)
     std::uint8_t xp_frac;  // 0..255 progress toward the next level
     std::uint16_t wave;    // current wave number
-    float origin_x, origin_y; // quantization origin (near the players)
+    std::uint8_t player_count; // PlayerAim records in the trailer after the entries
+    float origin_x, origin_y;  // quantization origin (near the players)
 };
 
 struct SnapshotEntry // 14 bytes packed
@@ -210,7 +211,28 @@ struct SnapshotEntry // 14 bytes packed
     std::uint8_t variant;     // enemies: archetype wire id; players: max hearts; 0 otherwise
     std::uint8_t scale_q;     // kernel Scale x32 (1.0 -> 32, max ~8x); 0 = no Scale = 1.0
 };
+
+// Trailer after the entry array: the authoritative aim + trigger of each player,
+// so the CLIENT drives sprite facing/shoot-pose from the sim's aim (which a
+// server-side override like autofire mutates) instead of the local mouse. Kept
+// off SnapshotEntry so the 500-enemy array stays 14 B/entity — only <=4 of these.
+struct PlayerAim // 7 bytes packed
+{
+    std::uint32_t id;           // player net id (matches its SnapshotEntry)
+    std::int8_t aim_qx, aim_qy; // AimState direction, quantize_aim (x127)
+    std::uint8_t firing;        // 1 = trigger effectively held (manual or autofire)
+};
 #pragma pack(pop)
+
+// Aim direction codec: components are already normalized to [-1, 1].
+[[nodiscard]] inline std::int8_t quantize_aim(float v) noexcept
+{
+    return static_cast<std::int8_t>(std::clamp(std::lround(v * 127.0f), -127L, 127L));
+}
+[[nodiscard]] inline float dequantize_aim(std::int8_t q) noexcept
+{
+    return static_cast<float>(q) / 127.0f;
+}
 
 // Scale byte codec (32 steps per 1.0x; plenty for "grows a bit" visuals).
 inline constexpr float snapshot_scale_step = 32.0f;

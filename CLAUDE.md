@@ -71,10 +71,12 @@ modding.md         # the full modding guide (API reference, performance model, i
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
   slotted into named phases between the kernel systems. Snapshots broadcast at 60 Hz carry
   `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
-  (int16 half-px offsets from a player-centroid origin in the header — 13 B/entity, cap 500
-  enemies). Clients **predict** the local player
-  (same `apply_input`/`tick_dash`, corrected by snapshots) and **interpolate** remotes. `Session`
-  on the client mirrors control state; `GameScene` keeps a render-only `Registry`.
+  (int16 half-px offsets from a player-centroid origin in the header — 14 B/entity, cap 500
+  enemies), followed by a small **PlayerAim trailer** (≤4 × 7 B: authoritative aim dir +
+  firing bit per player, so the client drives sprite facing/shoot-pose from the SIM's aim — a
+  server-side override like autofire shows correctly — not the local mouse). Clients **predict**
+  the local player (same `apply_input`/`tick_dash`, corrected by snapshots) and **interpolate**
+  remotes. `Session` on the client mirrors control state; `GameScene` keeps a render-only `Registry`.
 - **Scenes self-drive transitions** via `engine_->scenes()` (deferred push/pop, applied at safe
   points): Lobby→Game on `Playing`; GameScene TAB pushes Console (pops itself); GameScene pushes
   LevelUp on level-up (pops itself). The Engine only hardcodes the initial `LobbyScene`.

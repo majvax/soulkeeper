@@ -440,7 +440,9 @@ void GameServer::broadcast_snapshot()
     origin_y = std::round(origin_y * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
 
     std::vector<proto::SnapshotEntry>& entries = snapshot_entries_; // reused buffer
+    std::vector<proto::PlayerAim>& aims = player_aims_;             // reused buffer
     entries.clear();
+    aims.clear();
     registry.view<Position>().each([&](core::Entity entity, const Position& pos) {
         // Kind + variant come straight from the kernel Render component
         // (stamped by factories, variant mutated freely by Lua).
@@ -467,6 +469,14 @@ void GameServer::broadcast_snapshot()
             if (const Speed* speed = registry.try_get<Speed>(entity)) {
                 move_speed = static_cast<std::uint16_t>(speed->value);
             }
+            // Authoritative aim + trigger -> trailer, so the client's sprite
+            // faces/shoots where the SIM aims (autofire etc.), not the mouse.
+            if (const AimState* aim = registry.try_get<AimState>(entity)) {
+                aims.push_back({ .id = entity,
+                                 .aim_qx = proto::quantize_aim(aim->dx),
+                                 .aim_qy = proto::quantize_aim(aim->dy),
+                                 .firing = aim->firing });
+            }
         }
 
         std::uint8_t scale_q = 0; // 0 = no Scale component = 1.0
@@ -492,15 +502,17 @@ void GameServer::broadcast_snapshot()
     });
 
     proto::ByteWriter writer;
-    // Entry size + a few bytes for the networked-component blob each.
+    // Entry size + a few bytes for the networked-component blob each + trailer.
     writer.reserve(1 + sizeof(proto::SnapshotHeader)
-                   + (entries.size() * (sizeof(proto::SnapshotEntry) + 4)));
+                   + (entries.size() * (sizeof(proto::SnapshotEntry) + 4))
+                   + (aims.size() * sizeof(proto::PlayerAim)));
     writer.put(proto::MsgType::Snapshot);
     writer.put(proto::SnapshotHeader{ .server_tick = tick_,
                                       .count = static_cast<std::uint16_t>(entries.size()),
                                       .level = level_,
                                       .xp_frac = xp_frac,
                                       .wave = wave,
+                                      .player_count = static_cast<std::uint8_t>(aims.size()),
                                       .origin_x = origin_x,
                                       .origin_y = origin_y });
     // Each entry is followed by the entity's networked script components.
@@ -508,6 +520,8 @@ void GameServer::broadcast_snapshot()
         writer.put(entry);
         mod::write_networked(writer, registry, lua_host_.scripts(), entry.id);
     }
+    // Trailer: per-player authoritative aim (see PlayerAim).
+    for (const proto::PlayerAim& aim : aims) { writer.put(aim); }
     server_.broadcast(writer.bytes(), false);
 }
 

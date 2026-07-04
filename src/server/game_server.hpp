@@ -91,6 +91,7 @@ private:
     float wave_timer_ = 0.0f;
 
     std::vector<proto::SnapshotEntry> snapshot_entries_; // reused per broadcast
+    std::vector<proto::PlayerAim> player_aims_;          // reused per broadcast (trailer)
 
     // Tick-time telemetry window (record_tick_time).
     double tick_ms_sum_ = 0.0;

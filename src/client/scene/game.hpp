@@ -37,6 +37,9 @@ struct Remote
     bool moving = false;  // position changed last snapshot -> Move vs Idle clip
     float dir_x = 1.0f;   // last movement direction — remote players' 8-way clips
     float dir_y = 0.0f;
+    float aim_x = 1.0f;   // authoritative aim (players) — facing/shoot pose off the wire
+    float aim_y = 0.0f;
+    bool firing = false;  // authoritative trigger (players) — Shoot vs Move/Idle
     float death_start = -1.0f; // anim clock when a player went down (-1 = alive)
 };
 
@@ -198,7 +201,6 @@ private:
         engine_->session().send_input(proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x,
                                                     .aim_y = aim_y, .firing = firing, .dash = dash_flag });
 
-        my_firing_ = firing != 0;
         my_moving_ = false;
 
         if (has_player_ && !downed) {
@@ -212,18 +214,20 @@ private:
             my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
 
-        // 8-way facing (twin-stick): the gun follows the cursor while firing or
-        // standing; legs win while running un-armed; a dash locks its direction.
+        // 8-way facing (twin-stick): the gun follows the AUTHORITATIVE aim (off
+        // the wire — so autofire/overrides show), legs win while running with the
+        // trigger up, and a dash locks its direction (client-predicted for snap).
+        // firing is authoritative too: the shoot pose matches when bullets fire.
         if (local_dash_.burst_remaining > 0.0f) {
             my_dir_x_ = local_dash_.dir_x;
             my_dir_y_ = local_dash_.dir_y;
-        } else if (my_moving_ && !my_firing_) {
+        } else if (my_moving_ && !auth_firing_) {
             const Velocity& vel = registry_.get<Velocity>(player_);
             my_dir_x_ = vel.dx;
             my_dir_y_ = vel.dy;
         } else {
-            my_dir_x_ = aim_x;
-            my_dir_y_ = aim_y;
+            my_dir_x_ = auth_aim_x_;
+            my_dir_y_ = auth_aim_y_;
         }
 
         // Death clip: remember when we went down, play once from there.
@@ -314,6 +318,26 @@ private:
         for (auto it = script_state_.begin(); it != script_state_.end();) {
             it = seen.contains(it->first) ? std::next(it) : script_state_.erase(it);
         }
+
+        // Trailer: authoritative per-player aim + trigger. Drives sprite facing
+        // and the shoot pose so a server-side aim override (autofire) shows up,
+        // and remote players aim correctly instead of only facing their motion.
+        for (std::uint8_t i = 0; i < header->player_count; ++i) {
+            const auto pa = reader.get<proto::PlayerAim>();
+            if (!pa) { break; }
+            const float ax = proto::dequantize_aim(pa->aim_qx);
+            const float ay = proto::dequantize_aim(pa->aim_qy);
+            if (has_player_ && pa->id == my_net_id_) {
+                auth_aim_x_ = ax;
+                auth_aim_y_ = ay;
+                auth_firing_ = pa->firing != 0;
+            } else if (const auto it = remotes_.find(pa->id); it != remotes_.end()) {
+                Remote& rem = registry_.get<Remote>(it->second);
+                rem.aim_x = ax;
+                rem.aim_y = ay;
+                rem.firing = pa->firing != 0;
+            }
+        }
         time_since_snapshot_ = 0.0f;
     }
 
@@ -388,9 +412,17 @@ private:
                   health_bar(r, x, y, rem.health);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   if (overlays) { draw_object_hooks(x, y, script_state_for(rem.net_id)); }
+                  // Same rule as the local player: aim (authoritative) unless
+                  // running with the trigger up, then face movement.
+                  float fdx = rem.aim_x;
+                  float fdy = rem.aim_y;
+                  if (rem.moving && !rem.firing) {
+                      fdx = rem.dir_x;
+                      fdy = rem.dir_y;
+                  }
                   draw_player(r, x, y,
-                              PlayerAnim{ .dir_x = rem.dir_x, .dir_y = rem.dir_y,
-                                          .moving = rem.moving, .death_start = rem.death_start },
+                              PlayerAnim{ .dir_x = fdx, .dir_y = fdy, .moving = rem.moving,
+                                          .firing = rem.firing, .death_start = rem.death_start },
                               rem.net_id, rem.scale, SDL_Color{ 220, 200, 80, 255 });
                   // Player bytes are hearts (current/max) -> bar fraction.
                   health_bar(r, x, y,
@@ -417,7 +449,7 @@ private:
                                       : -1.0f;
             draw_player(r, ox + p.x, oy + p.y,
                         PlayerAnim{ .dir_x = my_dir_x_, .dir_y = my_dir_y_, .moving = my_moving_,
-                                    .firing = my_firing_, .dash_frac = dash_frac,
+                                    .firing = auth_firing_, .dash_frac = dash_frac,
                                     .death_start = my_death_start_ },
                         my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
@@ -731,6 +763,10 @@ private:
     float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)
     float my_dir_y_ = 0.0f;
     bool my_moving_ = false;
-    bool my_firing_ = false;
+    // Authoritative aim + trigger for the local player, off the snapshot trailer
+    // (not the mouse) — so a sim-side aim override (autofire) drives the sprite.
+    float auth_aim_x_ = 1.0f;
+    float auth_aim_y_ = 0.0f;
+    bool auth_firing_ = false;
     float my_death_start_ = -1.0f; // anim clock when downed (-1 = alive)
 };
