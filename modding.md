@@ -28,8 +28,10 @@ Kernel components — available as **prelude globals**: `Position{x,y}`, `Veloci
 `Speed{value}`, `Health{current,max}` (float HP, enemies), `Hearts{current,max}` (player heart
 life), `Radius{value}`, `AimState{dx,dy,firing}`, `Dash{cooldown_max, cooldown, burst_remaining,
 shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind,variant}` (how the client draws
-an entity), `Downed{respawn_wave}`, plus the `Enemy` / `Player` tags. Kernel systems: spatial-hash
-rebuild, dash (client-predicted), movement integration. Everything else is Lua.
+an entity), `Scale{value}` (networked on-screen size multiplier — mutate it from rules like
+Vitality; visual only, `Radius` stays the hitbox), `Downed{respawn_wave}`, plus the `Enemy` /
+`Player` tags. Kernel systems: spatial-hash rebuild, dash (client-predicted), movement
+integration. Everything else is Lua.
 
 ### Plugins, exports, import()
 A plugin is a folder `mods/<name>/mod.lua` defining a global `main()`. **The folder name is the

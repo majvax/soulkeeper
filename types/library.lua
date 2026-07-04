@@ -60,6 +60,9 @@
 ---@class XpRewardFields
 ---@field value integer  # XP orb dropped on death
 
+---@class ScaleFields
+---@field value number  # on-screen size multiplier (networked; 1.0 = normal, capped ~8x on the wire). Players spawn with it; enemies multiply it onto their archetype scale. Visual only — Radius is the hitbox.
+
 -- The kernel prelude (same handles in both VMs).
 ---@type Component
 Position = nil
@@ -87,6 +90,8 @@ Downed = nil
 Enemy = nil -- membership-only tag
 ---@type Component
 Player = nil -- membership-only tag
+---@type Component
+Scale = nil
 
 ---Render.kind values for Lua-spawned drawables.
 ---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }

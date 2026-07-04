@@ -33,6 +33,7 @@ struct Remote
     std::uint8_t health;  // 0..255 fraction of max, for the health bar
     std::uint8_t variant; // enemies: archetype wire id (mod EnemyRegistry)
     float face = 1.0f;    // last horizontal direction (packs face right; -1 flips)
+    float scale = 1.0f;   // kernel Scale component (Lua-driven size, e.g. Vitality)
     bool moving = false;  // position changed last snapshot -> Move vs Idle clip
 };
 
@@ -225,6 +226,7 @@ private:
                 my_health_ = entry->health;      // current hearts
                 my_max_hearts_ = entry->variant; // max hearts
                 my_move_speed_ = entry->move_speed;
+                my_scale_ = proto::dequantize_scale(entry->scale_q);
                 script_state_[entry->id] = std::move(comps);
                 seen.insert(entry->id);
                 continue;
@@ -258,6 +260,7 @@ private:
                 }
                 pos = { .x = ex, .y = ey };
                 rem.health = entry->health;
+                rem.scale = proto::dequantize_scale(entry->scale_q);
             }
         }
 
@@ -340,7 +343,7 @@ private:
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   draw_object_hooks(x, y, script_state_for(rem.net_id));
                   draw_player(r, x, y, rem.moving, rem.face, rem.net_id,
-                              rem.variant, SDL_Color{ 220, 200, 80, 255 });
+                              rem.scale, SDL_Color{ 220, 200, 80, 255 });
                   // Player bytes are hearts (current/max) -> bar fraction.
                   health_bar(r, x, y,
                              static_cast<std::uint8_t>(rem.health * 255
@@ -362,7 +365,7 @@ private:
             const Position& p = registry_.get<Position>(player_);
             draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
             draw_player(r, ox + p.x, oy + p.y, my_moving_, my_face_, my_net_id_,
-                        my_max_hearts_, SDL_Color{ 80, 220, 100, 255 });
+                        my_scale_, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
             label(ox + p.x, oy + p.y, engine_->session().name());
         }
@@ -457,7 +460,7 @@ private:
         }
 
         if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
-            scale = def->scale;
+            scale = def->scale * rem.scale; // archetype size x dynamic kernel Scale
             tint = SDL_Color{ def->tint[0], def->tint[1], def->tint[2], 255 };
             if (!def->sprite.empty()) {
                 if (const client::SpritePack* pack = packs_.get(def->sprite)) {
@@ -483,15 +486,13 @@ private:
     }
 
     // Players: the pack declared by mods via mod:player_sprite (animated),
-    // falling back to the static player.png, then a colored square. Vitality
-    // shows: the character grows ~6% per max heart above the base 3 (capped)
-    // — max hearts ride the snapshot variant byte, so this is render-only.
+    // falling back to the static player.png, then a colored square. `scale`
+    // is the kernel Scale component off the wire — the RULES that change it
+    // (e.g. Vitality growing you per heart) live in Lua, not here.
     void draw_player(SDL_Renderer* r, float cx, float cy, bool moving, float face,
-                     std::uint32_t net_id, std::uint8_t max_hearts, SDL_Color fallback)
+                     std::uint32_t net_id, float scale, SDL_Color fallback)
     {
-        const float growth =
-          std::min(1.5f, 1.0f + (0.06f * static_cast<float>(std::max(0, max_hearts - 3))));
-        const float size = sprite_size * growth;
+        const float size = sprite_size * scale;
         const std::string& pack_path = engine_->mods().player_sprite();
         if (!pack_path.empty()) {
             if (const client::SpritePack* pack = packs_.get(pack_path)) {
@@ -623,6 +624,7 @@ private:
     std::uint8_t my_health_ = 255;     // current hearts (snapshot health byte)
     std::uint8_t my_max_hearts_ = 3;   // max hearts (snapshot variant byte)
     std::uint16_t my_move_speed_ = 0;
+    float my_scale_ = 1.0f; // kernel Scale off the wire (Lua-driven, e.g. Vitality)
     // Local dash prediction (base constants; server is authoritative).
     Dash local_dash_{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f, .burst_remaining = 0.0f,
                       .dir_x = 1.0f, .dir_y = 0.0f, .shockwave = 0.0f, .charges = 1, .max_charges = 1 };

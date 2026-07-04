@@ -363,6 +363,9 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
     // Tag components — no fields; used for membership in queries (`Enemy`, `Player`).
     register_component<EnemyTag>(lua, *table, "Enemy", [](const sol::table&) { return EnemyTag{}; });
     register_component<PlayerTag>(lua, *table, "Player", [](const sol::table&) { return PlayerTag{}; });
+    register_component<Scale>(lua, *table, "Scale",
+      [](const sol::table& t) { return Scale{ .value = t.get_or("value", 1.0f) }; },
+      "value", &Scale::value);
 
     // Write-through proxy for script component fields (strict on unknowns).
     lua.new_usertype<ScriptFieldProxy>(

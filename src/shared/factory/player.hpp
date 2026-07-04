@@ -25,5 +25,6 @@ inline core::Entity create_player(core::Registry& registry, float x, float y)
                                   .shockwave = 0.0f, .charges = 1, .max_charges = 1 });
     registry.assign(player, Render{ .kind = static_cast<std::uint8_t>(proto::EntityKind::Player),
                                     .variant = 0 });
+    registry.assign(player, Scale{ .value = 1.0f }); // Lua rules mutate it (e.g. Vitality)
     return player;
 }

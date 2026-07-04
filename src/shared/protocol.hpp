@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 4;
+inline constexpr std::uint16_t protocol_version = 5;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -200,7 +200,7 @@ struct SnapshotHeader
     float origin_x, origin_y; // quantization origin (near the players)
 };
 
-struct SnapshotEntry // 13 bytes packed
+struct SnapshotEntry // 14 bytes packed
 {
     std::uint32_t id;         // server entity id == the network id
     std::int16_t qx, qy;      // quantize_pos(pos, header origin)
@@ -208,8 +208,20 @@ struct SnapshotEntry // 13 bytes packed
     std::uint8_t kind;        // proto::EntityKind
     std::uint8_t health;      // players: current hearts; others: 0..255 fraction of max health
     std::uint8_t variant;     // enemies: archetype wire id; players: max hearts; 0 otherwise
+    std::uint8_t scale_q;     // kernel Scale x32 (1.0 -> 32, max ~8x); 0 = no Scale = 1.0
 };
 #pragma pack(pop)
+
+// Scale byte codec (32 steps per 1.0x; plenty for "grows a bit" visuals).
+inline constexpr float snapshot_scale_step = 32.0f;
+[[nodiscard]] inline std::uint8_t quantize_scale(float value) noexcept
+{
+    return static_cast<std::uint8_t>(std::clamp(std::round(value * snapshot_scale_step), 1.0f, 255.0f));
+}
+[[nodiscard]] inline float dequantize_scale(std::uint8_t q) noexcept
+{
+    return q == 0 ? 1.0f : static_cast<float>(q) / snapshot_scale_step;
+}
 // Each SnapshotEntry is immediately followed on the wire by the entity's
 // networked script components (see mod::write_networked / read_networked):
 //   uint8 count; { uint8 net_comp_id; float fields[schema.field_count] } * count

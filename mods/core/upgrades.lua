@@ -27,10 +27,14 @@ return function(mod, C)
         { value_format = "+{} SPD" })
 
     -- Raises the heart LIMIT only — it never heals (find hearts for that).
+    -- Vitality shows on the body: +6% size per heart gained (kernel Scale,
+    -- capped so late-game stacks stay reasonable). Hitbox (Radius) unchanged.
     mod:upgrade("maxhp", "Vitality", { 0, 0, 1, 1, 2 },
         function(e, _, amount)
             local h = e:get(Hearts)
             if h then h.max = math.floor(h.max + amount) end -- kernel int field
+            local s = e:get(Scale)
+            if s then s.value = math.min(1.5, s.value + 0.06 * amount) end
         end,
         { value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png" })
 

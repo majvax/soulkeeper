@@ -469,11 +469,17 @@ void GameServer::broadcast_snapshot()
             }
         }
 
+        std::uint8_t scale_q = 0; // 0 = no Scale component = 1.0
+        if (const Scale* scale = registry.try_get<Scale>(entity)) {
+            scale_q = proto::quantize_scale(scale->value);
+        }
+
         entries.push_back({ .id = entity,
                             .qx = proto::quantize_pos(pos.x, origin_x),
                             .qy = proto::quantize_pos(pos.y, origin_y),
                             .move_speed = move_speed,
-                            .kind = kind, .health = health, .variant = variant });
+                            .kind = kind, .health = health, .variant = variant,
+                            .scale_q = scale_q });
     });
 
     // Shared XP progress + wave for the HUD.

@@ -38,6 +38,14 @@ struct Render
     std::uint8_t kind, variant;
 };
 
+// On-screen size multiplier, shipped in snapshots (like Render, the engine
+// only transports it — Lua owns the rules, e.g. Vitality growing the player).
+// Absent == 1.0; enemies multiply it onto their archetype's static scale.
+struct Scale
+{
+    float value = 1.0f;
+};
+
 // XP dropped on death (copied from the enemy def at spawn; read by the Lua
 // death system and the on_enemy_death event payload).
 struct XpReward

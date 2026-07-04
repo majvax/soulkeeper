@@ -31,7 +31,8 @@ src/
     systems.hpp    #   SystemManager (ordered vector of void(Registry&,float))
   shared/          # SDL-free, used by client AND server
     components/    #   KERNEL comps only: physics(Position,PrevPosition,Velocity,Speed) combat(Health[enemies],
-                   #   Hearts[players],Radius,AimState,Dash,Render{kind,variant},XpReward,EnemyTag)
+                   #   Hearts[players],Radius,AimState,Dash,Render{kind,variant},Scale[wire size
+                   #   multiplier, Lua-mutated],XpReward,EnemyTag)
                    #   gameplay(PlayerTag, ObjectInventory, WorldGrid[spatial-hash singleton])
                    #   progression(GameStats{xp,wave}, Downed{respawn_wave})
     system/        #   KERNEL systems only: grid (spatial rebuild), dash, movement
