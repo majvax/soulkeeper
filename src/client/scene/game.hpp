@@ -16,7 +16,9 @@
 #include <cstdint>
 #include <imgui.h>
 #include <iterator>
+#include <limits>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -243,12 +245,15 @@ private:
                 registry_.get<PrevPosition>(it->second) = { .x = pos.x, .y = pos.y };
                 Remote& rem = registry_.get<Remote>(it->second);
                 // Animation state from the snapshot delta: Move vs Idle + facing.
+                // The flip needs a full quantization step (0.5 px) of hysteresis
+                // — a nearly-vertical chase has a tiny alternating-sign x step
+                // that would otherwise thrash the sprite left/right.
                 const float step_x = ex - pos.x;
                 const float step_y = ey - pos.y;
                 rem.moving = std::abs(step_x) + std::abs(step_y) > 0.1f;
-                if (step_x > 0.1f) {
+                if (step_x > 0.5f) {
                     rem.face = 1.0f;
-                } else if (step_x < -0.1f) {
+                } else if (step_x < -0.5f) {
                     rem.face = -1.0f;
                 }
                 pos = { .x = ex, .y = ey };
@@ -310,6 +315,21 @@ private:
         SDL_Texture* enemy_tex = textures_.get(asset_enemy);
 
         const float t = std::min(time_since_snapshot_ * static_cast<float>(proto::snapshot_hz), 1.0f);
+
+        // Player screen positions (self + remotes), for idle enemies that turn
+        // toward the nearest player (archers at standoff).
+        player_screen_.clear();
+        if (has_player_) {
+            const Position& me = registry_.get<Position>(player_);
+            player_screen_.push_back({ ox + me.x, oy + me.y });
+        }
+        registry_.view<Position, PrevPosition, Remote>().each(
+          [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
+              if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
+                  player_screen_.push_back({ ox + prev.x + ((p.x - prev.x) * t),
+                                             oy + prev.y + ((p.y - prev.y) * t) });
+              }
+          });
         registry_.view<Position, PrevPosition, Remote>().each(
           [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
               const float x = ox + prev.x + ((p.x - prev.x) * t);
@@ -413,6 +433,29 @@ private:
         float scale = 1.0f;
         SDL_Color tint{ 255, 255, 255, 255 };
         SDL_Texture* tex = shared_tex;
+        // A standing enemy (archer at standoff) faces the nearest player, with
+        // an 8 px deadband so walking right past it flips the sprite once, not
+        // rapidly. Movement facing (rem.face) wins whenever it moves.
+        float face = rem.face;
+        if (!rem.moving) {
+            float best_d2 = std::numeric_limits<float>::max();
+            float best_dx = 0.0f;
+            for (const auto& [px, py] : player_screen_) {
+                const float dx = px - cx;
+                const float dy = py - cy;
+                const float d2 = (dx * dx) + (dy * dy);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best_dx = dx;
+                }
+            }
+            if (best_dx > 8.0f) {
+                face = 1.0f;
+            } else if (best_dx < -8.0f) {
+                face = -1.0f;
+            }
+        }
+
         if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
             scale = def->scale;
             tint = SDL_Color{ def->tint[0], def->tint[1], def->tint[2], 255 };
@@ -420,7 +463,7 @@ private:
                 if (const client::SpritePack* pack = packs_.get(def->sprite)) {
                     if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
                         client::draw_clip(r, *clip, cx, cy, sprite_size * scale,
-                                          anim_time_ + phase_offset(rem.net_id), rem.face < 0, tint);
+                                          anim_time_ + phase_offset(rem.net_id), face < 0, tint);
                         return;
                     }
                 }
@@ -558,6 +601,7 @@ private:
 
     client::Textures textures_;
     client::SpritePacks packs_{ &textures_ }; // animation packs (Idle/Move strips)
+    std::vector<std::pair<float, float>> player_screen_; // per-frame player positions (idle facing)
     client::DrawContext draw_ctx_;  // reused surface for plugin draw hooks
     sol::object ctx_obj_;           // persistent Lua handle to draw_ctx_
     InputState input_;

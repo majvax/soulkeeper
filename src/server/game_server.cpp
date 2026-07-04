@@ -433,6 +433,11 @@ void GameServer::broadcast_snapshot()
         origin_x /= static_cast<float>(player_count);
         origin_y /= static_cast<float>(player_count);
     }
+    // Snap the origin to the quantization grid: with a free-moving origin the
+    // rounded offset of a STATIONARY entity oscillates ±0.25 px between
+    // snapshots (visible as sprite facing/idle flicker on the client).
+    origin_x = std::round(origin_x * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
+    origin_y = std::round(origin_y * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
 
     std::vector<proto::SnapshotEntry>& entries = snapshot_entries_; // reused buffer
     entries.clear();

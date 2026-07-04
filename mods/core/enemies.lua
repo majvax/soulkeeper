@@ -13,7 +13,7 @@
 -- Health scaling: +15% per wave.
 local function health(base)
     return function(wave)
-        local h = base * (1 + 0.15 * (wave - 1))
+        local h = base * (1 + 0.05 * (wave - 1))
         return { current = h, max = h }
     end
 end
