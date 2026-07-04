@@ -35,6 +35,21 @@ struct Remote
     float face = 1.0f;    // last horizontal direction (packs face right; -1 flips)
     float scale = 1.0f;   // kernel Scale component (Lua-driven size, e.g. Vitality)
     bool moving = false;  // position changed last snapshot -> Move vs Idle clip
+    float dir_x = 1.0f;   // last movement direction — remote players' 8-way clips
+    float dir_y = 0.0f;
+    float death_start = -1.0f; // anim clock when a player went down (-1 = alive)
+};
+
+// Everything draw_player needs to pick a clip in the directional player pack.
+// Remotes only know movement (+ downed via hearts); firing/dash are local-only.
+struct PlayerAnim
+{
+    float dir_x = 1.0f;
+    float dir_y = 0.0f;
+    bool moving = false;
+    bool firing = false;
+    float dash_frac = -1.0f;   // 0..1 burst progress, < 0 = not dashing
+    float death_start = -1.0f; // anim clock at down time, < 0 = alive
 };
 
 class GameScene : public client::Scene
@@ -183,12 +198,7 @@ private:
         engine_->session().send_input(proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x,
                                                     .aim_y = aim_y, .firing = firing, .dash = dash_flag });
 
-        // The local character faces the cursor (twin-stick), not its velocity.
-        if (aim_x > 0.05f) {
-            my_face_ = 1.0f;
-        } else if (aim_x < -0.05f) {
-            my_face_ = -1.0f;
-        }
+        my_firing_ = firing != 0;
         my_moving_ = false;
 
         if (has_player_ && !downed) {
@@ -201,6 +211,24 @@ private:
             pos.y += vel.dy * dt;
             my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
+
+        // 8-way facing (twin-stick): the gun follows the cursor while firing or
+        // standing; legs win while running un-armed; a dash locks its direction.
+        if (local_dash_.burst_remaining > 0.0f) {
+            my_dir_x_ = local_dash_.dir_x;
+            my_dir_y_ = local_dash_.dir_y;
+        } else if (my_moving_ && !my_firing_) {
+            const Velocity& vel = registry_.get<Velocity>(player_);
+            my_dir_x_ = vel.dx;
+            my_dir_y_ = vel.dy;
+        } else {
+            my_dir_x_ = aim_x;
+            my_dir_y_ = aim_y;
+        }
+
+        // Death clip: remember when we went down, play once from there.
+        if (downed && my_death_start_ < 0.0f) { my_death_start_ = anim_time_; }
+        if (!downed) { my_death_start_ = -1.0f; }
     }
 
     void apply_snapshot(proto::ByteReader& reader)
@@ -258,9 +286,20 @@ private:
                 } else if (step_x < -0.5f) {
                     rem.face = -1.0f;
                 }
+                // Remote players' 8-way clips follow their movement; steps under
+                // a quantization step are noise and keep the previous direction.
+                if (std::abs(step_x) + std::abs(step_y) > 0.5f) {
+                    rem.dir_x = step_x;
+                    rem.dir_y = step_y;
+                }
                 pos = { .x = ex, .y = ey };
                 rem.health = entry->health;
                 rem.scale = proto::dequantize_scale(entry->scale_q);
+                if (entry->kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
+                    // Downed players stay in the snapshot with 0 hearts.
+                    if (entry->health == 0 && rem.death_start < 0.0f) { rem.death_start = anim_time_; }
+                    if (entry->health != 0) { rem.death_start = -1.0f; }
+                }
             }
         }
 
@@ -342,8 +381,10 @@ private:
                   health_bar(r, x, y, rem.health);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                   draw_object_hooks(x, y, script_state_for(rem.net_id));
-                  draw_player(r, x, y, rem.moving, rem.face, rem.net_id,
-                              rem.scale, SDL_Color{ 220, 200, 80, 255 });
+                  draw_player(r, x, y,
+                              PlayerAnim{ .dir_x = rem.dir_x, .dir_y = rem.dir_y,
+                                          .moving = rem.moving, .death_start = rem.death_start },
+                              rem.net_id, rem.scale, SDL_Color{ 220, 200, 80, 255 });
                   // Player bytes are hearts (current/max) -> bar fraction.
                   health_bar(r, x, y,
                              static_cast<std::uint8_t>(rem.health * 255
@@ -364,8 +405,14 @@ private:
         if (has_player_) {
             const Position& p = registry_.get<Position>(player_);
             draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
-            draw_player(r, ox + p.x, oy + p.y, my_moving_, my_face_, my_net_id_,
-                        my_scale_, SDL_Color{ 80, 220, 100, 255 });
+            const float dash_frac = local_dash_.burst_remaining > 0.0f
+                                      ? 1.0f - (local_dash_.burst_remaining / DASH_DURATION)
+                                      : -1.0f;
+            draw_player(r, ox + p.x, oy + p.y,
+                        PlayerAnim{ .dir_x = my_dir_x_, .dir_y = my_dir_y_, .moving = my_moving_,
+                                    .firing = my_firing_, .dash_frac = dash_frac,
+                                    .death_start = my_death_start_ },
+                        my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
             label(ox + p.x, oy + p.y, engine_->session().name());
         }
@@ -489,16 +536,53 @@ private:
     // falling back to the static player.png, then a colored square. `scale`
     // is the kernel Scale component off the wire — the RULES that change it
     // (e.g. Vitality growing you per heart) live in Lua, not here.
-    void draw_player(SDL_Renderer* r, float cx, float cy, bool moving, float face,
+    //
+    // Directional packs (clips named <State>_<Dir8>) pick by state priority
+    // Death > Dash > MoveShoot > Shoot > Move > Idle; a pack with only plain
+    // Idle/Move clips keeps the legacy right-facing + flip behavior.
+    void draw_player(SDL_Renderer* r, float cx, float cy, const PlayerAnim& anim,
                      std::uint32_t net_id, float scale, SDL_Color fallback)
     {
         const float size = sprite_size * scale;
         const std::string& pack_path = engine_->mods().player_sprite();
         if (!pack_path.empty()) {
             if (const client::SpritePack* pack = packs_.get(pack_path)) {
-                if (const client::AnimClip* clip = pick_clip(*pack, moving)) {
-                    client::draw_clip(r, *clip, cx, cy, size,
-                                      anim_time_ + phase_offset(net_id), face < 0);
+                const std::string_view dir = client::dir8_name(anim.dir_x, anim.dir_y);
+                const client::AnimClip* clip = nullptr;
+                float time = anim_time_ + phase_offset(net_id);
+                float fps = 12.0f;
+                bool once = false;
+                if (anim.death_start >= 0.0f) {
+                    clip = pack->directional("Death", dir);
+                    time = anim_time_ - anim.death_start;
+                    fps = 10.0f; // 8 frames -> a 0.8 s collapse, then freeze
+                    once = true;
+                } else if (anim.dash_frac >= 0.0f) {
+                    clip = pack->directional("Dash", dir);
+                    if (clip != nullptr) {
+                        // Map burst progress straight onto the strip: fps=frames
+                        // makes time=frac select frame frac*frames.
+                        time = anim.dash_frac;
+                        fps = static_cast<float>(clip->frames);
+                        once = true;
+                    }
+                }
+                if (clip == nullptr && anim.death_start < 0.0f) {
+                    clip = anim.firing ? pack->directional(anim.moving ? "MoveShoot" : "Shoot", dir)
+                                       : pack->directional(anim.moving ? "Move" : "Idle", dir);
+                }
+                if (clip != nullptr) {
+                    // Same-box drop shadow first, if the pack ships one.
+                    if (const client::AnimClip* shadow = pack->clip("Shadow")) {
+                        client::draw_clip(r, *shadow, cx, cy, size, 0.0f, false);
+                    }
+                    client::draw_clip(r, *clip, cx, cy, size, time, false,
+                                      SDL_Color{ 255, 255, 255, 255 }, fps, once);
+                    return;
+                }
+                if (const client::AnimClip* legacy = pick_clip(*pack, anim.moving)) {
+                    client::draw_clip(r, *legacy, cx, cy, size,
+                                      anim_time_ + phase_offset(net_id), anim.dir_x < 0.0f);
                     return;
                 }
             }
@@ -635,6 +719,9 @@ private:
     std::uint16_t wave_ = 1;
     float time_since_snapshot_ = 0.0f;
     float anim_time_ = 0.0f;   // drives every animation clip
-    float my_face_ = 1.0f;     // local character faces the cursor
+    float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)
+    float my_dir_y_ = 0.0f;
     bool my_moving_ = false;
+    bool my_firing_ = false;
+    float my_death_start_ = -1.0f; // anim clock when downed (-1 = alive)
 };

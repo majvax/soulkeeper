@@ -324,9 +324,14 @@ function Mod:enemy(name, label, opts) end
 
 ---Declare the player character's visuals: an animation-pack folder (of
 ---<Clip>_<N>x1.png strips) or a static .png. The engine handles frame
----slicing, Idle/Move switching and facing — no animation code in Lua.
+---slicing, state switching and facing — no animation code in Lua.
+---A DIRECTIONAL pack names clips <State>_<Dir8> (states Idle/Move/Shoot/
+---MoveShoot/Dash/Death; dirs Down/DownLeft/Left/UpLeft/Up/UpRight/Right/
+---DownRight — pure Left/Right optional, the Down diagonal substitutes) plus
+---an optional Shadow_1x1.png; the engine picks state and 8-way direction
+---(aim/movement/dash/downed). A plain Idle/Move pack keeps right-facing+flip.
 ---Render-VM metadata only (not part of the plugin hash); last call wins.
----@param path string  # e.g. "assets/sprite/Knight_LVL1"
+---@param path string  # e.g. "assets/sprite/player"
 function Mod:player_sprite(path) end
 
 ---Subscribe to a game event. Engine events (server-side):

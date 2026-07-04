@@ -183,8 +183,19 @@ face right), staggers animation phases so a wave doesn't move in lockstep, and s
 keeping pixel aspect. A plain `.png` path still works as a static sprite, and a missing pack falls
 back gracefully (static texture → colored rect).
 
+**Directional player packs.** For a fuller player character, name clips `<State>_<Dir8>` instead of
+just `Idle`/`Move`. Recognized states, in priority order: **Death > Dash > MoveShoot > Shoot > Move
+> Idle** — the engine picks by the local player's aim/movement/dash/downed state (`Shoot`/`MoveShoot`
+while firing, `Dash` once during the burst, `Death` on down). The eight `Dir8` suffixes are
+`Down DownLeft Left UpLeft Up UpRight Right DownRight`; the engine chooses the compass sector the
+player faces (aim while armed, legs while running, dash direction while dashing) — **no left/right
+flip**, so up/down/diagonal poses read correctly. Pure `Left`/`Right` are optional: if absent the
+matching Down-diagonal substitutes. An optional `Shadow_1x1.png` draws under every frame. Dash and
+Death play **once** (Death freezes on its last frame). A pack that ships only plain `Idle`/`Move`
+keeps the legacy right-facing-with-flip path.
+
 ```lua
-mod:player_sprite("assets/sprite/Knight_LVL1")
+mod:player_sprite("assets/sprite/player") -- directional: Idle_Down_8x1, Move_UpRight_8x1, …
 mod:enemy("brute", "Brute", { sprite = "assets/sprite/RhinoMonster_01_Regular", scale = 1.5 })
 ```
 

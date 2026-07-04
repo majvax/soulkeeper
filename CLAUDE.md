@@ -55,7 +55,8 @@ src/
     session.hpp    #   client net control-plane: connect/reconnect, drains net, roster/state/id, latest snapshot, send_*
     ui.hpp / renderer.hpp   # ImGuiLayer RAII; Textures cache (stb_image, image-or-rect fallback)
     sprites.hpp             # SpritePacks: auto-discovers <Clip>_<N>x1.png strip folders; draw_clip
-                            #   (frame slicing, Idle/Move, right-facing flip) — Lua only names the folder
+                            #   (frame slicing, Idle/Move OR 8-way <State>_<Dir8> directional packs,
+                            #   right-facing flip, play-once) — Lua only names the folder
     mod/render_bindings.*   # render VM bindings: draw ctx (texture/rect/circle/text) + player view
     scene/{lobby,game,console,level_up}.hpp
   client.cpp       # ~15-line bootstrap: argv host/name -> Engine::create -> run()
@@ -132,8 +133,13 @@ later** · `/pause` `/resume` console.
   is **fullscreen** and loads assets by **relative path** → run from the repo root. Assets:
   `assets/sprite/{player,enemy}.png`, `assets/background.png`, optional `assets/ui/card_*.png`.
   **Animation packs**: `assets/sprite/<Pack>/` folders of `<Clip>_<N>x1.png` horizontal strips
-  (every pack has Idle+Move; all face RIGHT). An enemy's `sprite` opt or `mod:player_sprite(path)`
-  names the folder — `client/sprites.hpp` handles frames/state/facing; Lua never animates.
+  (enemy packs have Idle+Move, all face RIGHT + flip). A **directional player pack** names clips
+  `<State>_<Dir8>` (states Idle/Move/Shoot/MoveShoot/Dash/Death; 8 compass dirs, pure Left/Right
+  optional → Down-diagonal substitutes) + optional `Shadow_1x1.png`; the engine picks state (by
+  aim/movement/dash/downed) and 8-way direction — no flip. An enemy's `sprite` opt or
+  `mod:player_sprite(path)` names the folder — `client/sprites.hpp` handles frames/state/facing/
+  play-once; Lua never animates. (`assets/sprite/player/_unused/` holds the raw source sheets +
+  unused weapon/dust/shadow variants — inert; the loader scans top-level strips only.)
 - **Testing without a display:**
   - Gameplay logic → standalone sim test, SDL-free: `g++ -std=c++26 -I src test.cpp` (build a World,
     step it, assert on components).

@@ -1,7 +1,10 @@
 #pragma once
 #include "client/renderer.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <array>
 #include <charconv>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -42,7 +45,40 @@ struct SpritePack
         }
         return nullptr;
     }
+
+    // Directional lookup: "<base>_<Dir8>". Packs may ship only 6 directions
+    // (no pure Left/Right — e.g. idle/dash/death sets); those borrow the
+    // Down-diagonal, then Down, before giving up. nullptr means the pack is
+    // not directional for this base — caller falls back to Idle/Move + flip.
+    [[nodiscard]] const AnimClip* directional(std::string_view base, std::string_view dir) const
+    {
+        std::string name;
+        name.reserve(base.size() + dir.size() + 1);
+        name.append(base).push_back('_');
+        name.append(dir);
+        if (const AnimClip* c = clip(name)) { return c; }
+        if (dir == "Left" || dir == "Right") {
+            name.resize(base.size() + 1);
+            name.append(dir == "Left" ? "DownLeft" : "DownRight");
+            if (const AnimClip* c = clip(name)) { return c; }
+        }
+        name.resize(base.size() + 1);
+        name.append("Down");
+        return clip(name);
+    }
 };
+
+// 8-way direction name from a vector (screen space: +y is down). Sector 0 is
+// Right, going clockwise on screen every 45 degrees.
+[[nodiscard]] inline std::string_view dir8_name(float dx, float dy)
+{
+    static constexpr std::array<std::string_view, 8> names{
+        "Right", "DownRight", "Down", "DownLeft", "Left", "UpLeft", "Up", "UpRight",
+    };
+    constexpr float sector_rad = 0.785398163f; // pi/4
+    const int sector = static_cast<int>(std::lround(std::atan2(dy, dx) / sector_rad));
+    return names[(sector + 8) % 8];
+}
 
 // Discovers and caches animation packs. A pack path is a directory; every
 // *_<N>x1.png inside becomes a clip (frame width = texture width / N). Misses
@@ -104,11 +140,13 @@ private:
 
 // Draw one animated clip centered on (cx, cy), scaled to target_h keeping the
 // frame's pixel aspect. Packs face RIGHT; flip mirrors for leftward movement.
+// `once` clamps on the last frame instead of looping (death, dash bursts).
 inline void draw_clip(SDL_Renderer* r, const AnimClip& c, float cx, float cy, float target_h,
-                      float time, bool flip, SDL_Color tint = { 255, 255, 255, 255 })
+                      float time, bool flip, SDL_Color tint = { 255, 255, 255, 255 },
+                      float fps = 12.0f, bool once = false)
 {
-    constexpr float fps = 12.0f;
-    const int frame = c.frames > 1 ? static_cast<int>(time * fps) % c.frames : 0;
+    int frame = c.frames > 1 ? static_cast<int>(time * fps) : 0;
+    frame = once ? std::min(frame, c.frames - 1) : frame % std::max(1, c.frames);
     const SDL_FRect src{ .x = static_cast<float>(frame) * c.frame_w, .y = 0.0f,
                          .w = c.frame_w, .h = c.frame_h };
     const float w = c.frame_w * (target_h / c.frame_h);
