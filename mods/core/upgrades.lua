@@ -29,10 +29,13 @@ return function(mod, C)
     -- Raises the heart LIMIT only — it never heals (find hearts for that).
     -- Vitality shows on the body: +6% size per heart gained (kernel Scale,
     -- capped so late-game stacks stay reasonable). Hitbox (Radius) unchanged.
-    mod:upgrade("maxhp", "Vitality", { 0, 0, 1, 1, 2 },
+    mod:upgrade("maxhp", "Vitality", { 5, 0, 1, 1, 2 },
         function(e, _, amount)
             local h = e:get(Hearts)
             if h then h.max = math.floor(h.max + amount) end -- kernel int field
+            -- Scale.value is a FLOAT — no math.floor here (it would truncate
+            -- 1.3 back to 1.0 and eat the growth). floor is only for kernel
+            -- integer fields like Hearts/Dash charges.
             local s = e:get(Scale)
             if s then s.value = math.min(1.5, s.value + 0.06 * amount) end
         end,
