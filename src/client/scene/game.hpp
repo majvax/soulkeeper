@@ -356,6 +356,13 @@ private:
 
         SDL_Texture* enemy_tex = textures_.get(asset_enemy);
 
+        // ImGui draw-list overlays (name labels, plugin aura hooks) composite
+        // after ALL SDL — including a scene stacked above us that draws with SDL
+        // (the level-up menu). Only emit them when we're the top scene, else
+        // they'd float over that menu. The world itself still renders (dimmed
+        // behind the menu); we skip only the ImGui-list bits that would bleed.
+        const bool overlays = engine_->scenes().is_top(this);
+
         const float t = std::min(time_since_snapshot_ * static_cast<float>(proto::snapshot_hz), 1.0f);
 
         // Player screen positions (self + remotes), for idle enemies that turn
@@ -380,7 +387,7 @@ private:
                   draw_enemy(r, x, y, enemy_tex, rem);
                   health_bar(r, x, y, rem.health);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
-                  draw_object_hooks(x, y, script_state_for(rem.net_id));
+                  if (overlays) { draw_object_hooks(x, y, script_state_for(rem.net_id)); }
                   draw_player(r, x, y,
                               PlayerAnim{ .dir_x = rem.dir_x, .dir_y = rem.dir_y,
                                           .moving = rem.moving, .death_start = rem.death_start },
@@ -389,7 +396,7 @@ private:
                   health_bar(r, x, y,
                              static_cast<std::uint8_t>(rem.health * 255
                                                        / std::max<int>(1, rem.variant)));
-                  label(x, y, engine_->session().name_of(rem.net_id));
+                  if (overlays) { label(x, y, engine_->session().name_of(rem.net_id)); }
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
                   draw_projectile(r, x, y, rem.variant);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
@@ -404,7 +411,7 @@ private:
 
         if (has_player_) {
             const Position& p = registry_.get<Position>(player_);
-            draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_));
+            if (overlays) { draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_)); }
             const float dash_frac = local_dash_.burst_remaining > 0.0f
                                       ? 1.0f - (local_dash_.burst_remaining / DASH_DURATION)
                                       : -1.0f;
@@ -414,7 +421,7 @@ private:
                                     .death_start = my_death_start_ },
                         my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
             health_bar(r, ox + p.x, oy + p.y, my_health_);
-            label(ox + p.x, oy + p.y, engine_->session().name());
+            if (overlays) { label(ox + p.x, oy + p.y, engine_->session().name()); }
         }
     }
 

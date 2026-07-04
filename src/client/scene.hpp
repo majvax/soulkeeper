@@ -69,6 +69,15 @@ public:
 
     [[nodiscard]] bool empty() const { return scenes_.empty(); }
 
+    // True when `scene` is the topmost (front) scene. A scene uses this to skip
+    // overlay drawing when another scene is stacked above it — ImGui draw-list
+    // overlays (labels, plugin auras) composite after ALL SDL rendering, so
+    // they'd otherwise bleed over a scene drawn on top (e.g. the level-up menu).
+    [[nodiscard]] bool is_top(const Scene* scene) const
+    {
+        return !scenes_.empty() && scenes_.front().get() == scene;
+    }
+
     void handle_event(const SDL_Event& event)
     {
         for (auto& scene : scenes_) {
