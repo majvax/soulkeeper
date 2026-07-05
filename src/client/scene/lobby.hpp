@@ -41,12 +41,14 @@ public:
             ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "Mod set mismatch — join refused.");
             ImGui::Text("server mods: %016llx", static_cast<unsigned long long>(session.server_mods_hash()));
             ImGui::Text("your mods:   %016llx", static_cast<unsigned long long>(session.mods_hash()));
-            ImGui::TextUnformatted("Your mods/ folder must match the server's. Fix it and restart.");
+            ImGui::TextUnformatted("Your mods/ folder must match the server's.");
+            if (ImGui::Button("Back")) { go_back(); }
             ImGui::End();
             return Continue;
         }
         if (!session.connected()) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "connecting...");
+            if (ImGui::Button("Back")) { go_back(); }
         }
         ImGui::Text("Players (%zu):", session.roster().size());
         ImGui::Separator();
@@ -60,6 +62,16 @@ public:
         return Continue;
     }
 
+private:
+    // Return to the Connect menu: drop the connection and pop ourselves, which
+    // reveals the ConnectScene that pushed us (its fields intact underneath).
+    void go_back()
+    {
+        engine_->session().disconnect();
+        engine_->scenes().pop();
+    }
+
+public:
     LobbyScene(const LobbyScene&) = delete;
     LobbyScene(LobbyScene&&) = delete;
     LobbyScene& operator=(const LobbyScene&) = delete;

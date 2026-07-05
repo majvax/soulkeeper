@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 6;
+inline constexpr std::uint16_t protocol_version = 7;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -216,11 +216,17 @@ struct SnapshotEntry // 14 bytes packed
 // so the CLIENT drives sprite facing/shoot-pose from the sim's aim (which a
 // server-side override like autofire mutates) instead of the local mouse. Kept
 // off SnapshotEntry so the 500-enemy array stays 14 B/entity — only <=4 of these.
-struct PlayerAim // 7 bytes packed
+// Now also carries each player's authoritative dash state: the game (Lua) sets
+// max_charges/cooldown_max, which the client's dash prediction + HUD can't guess.
+struct PlayerAim // 13 bytes packed
 {
-    std::uint32_t id;           // player net id (matches its SnapshotEntry)
-    std::int8_t aim_qx, aim_qy; // AimState direction, quantize_aim (x127)
-    std::uint8_t firing;        // 1 = trigger effectively held (manual or autofire)
+    std::uint32_t id;             // player net id (matches its SnapshotEntry)
+    std::int8_t aim_qx, aim_qy;   // AimState direction, quantize_aim (x127)
+    std::uint8_t firing;          // 1 = trigger effectively held (manual or autofire)
+    std::uint8_t dash_charges;    // Dash.charges (ready dashes)
+    std::uint8_t dash_max;        // Dash.max_charges
+    std::uint16_t dash_cd_ms;     // Dash.cooldown, ms until the next charge
+    std::uint16_t dash_cd_max_ms; // Dash.cooldown_max, ms per charge refill
 };
 #pragma pack(pop)
 
@@ -232,6 +238,16 @@ struct PlayerAim // 7 bytes packed
 [[nodiscard]] inline float dequantize_aim(std::int8_t q) noexcept
 {
     return static_cast<float>(q) / 127.0f;
+}
+
+// Seconds <-> milliseconds (u16) for dash cooldown on the wire (0..65.535 s).
+[[nodiscard]] inline std::uint16_t seconds_to_ms(float s) noexcept
+{
+    return static_cast<std::uint16_t>(std::clamp(std::lround(s * 1000.0f), 0L, 65535L));
+}
+[[nodiscard]] inline float ms_to_seconds(std::uint16_t ms) noexcept
+{
+    return static_cast<float>(ms) / 1000.0f;
 }
 
 // Scale byte codec (32 steps per 1.0x; plenty for "grows a bit" visuals).

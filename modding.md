@@ -237,6 +237,39 @@ ctx:circle_filled(cx, cy, rad, r, g, b, a)     ctx:circle(cx, cy, rad, r, g, b, 
 ctx:text(x, y, str, r, g, b, a)                ctx:world_to_screen(wx, wy) -> sx, sy
 ```
 
+### HUD hooks (`mod:hud`)
+
+`mod:hud(function(hud, view) … end)` runs once per frame on the client, for the **local** player.
+The hook opens its **own** window with `begin_panel`/`end_panel` (fixed, borderless, non-movable,
+top-left by default — separate from the built-in "Net" debug window). `view:get(H)` reads:
+- **networked script components** — mark a stats component `{ networked = true }` to show live
+  upgrade values (e.g. `core`'s Weapon/Crit); and
+- the local player's **kernel** handles — `Position`, `Speed`, `Hearts`, `Dash`, `Scale` (same
+  field names as the server), which the client already has for itself.
+
+Drawing primitives (`end` is a Lua keyword → `end_panel`):
+```
+hud:begin_panel(title, [x], [y])   hud:end_panel()      hud:same_line()
+hud:text(str)                      hud:text_colored(r,g,b, str)     hud:separator()
+hud:image(path, size)              hud:image_tinted(path, size, r,g,b,a)   -- cached textures
+hud:pie(radius, fraction, r,g,b,a) -- cooldown disc: full at fraction>=1, arc while filling
+```
+
+```lua
+mod:hud(function(hud, view)
+    hud:begin_panel("Stats")
+    local hp = view:get(Hearts)                        -- kernel handle, local player
+    for i = 0, hp.max - 1 do
+        if i > 0 then hud:same_line() end
+        if i < hp.current then hud:image("assets/icons/hearth.png", 22)
+        else hud:image_tinted("assets/icons/hearth.png", 22, 60, 60, 60, 220) end
+    end
+    local w = view:get(C.Weapon)                        -- networked script comp
+    if w then hud:text(("DMG %.0f"):format(w.damage)) end
+    hud:end_panel()
+end)
+```
+
 ## 7. Performance model
 
 The sim ticks at 120 Hz with up to ~500 enemies — Lua 5.4 handles the core pipeline comfortably,

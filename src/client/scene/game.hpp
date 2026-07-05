@@ -65,6 +65,8 @@ public:
         // One persistent Lua object referencing our DrawContext, reused every
         // frame for all plugin draw hooks (no per-call allocation).
         ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(draw_ctx_));
+        hud_ctx_.textures = &textures_; // cached icons for plugin HUD hooks
+        hud_ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(hud_ctx_));
     }
 
     // Input comes through the event stack (not SDL_GetKeyboardState), so a scene
@@ -331,6 +333,14 @@ private:
                 auth_aim_x_ = ax;
                 auth_aim_y_ = ay;
                 auth_firing_ = pa->firing != 0;
+                // Dash params + state are authoritative (the game/Lua sets
+                // max_charges/cooldown_max — the client can't guess them). Correct
+                // the prediction here; the burst (burst_remaining) stays predicted,
+                // and tick_dash smooths the cooldown between snapshots.
+                local_dash_.max_charges = pa->dash_max;
+                local_dash_.charges = pa->dash_charges;
+                local_dash_.cooldown = proto::ms_to_seconds(pa->dash_cd_ms);
+                local_dash_.cooldown_max = proto::ms_to_seconds(pa->dash_cd_max_ms);
             } else if (const auto it = remotes_.find(pa->id); it != remotes_.end()) {
                 Remote& rem = registry_.get<Remote>(it->second);
                 rem.aim_x = ax;
@@ -359,24 +369,34 @@ private:
 
         draw_background(r, cam_x, cam_y, ww, wh, ox, oy);
 
+        // "Net" = debug/team panel only (fps/ms + wave/level/xp). Per-player
+        // stats (hearts/dash/speed/...) are drawn by Lua mod:hud hooks below.
         ImGui::Begin("Net", nullptr, ImGuiWindowFlags_NoBackground);
         ImGui::Text("you: %s (id %u)", engine_->session().name().c_str(), my_net_id_);
         ImGui::Text("%.1f fps (%.2f ms)", static_cast<double>(ImGui::GetIO().Framerate),
                     1000.0 / std::max(1.0, static_cast<double>(ImGui::GetIO().Framerate)));
-        if (my_health_ == 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "DOWNED - respawning...");
-        } else {
-            draw_hearts_hud(my_health_, my_max_hearts_);
-        }
-        if (local_dash_.charges > 0) {
-            ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "DASH READY (SHIFT)");
-        } else {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "DASH %.1fs",
-                               static_cast<double>(std::max(0.0f, local_dash_.cooldown)));
-        }
         ImGui::Text("Wave %u   Level %u", static_cast<unsigned>(wave_), static_cast<unsigned>(level_));
         ImGui::ProgressBar(static_cast<float>(xp_frac_) / 255.0f, ImVec2(160.0f, 0.0f), "XP");
         ImGui::End();
+
+        // Plugin HUD hooks (mod:hud): the local player's own stats/upgrades, in
+        // the mod's OWN panel (begin_panel). Outside the Net window's Begin/End so
+        // the hook opens a top-level window. The view exposes our networked script
+        // comps (Weapon/Crit) AND our kernel stats (Speed/Hearts/Dash via `local`).
+        if (has_player_) {
+            const client::LocalStats stats{ .x = 0.0f, .y = 0.0f,
+                                            .speed = static_cast<float>(my_move_speed_),
+                                            .scale = my_scale_,
+                                            .hearts = my_health_, .max_hearts = my_max_hearts_,
+                                            .dash_charges = local_dash_.charges,
+                                            .dash_max = local_dash_.max_charges,
+                                            .dash_cooldown = local_dash_.cooldown,
+                                            .dash_cooldown_max = local_dash_.cooldown_max };
+            const client::DrawView view{ .scripts = &engine_->mods().scripts(),
+                                         .comps = script_state_for(my_net_id_),
+                                         .local = &stats };
+            client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
+        }
 
         SDL_Texture* enemy_tex = textures_.get(asset_enemy);
 
@@ -424,10 +444,7 @@ private:
                               PlayerAnim{ .dir_x = fdx, .dir_y = fdy, .moving = rem.moving,
                                           .firing = rem.firing, .death_start = rem.death_start },
                               rem.net_id, rem.scale, SDL_Color{ 220, 200, 80, 255 });
-                  // Player bytes are hearts (current/max) -> bar fraction.
-                  health_bar(r, x, y,
-                             static_cast<std::uint8_t>(rem.health * 255
-                                                       / std::max<int>(1, rem.variant)));
+                  // No health bar over players — the HUD hearts show life now.
                   if (overlays) { label(x, y, engine_->session().name_of(rem.net_id)); }
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
                   draw_projectile(r, x, y, rem.variant);
@@ -452,7 +469,6 @@ private:
                                     .firing = auth_firing_, .dash_frac = dash_frac,
                                     .death_start = my_death_start_ },
                         my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
-            health_bar(r, ox + p.x, oy + p.y, my_health_);
             if (overlays) { label(ox + p.x, oy + p.y, engine_->session().name()); }
         }
     }
@@ -633,27 +649,6 @@ private:
         draw_entity(r, cx, cy, nullptr, fallback);
     }
 
-    // HUD hearts row: hearth icons (tinted dark when empty), red squares fallback.
-    void draw_hearts_hud(std::uint8_t current, std::uint8_t max)
-    {
-        SDL_Texture* icon = textures_.get(asset_heart);
-        constexpr float size = 22.0f;
-        for (std::uint8_t i = 0; i < max; ++i) {
-            if (i > 0) { ImGui::SameLine(0.0f, 4.0f); }
-            const bool filled = i < current;
-            if (icon != nullptr) {
-                const ImVec4 tint = filled ? ImVec4(1, 1, 1, 1) : ImVec4(0.25f, 0.25f, 0.25f, 0.9f);
-                ImGui::Image(reinterpret_cast<ImTextureID>(icon), ImVec2(size, size),
-                             ImVec2(0, 0), ImVec2(1, 1), tint, ImVec4(0, 0, 0, 0));
-            } else {
-                const ImU32 col = filled ? IM_COL32(230, 60, 70, 255) : IM_COL32(70, 70, 70, 220);
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), col, 4.0f);
-                ImGui::Dummy(ImVec2(size, size));
-            }
-        }
-    }
-
     void draw_heart_pickup(SDL_Renderer* r, float cx, float cy)
     {
         if (SDL_Texture* icon = textures_.get(asset_heart)) {
@@ -710,7 +705,9 @@ private:
     {
         if (text.empty()) { return; }
         const float tx = cx - (sprite_size * 0.4f);
-        const float ty = cy - (sprite_size * 0.5f) - 22.0f;
+        // Just above the head; the ~22px gap that used to hold the health bar is
+        // gone now that hearts live in the HUD, so the tag sits snug.
+        const float ty = cy - (sprite_size * 0.5f) - 8.0f;
         // Background list: over the world, under any window (e.g. the level-up
         // menu) — a name tag must not float above a scene stacked on top.
         ImGui::GetBackgroundDrawList()->AddText(ImVec2(tx, ty), IM_COL32(235, 235, 235, 255), text.c_str());
@@ -739,6 +736,8 @@ private:
     std::vector<std::pair<float, float>> player_screen_; // per-frame player positions (idle facing)
     client::DrawContext draw_ctx_;  // reused surface for plugin draw hooks
     sol::object ctx_obj_;           // persistent Lua handle to draw_ctx_
+    client::HudContext hud_ctx_;    // reused surface for plugin HUD hooks
+    sol::object hud_ctx_obj_;       // persistent Lua handle to hud_ctx_
     InputState input_;
     core::Registry registry_;
     std::unordered_map<std::uint32_t, core::Entity> remotes_; // net id -> local entity

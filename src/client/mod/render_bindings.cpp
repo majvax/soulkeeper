@@ -1,6 +1,7 @@
 // src/client/mod/render_bindings.cpp
 #include "client/mod/render_bindings.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #include <imgui.h>
@@ -43,14 +44,117 @@ void DrawContext::text(float x, float y, const std::string& s, int r, int g, int
     ImGui::GetBackgroundDrawList()->AddText(ImVec2(x, y), IM_COL32(r, g, b, a), s.c_str());
 }
 
+void HudContext::begin_panel(const std::string& title, sol::optional<float> x, sol::optional<float> y)
+{
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float px = x.value_or(vp->WorkPos.x + 12.0f);
+    const float py = y.value_or(vp->WorkPos.y + 12.0f);
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+                                       | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+                                       | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+                                       | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::Begin(title.c_str(), nullptr, flags); // Begin/End must balance regardless of return
+    ++open_;
+}
+
+void HudContext::end_panel()
+{
+    if (open_ > 0) {
+        ImGui::End();
+        --open_;
+    }
+}
+
+// Close any window a hook opened but didn't (e.g. it errored mid-draw, which the
+// protected call swallowed) — an unbalanced ImGui Begin corrupts state + crashes.
+void HudContext::close_dangling()
+{
+    while (open_ > 0) {
+        ImGui::End();
+        --open_;
+    }
+}
+
+void HudContext::text(const std::string& s) { ImGui::TextUnformatted(s.c_str()); }
+
+void HudContext::text_colored(int r, int g, int b, const std::string& s)
+{
+    ImGui::TextColored(ImVec4(static_cast<float>(r) / 255.0f, static_cast<float>(g) / 255.0f,
+                              static_cast<float>(b) / 255.0f, 1.0f),
+                       "%s", s.c_str());
+}
+
+void HudContext::separator() { ImGui::Separator(); }
+
+void HudContext::same_line() { ImGui::SameLine(); }
+
+void HudContext::image(const std::string& path, float size)
+{
+    image_tinted(path, size, 255, 255, 255, 255);
+}
+
+void HudContext::image_tinted(const std::string& path, float size, int r, int g, int b, int a)
+{
+    SDL_Texture* tex = (textures != nullptr) ? textures->get(path) : nullptr;
+    const ImVec4 tint(static_cast<float>(r) / 255.0f, static_cast<float>(g) / 255.0f,
+                      static_cast<float>(b) / 255.0f, static_cast<float>(a) / 255.0f);
+    if (tex != nullptr) {
+        ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(size, size), ImVec2(0, 0),
+                     ImVec2(1, 1), tint, ImVec4(0, 0, 0, 0));
+    } else {
+        ImGui::Dummy(ImVec2(size, size)); // keep layout stable if the icon is missing
+    }
+}
+
+void HudContext::pie(float radius, float fraction, int r, int g, int b, int a)
+{
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 center(p.x + radius, p.y + radius);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 col = IM_COL32(r, g, b, a);
+    dl->AddCircle(center, radius, IM_COL32(255, 255, 255, 40), 0, 2.0f); // faint ring
+    fraction = std::clamp(fraction, 0.0f, 1.0f);
+    if (fraction >= 1.0f) {
+        dl->AddCircleFilled(center, radius, col);
+    } else if (fraction > 0.0f) {
+        constexpr float pi = 3.14159265358979f;
+        const float a0 = -pi * 0.5f; // start at the top
+        dl->PathLineTo(center);
+        dl->PathArcTo(center, radius, a0, a0 + (fraction * 2.0f * pi));
+        dl->PathFillConvex(col);
+    }
+    ImGui::Dummy(ImVec2(radius * 2.0f, radius * 2.0f)); // reserve + advance the cursor
+}
+
 sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) const
 {
+    sol::state_view lua(ts);
+    // Engine (kernel) handles: not in the script blob. Readable only on the HUD
+    // view, from the local player's stats the client already holds.
+    if (ref.is_engine()) {
+        if (local == nullptr) { return sol::lua_nil; }
+        const std::string& id = ref.id;
+        if (id == "Position") { return lua.create_table_with("x", local->x, "y", local->y); }
+        if (id == "Speed") { return lua.create_table_with("value", local->speed); }
+        if (id == "Scale") { return lua.create_table_with("value", local->scale); }
+        if (id == "Hearts") {
+            return lua.create_table_with("current", local->hearts, "max", local->max_hearts);
+        }
+        if (id == "Dash") {
+            return lua.create_table_with("charges", local->dash_charges, "max_charges", local->dash_max,
+                                         "cooldown", local->dash_cooldown,
+                                         "cooldown_max", local->dash_cooldown_max);
+        }
+        return sol::lua_nil; // other kernel comps aren't mirrored to the client HUD
+    }
+    // Script (Lua-defined) components: read from the entity's networked blob.
     if (comps == nullptr) { return sol::lua_nil; }
-    const mod::ScriptSchema* schema = ref.schema; // engine comps aren't in the script blob
+    const mod::ScriptSchema* schema = ref.schema;
     if (schema == nullptr || schema->net_id < 0) { return sol::lua_nil; }
     for (const mod::NetComp& c : *comps) {
         if (c.net_id != schema->net_id) { continue; }
-        sol::table t = sol::state_view(ts).create_table();
+        sol::table t = lua.create_table();
         for (std::size_t i = 0; i < schema->fields.size() && i < c.values.size(); ++i) {
             t[schema->fields[i]] = c.values[i];
         }
@@ -68,6 +172,11 @@ void install_render_bindings(mod::LuaHost& host)
                                   "texture", &DrawContext::texture, "rect", &DrawContext::rect,
                                   "circle_filled", &DrawContext::circle_filled, "circle", &DrawContext::circle,
                                   "text", &DrawContext::text, "world_to_screen", &DrawContext::world_to_screen);
+    lua.new_usertype<HudContext>(
+      "HudContext", sol::no_constructor, "begin_panel", &HudContext::begin_panel, "end_panel",
+      &HudContext::end_panel, "text", &HudContext::text, "text_colored", &HudContext::text_colored,
+      "separator", &HudContext::separator, "same_line", &HudContext::same_line, "image",
+      &HudContext::image, "image_tinted", &HudContext::image_tinted, "pie", &HudContext::pie);
 }
 
 void run_object_draws(mod::LuaHost& host, const sol::object& ctx_obj, const DrawView& view)
@@ -79,6 +188,19 @@ void run_object_draws(mod::LuaHost& host, const sol::object& ctx_obj, const Draw
             const sol::error err = res;
             std::fprintf(stderr, "[mod] '%s' draw() error: %s\n", d.id.c_str(), err.what());
         }
+    }
+}
+
+void run_hud_hooks(mod::LuaHost& host, const sol::object& ctx_obj, HudContext& ctx, const DrawView& view)
+{
+    for (const sol::protected_function& hook : host.state().hud_hooks) {
+        if (!hook.valid()) { continue; }
+        sol::protected_function_result res = hook(ctx_obj, view);
+        if (!res.valid()) {
+            const sol::error err = res;
+            std::fprintf(stderr, "[mod] hud() error: %s\n", err.what());
+        }
+        ctx.close_dangling(); // balance Begin/End even if the hook errored mid-draw
     }
 }
 

@@ -24,5 +24,63 @@ function main()
         e:set(C.Crit, {})
     end)
 
+    -- HUD: the local player's stats, drawn by Lua in its own top-left panel.
+    -- view:get reads our networked script comps (Weapon/Crit) AND our kernel
+    -- stats (Speed/Hearts/Dash) — same field names as the server side.
+    mod:hud(function(hud, view)
+        hud:begin_panel("Stats")
+
+        -- Life: a row of heart icons (dim when empty), cached by the engine.
+        local hearts = view:get(Hearts)
+        if hearts then
+            if hearts.current <= 0 then
+                hud:text_colored(255, 90, 90, "DOWNED - respawning...")
+            end
+            for i = 0, hearts.max - 1 do
+                if i > 0 then hud:same_line() end
+                if i < hearts.current then
+                    hud:image("assets/icons/hearth.png", 22)
+                else
+                    hud:image_tinted("assets/icons/hearth.png", 22, 60, 60, 60, 220)
+                end
+            end
+        end
+
+        -- Dash: a loading circle per charge (full = ready, arc = cooldown).
+        local dash = view:get(Dash)
+        if dash and dash.max_charges > 0 then
+            for i = 0, dash.max_charges - 1 do
+                if i > 0 then hud:same_line() end
+                if i < dash.charges then
+                    hud:pie(10, 1.0, 120, 210, 255, 255) -- ready
+                elseif i == dash.charges and dash.cooldown_max > 0 then
+                    local frac = (dash.cooldown_max - dash.cooldown) / dash.cooldown_max
+                    hud:pie(10, frac, 120, 210, 255, 200) -- recharging
+                else
+                    hud:pie(10, 0.0, 120, 210, 255, 200)  -- empty ring
+                end
+            end
+        end
+
+        local speed = view:get(Speed)
+        if speed then hud:text(string.format("Speed      %.0f", speed.value)) end
+
+        local w = view:get(C.Weapon)
+        if w then
+            hud:separator()
+            hud:text_colored(200, 220, 255, "-- Weapon --")
+            hud:text(string.format("DMG        %.0f", w.damage))
+            hud:text(string.format("Fire rate  %.0f ms", w.cooldown_max * 1000))
+            hud:text(string.format("Bullet spd %.0f", w.bullet_speed))
+            hud:text(string.format("Range      %.2f s", w.lifetime))
+        end
+        local c = view:get(C.Crit)
+        if c then
+            hud:text(string.format("Crit       %.0f%% x%.2f", c.chance * 100, c.multiplier))
+        end
+
+        hud:end_panel()
+    end)
+
     return C -- exports: the component library
 end

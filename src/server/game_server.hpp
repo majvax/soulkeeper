@@ -57,7 +57,8 @@ private:
     void spawn_enemies(float dt);
     void refresh_spawn_weights(std::uint16_t wave); // re-evaluate enemy defs' weight(wave)
     void check_level_up();
-    void start_level_up_for(std::uint32_t peer_id);
+    void start_level_up_for(std::uint64_t token); // roll fresh cards, store, send
+    void send_level_up(std::uint64_t token);      // (re)send the already-stored offer
 
     // Sim-event emission (mod hooks). on_enemy_death is detected by diffing the
     // enemy set around world_.step(); on_player_downed by a per-session edge.
@@ -111,8 +112,12 @@ private:
     std::uint16_t level_ = 1;
     std::uint32_t xp_needed_ = 8;
     bool leveling_ = false;
-    std::unordered_set<std::uint32_t> pending_;                                             // peers still choosing
-    std::unordered_map<std::uint32_t, std::array<proto::LevelUpChoice, proto::level_up_choices>> offered_;
+    // Keyed by session TOKEN (stable across reconnects), NOT peer_id (which
+    // changes on every reconnect) — otherwise a reconnecting player is orphaned
+    // in pending_ and the level-up never completes (world freezes).
+    std::unordered_set<std::uint64_t> pending_;                                             // tokens still choosing
+    std::unordered_map<std::uint64_t, std::array<proto::LevelUpChoice, proto::level_up_choices>> offered_; // token -> cards
+    std::unordered_set<std::uint64_t> chosen_;                                              // tokens that already picked this level
     std::mt19937 rng_{ std::random_device{}() };
 };
 

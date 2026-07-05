@@ -276,6 +276,7 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
 
     core::Registry& registry = world_.registry();
 
+    bool reconnected = false;
     if (const auto it = sessions_.find(join->token); it != sessions_.end()) {
         // Reconnect: re-bind this peer to the existing player, dropping any stale
         // mapping from the previous (dead) peer.
@@ -283,6 +284,7 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
         it->second.peer_id = peer_id;
         it->second.connected = true;
         peer_token_[peer_id] = join->token;
+        reconnected = true;
         spdlog::info("'{}' reconnected -> entity {}", it->second.name, it->second.entity);
     } else {
         // New player.
@@ -309,6 +311,20 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
     server_.send(peer_id, welcome.bytes(), true);
     send_state(peer_id);
     broadcast_roster();
+
+    // Reconnecting mid-level-up: restore the menu and re-arm the obligation so
+    // the returning player can pick (and the team isn't frozen waiting on them).
+    // Re-send the SAME stored cards (no reroll abuse); only roll fresh if they
+    // had none yet (were disconnected when the level-up began). A player who
+    // already picked this level (chosen_) is NOT re-offered.
+    if (reconnected && leveling_ && !chosen_.contains(join->token)) {
+        if (offered_.contains(join->token)) {
+            send_level_up(join->token);
+        } else {
+            start_level_up_for(join->token);
+        }
+        pending_.insert(join->token);
+    }
 }
 
 void GameServer::on_disconnect(std::uint32_t peer_id)
@@ -318,19 +334,22 @@ void GameServer::on_disconnect(std::uint32_t peer_id)
     const std::uint64_t token = it->second;
     peer_token_.erase(it);
 
-    // If this peer still owed a level-up choice, drop it and resume if last.
-    if (leveling_) {
-        pending_.erase(peer_id);
-        offered_.erase(peer_id);
-        if (pending_.empty()) { leveling_ = false; }
-    }
-
     Session& session = sessions_[token];
-    // Ignore a stale peer that a faster reconnect already replaced.
+    // Ignore a stale peer that a faster reconnect already replaced: its token is
+    // now bound to the live peer and MUST stay in pending_ (dropping it here is
+    // exactly the bug that froze the game). Level-up cleanup only for the live peer.
     if (session.peer_id != peer_id) { return; }
     session.connected = false;
     session.peer_id = 0;
     if (Velocity* vel = world_.registry().try_get<Velocity>(session.entity)) { *vel = { .dx = 0, .dy = 0 }; }
+
+    // A live player leaving mid-level-up forfeits their pick so the team can
+    // resume; on reconnect they get the SAME cards back (offered_ is kept, so
+    // no reroll abuse). Only drop them from pending_ here.
+    if (leveling_) {
+        pending_.erase(token);
+        if (pending_.empty()) { leveling_ = false; }
+    }
     spdlog::info("'{}' disconnected (entity kept for reconnect)", session.name);
     broadcast_roster();
 }
@@ -469,14 +488,22 @@ void GameServer::broadcast_snapshot()
             if (const Speed* speed = registry.try_get<Speed>(entity)) {
                 move_speed = static_cast<std::uint16_t>(speed->value);
             }
-            // Authoritative aim + trigger -> trailer, so the client's sprite
-            // faces/shoots where the SIM aims (autofire etc.), not the mouse.
+            // Per-player trailer: authoritative aim + trigger (so the sprite
+            // faces/shoots where the SIM aims, e.g. autofire, not the mouse) and
+            // dash state (params the game/Lua set, which the client can't guess).
+            proto::PlayerAim rec{ .id = entity };
             if (const AimState* aim = registry.try_get<AimState>(entity)) {
-                aims.push_back({ .id = entity,
-                                 .aim_qx = proto::quantize_aim(aim->dx),
-                                 .aim_qy = proto::quantize_aim(aim->dy),
-                                 .firing = aim->firing });
+                rec.aim_qx = proto::quantize_aim(aim->dx);
+                rec.aim_qy = proto::quantize_aim(aim->dy);
+                rec.firing = aim->firing;
             }
+            if (const Dash* dash = registry.try_get<Dash>(entity)) {
+                rec.dash_charges = dash->charges;
+                rec.dash_max = dash->max_charges;
+                rec.dash_cd_ms = proto::seconds_to_ms(dash->cooldown);
+                rec.dash_cd_max_ms = proto::seconds_to_ms(dash->cooldown_max);
+            }
+            aims.push_back(rec);
         }
 
         std::uint8_t scale_q = 0; // 0 = no Scale component = 1.0
@@ -537,28 +564,37 @@ void GameServer::check_level_up()
     xp_needed_ = xp_needed_for(level_);
 
     // Freeze the world and ask every connected player to choose an upgrade.
+    // Keyed by token so a mid-level-up reconnect (new peer_id) still resolves.
     leveling_ = true;
     pending_.clear();
     offered_.clear();
-    for (const auto& [peer, token] : peer_token_) {
-        start_level_up_for(peer);
-        pending_.insert(peer);
+    chosen_.clear();
+    for (const auto& [token, session] : sessions_) {
+        if (!session.connected) { continue; }
+        start_level_up_for(token);
+        pending_.insert(token);
     }
     if (pending_.empty()) { leveling_ = false; } // nobody to choose
     spdlog::info("team reached level {}", level_);
     lua_host_.events().emit("on_level_up", static_cast<int>(level_));
 }
 
-void GameServer::start_level_up_for(std::uint32_t peer_id)
+void GameServer::start_level_up_for(std::uint64_t token)
 {
-    const core::Entity player = sessions_[peer_token_[peer_id]].entity;
-    const std::array<proto::LevelUpChoice, proto::level_up_choices> choices = roll_upgrades(player);
-    offered_[peer_id] = choices;
+    offered_[token] = roll_upgrades(sessions_[token].entity);
+    send_level_up(token);
+}
 
+// Re-send the cards already stored for this token WITHOUT re-rolling — so a
+// disconnect/reconnect can't be used to reroll for a better upgrade.
+void GameServer::send_level_up(std::uint64_t token)
+{
+    const auto it = offered_.find(token);
+    if (it == offered_.end()) { return; }
     proto::ByteWriter writer;
     writer.put(proto::MsgType::LevelUp);
-    for (const proto::LevelUpChoice& choice : choices) { writer.put(choice); }
-    server_.send(peer_id, writer.bytes(), true);
+    for (const proto::LevelUpChoice& choice : it->second) { writer.put(choice); }
+    server_.send(sessions_[token].peer_id, writer.bytes(), true);
 }
 
 std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgrades(core::Entity player)
@@ -611,21 +647,22 @@ void GameServer::on_select(std::uint32_t peer_id, proto::ByteReader& reader)
 {
     const auto select = reader.get<proto::SelectUpgrade>();
     const auto peer_it = peer_token_.find(peer_id);
-    const auto offer_it = offered_.find(peer_id);
-    if (!select || !leveling_ || peer_it == peer_token_.end() || offer_it == offered_.end()
-        || select->index >= proto::level_up_choices) {
+    if (!select || !leveling_ || peer_it == peer_token_.end() || select->index >= proto::level_up_choices) {
         return;
     }
+    const std::uint64_t token = peer_it->second;
+    const auto offer_it = offered_.find(token);
+    if (offer_it == offered_.end()) { return; } // already chose, or wasn't offered
 
     const proto::LevelUpChoice& chosen = offer_it->second[select->index];
     if (const mod::ContentDef* d = lua_host_.registry().by_wire(chosen.id)) {
-        const mod::EntityHandle handle{ .reg = &world_.registry(),
-                                        .entity = sessions_[peer_it->second].entity };
+        const mod::EntityHandle handle{ .reg = &world_.registry(), .entity = sessions_[token].entity };
         mod::run_apply(*d, handle, static_cast<mod::Rarity>(chosen.rarity));
     }
 
-    pending_.erase(peer_id);
+    pending_.erase(token);
     offered_.erase(offer_it);
+    chosen_.insert(token); // don't re-offer on a later reconnect this level
     if (pending_.empty()) { leveling_ = false; } // everyone chose -> resume
 }
 

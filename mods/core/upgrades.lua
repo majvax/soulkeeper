@@ -4,6 +4,7 @@
 -- or 0 entry means the upgrade is NOT offered at that tier.
 local MIN_COOLDOWN = 0.08 -- fire-rate floor (keeps the game fun)
 
+
 return function(mod, C)
     mod:upgrade("damage", "Sharp Rounds", { 3, 5, 8, 12, 20 },
         function(e, _, amount)
@@ -64,14 +65,18 @@ return function(mod, C)
             local w = e:get(C.Weapon)
             if w then w.lifetime = w.lifetime + amount end
         end,
-        { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) / 100 .. "s RANGE" end })
+        { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) / 100 .. "s RANGE" end
+        })
 
     mod:upgrade("critchance", "Keen Eye", { 0.02, 0.04, 0.07, 0.11, 0.18 },
         function(e, _, amount)
             local c = e:get(C.Crit)
             if c then c.chance = c.chance + amount end
         end,
-        { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) .. "% CRIT" end })
+        {
+            value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) .. "% CRIT" end,
+            available = function(e) return e:get(C.Crit).chance < 1.0 end
+        })
 
     mod:upgrade("critdamage", "Lethality", { 0.10, 0.20, 0.35, 0.55, 0.90 },
         function(e, _, amount)

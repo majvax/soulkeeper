@@ -264,6 +264,11 @@ struct ModHandle
     // <Clip>_<N>x1.png strips (or a plain .png). Render-VM metadata only.
     void player_sprite(const std::string& path) { state->player_sprite = path; }
 
+    // Register a HUD panel hook: fn(hud, view) runs once per frame on the client
+    // with the LOCAL player's view, printing stats via the hud context. Stored
+    // in both VMs; the sim VM never calls it. Not hashed (pure render metadata).
+    void hud(sol::protected_function fn) { state->hud_hooks.push_back(std::move(fn)); }
+
     void subscribe(std::string event, sol::protected_function handler)
     {
         state->events.subscribe(std::move(event), std::move(handler));
@@ -322,6 +327,7 @@ void LuaHost::install_registration_api()
       "object", &ModHandle::object,
       "enemy", &ModHandle::enemy,
       "player_sprite", &ModHandle::player_sprite,
+      "hud", &ModHandle::hud,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);
 

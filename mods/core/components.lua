@@ -8,14 +8,15 @@ return function(mod)
     local C = {}
 
     -- Player loadout (attached in on_player_spawn; mutated by upgrades).
+    -- networked so the client HUD (mod:hud) can read the local player's stats.
     C.Weapon = mod:component("weapon", {
         cooldown_max = 0.35,
         cooldown = 0,
         bullet_speed = 550,
         damage = 10,
         lifetime = 1.2,
-    })
-    C.Crit = mod:component("crit", { chance = 0.05, multiplier = 1.5 })
+    }, { networked = true })
+    C.Crit = mod:component("crit", { chance = 0.05, multiplier = 1.5 }, { networked = true })
 
     -- A bullet in flight (attached to spawn_bullet entities).
     -- hostile = 1: enemy-fired, hits players instead of enemies.

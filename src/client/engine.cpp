@@ -1,12 +1,12 @@
 // src/client/engine.cpp
 #include "client/engine.hpp"
 
-#include "client/scene/lobby.hpp" // the initial scene
+#include "client/scene/connect.hpp" // the initial scene (Connect menu)
 #include "core/timestep.hpp"
 
 namespace client {
 
-std::expected<Engine, EngineError> Engine::create(const EngineConfig& config, std::string host, std::string name)
+std::expected<Engine, EngineError> Engine::create(const EngineConfig& config)
 {
     if (!SDL_Init(SDL_INIT_VIDEO)) { return std::unexpected(EngineError::sdl_init_failed); }
     SDLContext context{ true };
@@ -21,8 +21,7 @@ std::expected<Engine, EngineError> Engine::create(const EngineConfig& config, st
     // 0 uncaps the frame rate; failure here is non-fatal.
     SDL_SetRenderVSync(renderer.get(), config.vsync);
 
-    return Engine{ std::move(context),   std::move(window), std::move(renderer),
-                   config,                std::move(host),   std::move(name) };
+    return Engine{ std::move(context), std::move(window), std::move(renderer), config };
 }
 
 void Engine::on_event(const SDL_Event& event)
@@ -51,8 +50,7 @@ void Engine::run()
     render_host_.load_dir("mods");
 
     session_.set_mods_hash(render_host_.plugin_hash()); // sent in Join; must match the server
-    session_.connect();
-    scenes_.push<LobbyScene>(this); // the only hardcoded scene; the rest self-drive
+    scenes_.push<ConnectScene>(this); // entry menu; connect happens on Join, the rest self-drive
     scenes_.apply_pending();
 
     core::FixedTimestep timestep{ config_.fixed_hz };

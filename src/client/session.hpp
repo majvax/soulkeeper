@@ -30,20 +30,50 @@ struct RosterRow
 class Session
 {
 public:
-    Session(std::string host, std::string name)
-      : host_{ std::move(host) }, name_{ std::move(name) }, token_{ std::hash<std::string>{}(name_) }
-    {}
+    // Default endpoint/identity; the Connect menu overrides these via configure()
+    // before connect(). token = hash(name) keeps reconnect identity stable.
+    Session() : token_{ std::hash<std::string>{}(name_) } {}
 
     // Set before connect(): the local plugin-set hash sent in Join. The server
     // denies the join if it differs from its own.
     void set_mods_hash(std::uint64_t hash) noexcept { mods_hash_ = hash; }
 
-    void connect() { try_connect(); }
+    // Point at a server + pick a name (from the Connect menu). Recomputes the
+    // reconnect token so a name change is a fresh identity.
+    void configure(std::string host, std::uint16_t port, std::string name)
+    {
+        host_ = std::move(host);
+        port_ = port;
+        name_ = std::move(name);
+        token_ = std::hash<std::string>{}(name_);
+    }
+
+    void connect()
+    {
+        active_ = true; // arm the reconnect loop in poll()
+        try_connect();
+    }
+
+    // Tear the connection down and disarm reconnect, clearing control-plane
+    // state so a subsequent connect() (e.g. after Back) starts clean.
+    void disconnect()
+    {
+        client_.reset();
+        active_ = false;
+        denied_ = false;
+        has_id_ = false;
+        is_host_ = false;
+        reconnect_timer_ = 0.0f;
+        roster_.clear();
+        names_.clear();
+        state_ = proto::GameState::Lobby;
+    }
 
     // Drive the connection once per frame: reconnect if dropped, then drain the
     // socket and fold control messages into our state.
     void poll(float dt)
     {
+        if (!active_) { return; }  // not armed until the user hits Join in the Connect menu
         if (denied_) { return; } // mod mismatch is not transient — don't hammer the server
         if (!client_) {
             reconnect_timer_ += dt;
@@ -134,7 +164,7 @@ public:
 private:
     void try_connect()
     {
-        auto opened = net::Client::connect(host_.c_str(), proto::default_port, 500);
+        auto opened = net::Client::connect(host_.c_str(), port_, 500);
         if (!opened) {
             client_.reset();
             return;
@@ -197,12 +227,14 @@ private:
         }
     }
 
-    std::string host_;
-    std::string name_;
+    std::string host_ = "127.0.0.1";
+    std::uint16_t port_ = proto::default_port;
+    std::string name_ = "Player";
     std::uint64_t token_;
     std::uint64_t mods_hash_ = 0;
     std::uint64_t server_mods_hash_ = 0;
     bool denied_ = false;
+    bool active_ = false; // armed by connect(), cleared by disconnect()
     std::optional<net::Client> client_;
     float reconnect_timer_ = 0.0f;
 

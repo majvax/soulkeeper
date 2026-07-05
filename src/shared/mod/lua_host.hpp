@@ -51,6 +51,11 @@ struct ModState
     // Player visuals declared by mods (mod:player_sprite). Pure render-VM
     // metadata — never hashed, never simulated. Last declaration wins.
     std::string player_sprite;
+
+    // HUD panel hooks (mod:hud). Render-VM only: each is called once per frame
+    // with (hud_ctx, local-player view) so plugins can print the local player's
+    // stats into the HUD. Stored in BOTH VMs but only the client ever calls them.
+    std::vector<sol::protected_function> hud_hooks;
 };
 
 class LuaHost

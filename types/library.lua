@@ -211,7 +211,11 @@ function import(name) end
 ---@field y number
 local DrawView = {}
 
----@param component Component  # a NETWORKED Lua-defined component
+---Read a component's fields as a table, or nil if absent. Works for NETWORKED
+---Lua components. Inside a mod:hud hook it ALSO resolves the local player's
+---kernel handles: Position, Speed, Hearts, Dash, Scale (same field names as the
+---server side) — those aren't readable in world draw hooks.
+---@param component Component
 ---@return table|nil
 function DrawView:get(component) end
 
@@ -226,6 +230,46 @@ function DrawContext:text(x, y, s, r, g, b, a) end
 ---@return number sx, number sy
 function DrawContext:world_to_screen(wx, wy) end
 
+-- Handed to a mod:hud hook. A hook opens its OWN panel (begin_panel/end_panel),
+-- then draws text / cached icons / cooldown circles into it. `end` is a Lua
+-- keyword, so the closer is `end_panel`.
+---@class HudContext
+local HudContext = {}
+
+---Open the hook's window: fixed, borderless, non-movable, auto-sized. Defaults
+---to the top-left of the screen; pass x/y (pixels) to place it elsewhere.
+---@param title string  # window id (not shown; used as the ImGui id)
+---@param x? number
+---@param y? number
+function HudContext:begin_panel(title, x, y) end
+function HudContext:end_panel() end
+
+---@param s string
+function HudContext:text(s) end
+---@param r integer  # 0..255
+---@param g integer
+---@param b integer
+---@param s string
+function HudContext:text_colored(r, g, b, s) end
+function HudContext:separator() end
+---Keep the next item on the same line (lay icons/circles in a row).
+function HudContext:same_line() end
+---Draw a cached texture (by asset path) at size x size, at the cursor.
+---@param path string
+---@param size number
+function HudContext:image(path, size) end
+---Same as image() but multiplied by an RGBA tint (e.g. dim an empty heart).
+---@param path string
+---@param size number
+---@param r integer @param g integer @param b integer @param a integer
+function HudContext:image_tinted(path, size, r, g, b, a) end
+---Cooldown/loading disc: a faint ring plus a wedge filled for `fraction` (0..1)
+---of a turn from the top (full disc at >= 1). Advances the cursor by 2*radius.
+---@param radius number
+---@param fraction number  # 0..1
+---@param r integer @param g integer @param b integer @param a integer
+function HudContext:pie(radius, fraction, r, g, b, a) end
+
 --=============================================================================
 -- Callback signatures + option tables.
 --=============================================================================
@@ -235,6 +279,7 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@alias AvailableFn fun(e: Entity): boolean
 ---@alias ValueTextFn fun(amount: number, rarity: integer): string
 ---@alias DrawFn fun(ctx: DrawContext, view: DrawView)
+---@alias HudFn fun(hud: HudContext, view: DrawView)
 ---@alias SystemFn fun(dt: number)
 
 ---@class UpgradeOpts
@@ -333,6 +378,13 @@ function Mod:enemy(name, label, opts) end
 ---Render-VM metadata only (not part of the plugin hash); last call wins.
 ---@param path string  # e.g. "assets/sprite/player"
 function Mod:player_sprite(path) end
+
+---Register a HUD hook: fn(hud, view) runs once per frame on the client, in the
+---HUD panel, for the LOCAL player. `view:get(component)` reads that player's
+---NETWORKED script components (e.g. a stats component) — mark them networked.
+---Render-VM only (not part of the plugin hash); the sim VM stores but never runs it.
+---@param fn HudFn
+function Mod:hud(fn) end
 
 ---Subscribe to a game event. Engine events (server-side):
 ---  "on_wave_start"    fun(wave: integer)

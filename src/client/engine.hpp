@@ -85,10 +85,9 @@ struct EngineConfig
 class Engine
 {
 public:
-    // Bring up SDL + the window/renderer, then own a Session (connecting to
-    // `host` as `name`) and the scene stack. Move-only thereafter.
-    [[nodiscard]] static std::expected<Engine, EngineError> create(const EngineConfig& config,
-                                                                   std::string host, std::string name);
+    // Bring up SDL + the window/renderer, then own a Session (connected later
+    // from the Connect menu) and the scene stack. Move-only thereafter.
+    [[nodiscard]] static std::expected<Engine, EngineError> create(const EngineConfig& config);
 
     // Non-owning handles for scenes.
     [[nodiscard]] SDL_Window* window() const noexcept { return window_.get(); }
@@ -122,11 +121,9 @@ public:
     void run();
 
 private:
-    Engine(SDLContext context, WindowPtr window, RendererPtr renderer, const EngineConfig& config,
-           std::string host, std::string name)
+    Engine(SDLContext context, WindowPtr window, RendererPtr renderer, const EngineConfig& config)
       : context_{ std::move(context) }, window_{ std::move(window) }, renderer_{ std::move(renderer) },
-        config_{ config }, session_{ std::move(host), std::move(name) },
-        ui_layer_{ window_.get(), renderer_.get() }
+        config_{ config }, ui_layer_{ window_.get(), renderer_.get() }
     {}
 
     void on_event(const SDL_Event& event);
