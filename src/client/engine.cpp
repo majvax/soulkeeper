@@ -2,9 +2,17 @@
 #include "client/engine.hpp"
 
 #include "client/scene/connect.hpp" // the initial scene (Connect menu)
+#include "client/scene/lobby.hpp"   // reset_to_lobby rebuilds [Lobby over Connect]
 #include "core/timestep.hpp"
 
 namespace client {
+
+void Engine::reset_to_lobby()
+{
+    scenes_.clear();
+    scenes_.push<ConnectScene>(this);
+    scenes_.push<LobbyScene>(this); // top: the session is still connected
+}
 
 std::expected<Engine, EngineError> Engine::create(const EngineConfig& config)
 {

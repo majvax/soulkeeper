@@ -118,6 +118,7 @@ void GameServer::update(core::FixedTimestep& timestep)
             emit_enemy_deaths();      // any enemy gone after the step died
             emit_downed_transitions();
             check_level_up();
+            check_run_end(); // mods may have called world:end_game this step
         }
         if (tick_ % proto::snapshot_every_n_ticks == 0) { stream_snapshots(); }
         ++tick_;
@@ -416,7 +417,93 @@ void GameServer::on_command(std::uint32_t peer_id, proto::ByteReader& reader)
         paused_ = false;
         spdlog::info("game resumed by host");
         break;
+    case proto::Command::BackToLobby:
+        // Only meaningful on the game-over screen: full run reset to Lobby.
+        if (run_over_) { reset_run(); }
+        break;
     }
+}
+
+// The mods decide when a run ends (world:end_game -> a RunEnd mailbox entity);
+// the engine carries out the transition: freeze the sim (clients keep getting
+// the frozen world under their game-over overlay) and tell everyone, once.
+void GameServer::check_run_end()
+{
+    if (run_over_) { return; }
+    core::Registry& registry = world_.registry();
+    std::uint8_t won = 0;
+    std::vector<core::Entity> notes;
+    registry.view<RunEnd>().each([&](core::Entity e, const RunEnd& note) {
+        if (notes.empty()) { won = note.won; } // first verdict wins
+        notes.push_back(e);
+    });
+    if (notes.empty()) { return; }
+    for (const core::Entity e : notes) { registry.destroy(e); }
+
+    run_over_ = true;
+    paused_ = true;
+    std::uint16_t wave = 1;
+    registry.view<GameStats>().each([&](core::Entity, const GameStats& stats) { wave = stats.wave; });
+    proto::ByteWriter writer;
+    writer.put(proto::MsgType::GameOver);
+    writer.put(proto::GameOverMsg{ .won = won, .final_wave = wave, .final_level = level_ });
+    server_.broadcast(writer.bytes(), true);
+    spdlog::info("run over: {} at wave {} (level {})", won != 0 ? "VICTORY" : "defeat", wave, level_);
+}
+
+// Full reset for another run: wipe every world entity, rebuild each session's
+// player through the same path as a fresh join (loadout via on_player_spawn),
+// clear all progression/spawn/snapshot state, and drop everyone in the Lobby.
+// tick_ stays monotonic on purpose — snapshot acks are max()-based on both ends.
+void GameServer::reset_run()
+{
+    core::Registry& registry = world_.registry();
+
+    std::vector<core::Entity> doomed; // players, enemies, bullets, orbs, hearts
+    registry.view<Position>().each([&](core::Entity e, const Position&) { doomed.push_back(e); });
+    for (const core::Entity e : doomed) { registry.destroy(e); } // script rows go too
+    registry.view<GameStats>().each([&](core::Entity, GameStats& stats) {
+        stats = GameStats{ .xp = 0, .wave = 1 };
+    });
+
+    for (auto& [token, session] : sessions_) {
+        session.entity = create_player(registry, 0, 0);
+        session.was_downed = false;
+        session.last_ack_tick = 0; // fresh entities => clients restart on fulls
+        lua_host_.events().emit("on_player_spawn",
+                                mod::EntityHandle{ .reg = &registry, .entity = session.entity });
+        if (session.connected) { // the old net id died with the old entity
+            proto::ByteWriter welcome;
+            welcome.put(proto::MsgType::Welcome);
+            welcome.put(proto::Welcome{ .player_net_id = session.entity,
+                                        .is_host = session.is_host ? std::uint8_t{ 1 } : std::uint8_t{ 0 } });
+            server_.send(session.peer_id, welcome.bytes(), true);
+        }
+    }
+
+    level_ = 1;
+    xp_needed_ = 8;
+    leveling_ = false;
+    pending_.clear();
+    offered_.clear();
+    chosen_.clear();
+    spawn_timer_ = 0.0f;
+    wave_timer_ = 0.0f;
+    spawn_weights_wave_ = 0; // forces a weight refresh on the next run's wave 1
+    spawn_variants_.clear();
+    spawn_inits_.clear();
+    paused_ = false;
+    run_over_ = false;
+    snapshot_history_.clear();
+    pre_step_enemies_.clear();
+
+    state_ = proto::GameState::Lobby;
+    proto::ByteWriter state;
+    state.put(proto::MsgType::State);
+    state.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    server_.broadcast(state.bytes(), true);
+    broadcast_roster();
+    spdlog::info("run reset: back to lobby");
 }
 
 void GameServer::broadcast_roster()

@@ -110,6 +110,10 @@ public:
     }
     [[nodiscard]] Session& session() noexcept { return session_; }
     [[nodiscard]] SceneManager& scenes() noexcept { return scenes_; }
+    // Rebuild the pre-game stack [Lobby over Connect] (deferred). Lives on the
+    // Engine (defined in engine.cpp) because scene headers can't name Connect/
+    // Lobby without an include cycle — the Engine already owns the initial push.
+    void reset_to_lobby();
     // The client's render VM: content metadata (labels/sprites) + draw hooks,
     // shared by the game and level-up scenes.
     [[nodiscard]] mod::LuaHost& mods() noexcept { return render_host_; }

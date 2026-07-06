@@ -187,6 +187,12 @@ function world:wave() end
 ---@param value integer
 function world:add_xp(value) end
 
+---End the run (the GAME decides when — e.g. everyone downed, or a win rule).
+---The engine freezes the sim, broadcasts the game-over screen with final
+---stats, and waits for the host to return everyone to the lobby.
+---@param won boolean # true = victory, false = defeat
+function world:end_game(won) end
+
 -- Kernel spawn primitives (sim VM). Return an Entity to attach components to.
 ---Spawn a kinetic drawable (Position/Velocity/Radius 4/Render bullet kind).
 ---Attach your bullet component for behavior; set Render.variant for tint.

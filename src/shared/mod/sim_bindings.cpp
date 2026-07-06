@@ -425,6 +425,14 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                       reg->view<GameStats>().each([&](core::Entity, GameStats& stats) {
                                           stats.xp += static_cast<std::uint32_t>(std::max(0, value));
                                       });
+                                  },
+                                  // End the run (won = the mods' win rule fired). One-shot
+                                  // mailbox: the server reads RunEnd after the step, freezes
+                                  // the sim and broadcasts GameOver. The GAME decides when a
+                                  // run ends; the engine only carries out the transition.
+                                  "end_game", [reg](ScriptWorld&, bool won) {
+                                      const core::Entity note = reg->create();
+                                      reg->assign(note, RunEnd{ .won = static_cast<std::uint8_t>(won ? 1 : 0) });
                                   });
     lua["world"] = ScriptWorld{ .reg = &world_reg, .table = table, .lua = lua };
 

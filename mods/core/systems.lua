@@ -236,6 +236,11 @@ return function(mod, C)
     -- Players at 0 hearts go Downed and respawn two waves later, fully healed.
     -- 30 Hz: a 33 ms corpse/respawn latency is invisible. Staggered half an
     -- interval off targeting so the two enemy-wide walks hit different ticks.
+    -- This system also owns the RUN-END rules: every player downed at once =
+    -- defeat; surviving to WIN_WAVE = victory (world:end_game -> the engine
+    -- freezes the sim and shows the game-over screen).
+    local WIN_WAVE = 20 -- ~5 min at 15 s waves
+
     mod:system("death", { phase = "death", rate = 30, stagger = 0.5 }, function(dt)
         for e in world:each(Enemy, Health, Position) do
             if e:get(Health).current <= 0 then
@@ -254,7 +259,9 @@ return function(mod, C)
             end
         end
 
+        local players, alive = 0, 0
         for p in world:each(Player, Hearts, Position) do
+            players = players + 1
             if p:has(Downed) then
                 if world:wave() >= p:get(Downed).respawn_wave then
                     p:remove(Downed)
@@ -262,12 +269,21 @@ return function(mod, C)
                     h.current = h.max
                     local pp = p:get(Position)
                     pp.x, pp.y = 0, 0
+                    alive = alive + 1
                 end
             elseif p:get(Hearts).current <= 0 then
                 p:set(Downed, { respawn_wave = world:wave() + 2 })
                 local v = p:get(Velocity)
                 if v then v.dx, v.dy = 0, 0 end
+            else
+                alive = alive + 1
             end
+        end
+
+        if players > 0 and alive == 0 then
+            world:end_game(false) -- everyone down at once: defeat
+        elseif world:wave() >= WIN_WAVE then
+            world:end_game(true)
         end
     end)
 

@@ -108,6 +108,8 @@ guide), `mods/core/` (Soulkeeper's entire gameplay), `types/kernel.lua` (engine 
   a plugin's exports are its `main()`'s return. Component-library plugins are first-class.
 - **Services**: `world:nearby(x,y,r,H…)` (kernel spatial hash), `world:closest(x,y,H…,{without=H})`
   (nearest entity + d² + pos in ONE call — never target-scan from Lua), `world:wave()/add_xp`,
+  `world:end_game(won)` (the GAME decides when a run ends — core: all downed = defeat, wave 20 =
+  win; the engine freezes + shows the game-over screen, host returns everyone to the lobby),
   `spawn_bullet/spawn_entity/spawn_enemy`, `KIND` table, `on_player_spawn` event (loadout hook).
 - **Perf**: system opts `rate` (Hz throttle, fn gets accumulated dt) + `stagger` (0..1, offsets
   which tick same-rate systems fire on — unstaggered 30 Hz systems pile onto one tick and bust
@@ -131,7 +133,9 @@ crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **hear
 1 s i-frames, rare heart drops heal; Vitality raises the cap only) · enemies **scale per wave**
 (Lua stats fn) · **dash on LSHIFT** (predicted client-side; Shockwave object makes it damage) ·
 **crit** (chance/multiplier; crit bullets render orange) · co-op **downed → respawn a few waves
-later** · `/pause` `/resume` console.
+later** · **game-over/win** (Lua rule via `world:end_game`: all downed = defeat, wave 20 = win;
+frozen-world overlay with final stats, host returns everyone to the lobby for a fresh run) ·
+`/pause` `/resume` console.
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
@@ -161,7 +165,7 @@ later** · `/pause` `/resume` console.
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- Game-over/win, XP magnet, F11 fullscreen toggle.
+- XP magnet, F11 fullscreen toggle.
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

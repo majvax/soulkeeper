@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 8;
+inline constexpr std::uint16_t protocol_version = 9;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -44,6 +44,7 @@ enum class MsgType : std::uint8_t {
     Snapshot = 10,     // S2C: full world state (unreliable)
     JoinDenied = 11,   // S2C: plugin-set hash mismatch; peer is then kicked (reliable)
     SnapshotDelta = 12, // S2C: world state as a delta vs an acked full/delta (unreliable)
+    GameOver = 13,      // S2C: the run ended (won/lost + final stats); sim freezes (reliable)
 };
 
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };
@@ -52,7 +53,8 @@ enum class GameState : std::uint8_t { Lobby = 0, Playing = 1 };
 inline constexpr std::uint8_t level_up_choices = 3;
 
 // Console commands sent to the server (payload of a MsgType::Command packet).
-enum class Command : std::uint8_t { Pause = 0, Resume = 1 };
+// BackToLobby: host-only, accepted only on the game-over screen — full run reset.
+enum class Command : std::uint8_t { Pause = 0, Resume = 1, BackToLobby = 2 };
 
 // --- fixed-size name helpers ----------------------------------------------
 using Name = char[max_name_len];
@@ -167,6 +169,15 @@ struct Welcome
 struct StateMsg
 {
     std::uint8_t state; // proto::GameState
+};
+
+// The run ended (broadcast reliable). The sim freezes on the final frame; the
+// host then sends Command::BackToLobby to reset everything for another run.
+struct GameOverMsg
+{
+    std::uint8_t won; // 1 = the mods' win rule fired; 0 = everyone downed
+    std::uint16_t final_wave;
+    std::uint16_t final_level;
 };
 
 struct RosterHeader

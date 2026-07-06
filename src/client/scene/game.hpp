@@ -5,6 +5,7 @@
 #include "core/ecs.hpp"
 #include "client/scene.hpp"
 #include "client/scene/console.hpp"
+#include "client/scene/game_over.hpp"
 #include "client/scene/level_up.hpp"
 #include "client/sprites.hpp"
 #include "client/trainer.hpp"
@@ -125,6 +126,16 @@ public:
             level_open_ = true;
         } else if (!session.leveling()) {
             level_open_ = false;
+        }
+
+        // The run ended: overlay the game-over screen (it owns the transition
+        // back to the lobby — our update is blocked while it's on top).
+        if (session.game_over() && !game_over_open_) {
+            clear_input();
+            engine_->scenes().push<GameOverScene>(engine_);
+            game_over_open_ = true;
+        } else if (!session.game_over()) {
+            game_over_open_ = false;
         }
 
         send_and_predict(dt);
@@ -796,6 +807,7 @@ private:
     std::uint32_t my_net_id_ = 0;
     bool has_player_ = false;
     bool level_open_ = false;
+    bool game_over_open_ = false;
     std::uint8_t my_health_ = 255;     // current hearts (snapshot health byte)
     std::uint8_t my_max_hearts_ = 3;   // max hearts (snapshot variant byte)
     std::uint16_t my_move_speed_ = 0;

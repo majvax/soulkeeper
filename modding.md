@@ -137,6 +137,10 @@ end)
   `Downed` players). **Use this, never a Lua loop, to pick a target inside a per-entity system** —
   it's one engine call instead of an iterator per entity.
 - `world:wave()`, `world:add_xp(n)`.
+- `world:end_game(won)` — end the run. THE GAME owns the rule (core's death system: every player
+  downed at once = `end_game(false)`; surviving to `WIN_WAVE` = `end_game(true)`); the engine
+  freezes the sim, broadcasts the game-over screen (won/lost + final wave/level), and the host
+  returns everyone to the lobby for a fresh run.
 - `spawn_bullet(x, y, vx, vy)` — kinetic drawable (bullet kind); attach your bullet component for
   behavior, set `Render.variant` for tint (1 = hostile red, 2 = crit orange in the core skin).
 - `spawn_entity(x, y)` — bare drawable for drops/markers: set `Render.kind` (see the `KIND`

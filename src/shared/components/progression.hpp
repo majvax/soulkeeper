@@ -17,3 +17,11 @@ struct Downed
 {
     std::uint16_t respawn_wave = 0; // respawns once GameStats.wave reaches this
 };
+
+// One-shot sim->server mailbox: `world:end_game(won)` spawns an entity with
+// this; the server picks it up after the step and runs the game-over flow.
+// Not networked, not a prelude handle — the verb is the only writer.
+struct RunEnd
+{
+    std::uint8_t won = 0;
+};

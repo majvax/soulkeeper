@@ -68,6 +68,7 @@ public:
         names_.clear();
         state_ = proto::GameState::Lobby;
         ack_tick_ = 0;
+        game_over_ = false;
     }
 
     // Drive the connection once per frame: reconnect if dropped, then drain the
@@ -102,6 +103,8 @@ public:
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] const std::vector<RosterRow>& roster() const noexcept { return roster_; }
     [[nodiscard]] bool leveling() const noexcept { return leveling_; }
+    [[nodiscard]] bool game_over() const noexcept { return game_over_; }
+    [[nodiscard]] const proto::GameOverMsg& game_over_stats() const noexcept { return go_stats_; }
     [[nodiscard]] bool join_denied() const noexcept { return denied_; }
     [[nodiscard]] std::uint64_t mods_hash() const noexcept { return mods_hash_; }
     [[nodiscard]] std::uint64_t server_mods_hash() const noexcept { return server_mods_hash_; }
@@ -200,6 +203,14 @@ private:
         } else if (type == proto::MsgType::State) {
             if (const auto msg = reader.get<proto::StateMsg>()) {
                 state_ = static_cast<proto::GameState>(msg->state);
+                // Back in the lobby => the game-over screen is over.
+                if (state_ == proto::GameState::Lobby) { game_over_ = false; }
+            }
+        } else if (type == proto::MsgType::GameOver) {
+            if (const auto msg = reader.get<proto::GameOverMsg>()) {
+                go_stats_ = *msg;
+                game_over_ = true;
+                leveling_ = false; // a run end trumps any stale card offer
             }
         } else if (type == proto::MsgType::Roster) {
             read_roster(reader);
@@ -256,6 +267,8 @@ private:
     std::optional<std::vector<std::byte>> latest_snapshot_;
     std::uint32_t ack_tick_ = 0; // newest applied snapshot tick (0 = none)
     bool leveling_ = false;
+    bool game_over_ = false;         // run ended; cleared when Lobby state arrives
+    proto::GameOverMsg go_stats_{}; // valid while game_over_
     std::array<proto::LevelUpChoice, proto::level_up_choices> choices_{};
 };
 
