@@ -157,25 +157,30 @@ private:
         return 0;
     }
 
-    void submit_command(const std::string& command)
+    void submit_command(std::string command)
     {
-        if (command.empty()) { return; }
+        // Trim: TAB completion leaves a trailing space after a full match.
+        const std::size_t first = command.find_first_not_of(' ');
+        if (first == std::string::npos) { return; }
+        command = command.substr(first, command.find_last_not_of(' ') - first + 1);
         log_.push_back("> " + command);
         history_.push_back(command);
         history_pos_ = -1;
 
-        if (command == "help") {
+        // Match builtins on the first token so stray arguments don't misroute.
+        const std::string name = command.substr(0, command.find(' '));
+        if (name == "help") {
             log_.emplace_back("commands: help, clear, quit, /pause, /resume");
             for (const mod::ModState::ConsoleCommand& cmd : engine_->mods().state().commands) {
                 log_.push_back("  " + cmd.usage);
             }
-        } else if (command == "clear") {
+        } else if (name == "clear") {
             log_.clear();
-        } else if (command == "quit") {
+        } else if (name == "quit") {
             engine_->quit();
-        } else if (command == "/pause") {
+        } else if (name == "/pause") {
             engine_->session().send_command(proto::Command::Pause);
-        } else if (command == "/resume") {
+        } else if (name == "/resume") {
             engine_->session().send_command(proto::Command::Resume);
         } else if (command.front() == '/') {
             // A mod command: "/name args..." -> LuaCommand "name args...".
