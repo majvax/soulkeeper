@@ -53,6 +53,10 @@ return function(mod)
     C.AutoTarget = mod:component("autotarget", {})
     C.Boss = mod:component("boss", {})
 
+    -- Revive bar on a Downed player (0..1). Networked so every client can
+    -- draw the progress arc over the body (core's mod:draw hook).
+    C.Revive = mod:component("revive", { progress = 0 }, { networked = true })
+
     -- Boss special: every `cooldown` s, a radial ring of `bullets` hostile
     -- projectiles. Presence also marks the entity for guaranteed death drops.
     C.Nova = mod:component("nova", {

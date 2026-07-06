@@ -57,6 +57,12 @@ struct ModState
     // stats into the HUD. Stored in BOTH VMs but only the client ever calls them.
     std::vector<sol::protected_function> hud_hooks;
 
+    // World draw hooks (mod:draw). Render-VM only: each runs once per PLAYER
+    // entity per frame with (ctx, view) — view carries that player's screen pos
+    // + networked script comps — so plugins draw per-player world overlays
+    // (revive arcs, auras) without owning an Object.
+    std::vector<sol::protected_function> draw_hooks;
+
     // Console commands (mod:command). Registered in BOTH VMs from the same
     // mod.lua: the SIM VM runs fn (server side, host-typed `/name args...`);
     // the render VM only reads name+usage for console autocompletion/help.

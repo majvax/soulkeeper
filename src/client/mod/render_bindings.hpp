@@ -54,6 +54,8 @@ struct DrawContext
     void rect(float x, float y, float w, float h, int r, int g, int b, int a);
     void circle_filled(float cx, float cy, float radius, int r, int g, int b, int a);
     void circle(float cx, float cy, float radius, int r, int g, int b, int a, float thickness);
+    void arc(float cx, float cy, float radius, float fraction, int r, int g, int b, int a,
+             float thickness); // partial ring, clockwise from the top (progress cues)
     void text(float x, float y, const std::string& s, int r, int g, int b, int a);
     [[nodiscard]] std::pair<float, float> world_to_screen(float wx, float wy) const
     {

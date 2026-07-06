@@ -240,6 +240,18 @@ return function(mod, C)
     -- defeat; KILLING a boss at/after WIN_WAVE = victory (bosses hold the wave
     -- clock, so the wave can't pass the milestone without the kill).
     local WIN_WAVE = 20
+    -- Downed players come back when a teammate stands close (a progress arc
+    -- shows on every client via C.Revive) — or instantly when a boss falls.
+    local REVIVE_RADIUS = 90
+    local REVIVE_SECONDS = 3.0
+
+    -- Revive a downed player in place with half their hearts.
+    local function revive(p)
+        p:remove(Downed)
+        if p:has(C.Revive) then p:remove(C.Revive) end
+        local h = p:get(Hearts)
+        h.current = math.floor(math.max(1, math.ceil(h.max / 2)))
+    end
 
     mod:system("death", { phase = "death", rate = 30, stagger = 0.5 }, function(dt)
         for e in world:each(Enemy, Health, Position) do
@@ -270,6 +282,10 @@ return function(mod, C)
                         bonus:get(Render).kind = KIND.orb
                         bonus:set(C.Xp, { value = 5 })
                     end
+                    -- A boss kill picks the whole team back up.
+                    for p in world:each(Player, Hearts) do
+                        if p:has(Downed) then revive(p) end
+                    end
                     if world:wave() >= WIN_WAVE then world:end_game(true) end
                 end
                 e:destroy()
@@ -280,16 +296,25 @@ return function(mod, C)
         for p in world:each(Player, Hearts, Position) do
             players = players + 1
             if p:has(Downed) then
-                if world:wave() >= p:get(Downed).respawn_wave then
-                    p:remove(Downed)
-                    local h = p:get(Hearts)
-                    h.current = h.max
-                    local pp = p:get(Position)
-                    pp.x, pp.y = 0, 0
+                -- Proximity revive: a LIVE teammate within REVIVE_RADIUS fills
+                -- the bar in REVIVE_SECONDS; it drains at half speed alone.
+                -- (nearest_player already ignores Downed players.)
+                local pp = p:get(Position)
+                if not p:has(C.Revive) then p:set(C.Revive, {}) end
+                local rv = p:get(C.Revive)
+                local _, d2 = nearest_player(pp.x, pp.y)
+                if d2 < REVIVE_RADIUS * REVIVE_RADIUS then
+                    rv.progress = rv.progress + dt / REVIVE_SECONDS
+                else
+                    rv.progress = math.max(0, rv.progress - dt / (REVIVE_SECONDS * 2))
+                end
+                if rv.progress >= 1 then
+                    revive(p)
                     alive = alive + 1
                 end
             elseif p:get(Hearts).current <= 0 then
-                p:set(Downed, { respawn_wave = world:wave() + 2 })
+                p:set(Downed, { respawn_wave = 0 }) -- wave respawn retired: revive instead
+                p:set(C.Revive, {})
                 local v = p:get(Velocity)
                 if v then v.dx, v.dy = 0, 0 end
             else

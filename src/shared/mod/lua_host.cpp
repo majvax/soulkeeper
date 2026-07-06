@@ -264,6 +264,9 @@ struct ModHandle
     // <Clip>_<N>x1.png strips (or a plain .png). Render-VM metadata only.
     void player_sprite(const std::string& path) { state->player_sprite = path; }
 
+    // World draw hook: fn(ctx, view) per player entity per frame (render VM).
+    void draw(sol::protected_function fn) { state->draw_hooks.push_back(std::move(fn)); }
+
     // Register a console command: `/name args...` typed in the client console
     // runs fn on the SERVER (host-only) with the invoking player's handle +
     // the whitespace-split args (numeric tokens arrive as numbers). `usage`
@@ -345,6 +348,7 @@ void LuaHost::install_registration_api()
       "enemy", &ModHandle::enemy,
       "player_sprite", &ModHandle::player_sprite,
       "hud", &ModHandle::hud,
+      "draw", &ModHandle::draw,
       "command", &ModHandle::command,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);

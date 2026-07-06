@@ -266,6 +266,10 @@ function DrawContext:circle_filled(cx, cy, radius, r, g, b, a) end
 
 function DrawContext:circle(cx, cy, radius, r, g, b, a, thickness) end
 
+---Partial ring, clockwise from the top: `fraction` (0..1) of a full turn.
+---For progress cues (revive arcs, cast bars).
+function DrawContext:arc(cx, cy, radius, fraction, r, g, b, a, thickness) end
+
 function DrawContext:text(x, y, s, r, g, b, a) end
 
 ---@return number sx, number sy
@@ -436,6 +440,13 @@ function Mod:player_sprite(path) end
 ---Render-VM only (not part of the plugin hash); the sim VM stores but never runs it.
 ---@param fn HudFn
 function Mod:hud(fn) end
+
+---Register a world draw hook: fn(ctx, view) runs once per PLAYER entity per
+---frame on the client — view carries that player's screen x/y and networked
+---script components (view:get). Draw per-player overlays (revive arcs, buffs)
+---without owning an Object. Render-VM only (not part of the plugin hash).
+---@param fn fun(ctx: DrawContext, view: DrawView)
+function Mod:draw(fn) end
 
 ---Register a console command: `/name args...` typed in the client's TAB
 ---console runs fn on the SERVER (host-only, sim VM) with the invoking player

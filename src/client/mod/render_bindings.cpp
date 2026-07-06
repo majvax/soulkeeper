@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <memory>
+#include <numbers>
 
 #include <imgui.h>
 
@@ -40,6 +41,19 @@ void DrawContext::circle(float cx, float cy, float radius, int r, int g, int b, 
 {
     ImGui::GetBackgroundDrawList()->AddCircle(
       ImVec2(cx, cy), radius, IM_COL32(r, g, b, a), 0, thickness);
+}
+
+// Partial ring for progress cues (revive arcs, cast bars): `fraction` (0..1)
+// of a turn, clockwise from the top.
+void DrawContext::arc(float cx, float cy, float radius, float fraction, int r, int g, int b, int a,
+                      float thickness)
+{
+    const float frac = std::clamp(fraction, 0.0f, 1.0f);
+    if (frac <= 0.0f) { return; }
+    constexpr float top = -std::numbers::pi_v<float> / 2.0f;
+    ImDrawList* list = ImGui::GetBackgroundDrawList();
+    list->PathArcTo(ImVec2(cx, cy), radius, top, top + (frac * 2.0f * std::numbers::pi_v<float>), 32);
+    list->PathStroke(IM_COL32(r, g, b, a), 0, thickness);
 }
 
 void DrawContext::text(float x, float y, const std::string& s, int r, int g, int b, int a)
@@ -175,6 +189,7 @@ void install_render_bindings(mod::LuaHost& host)
     lua.new_usertype<DrawContext>("DrawContext", sol::no_constructor,
                                   "texture", &DrawContext::texture, "rect", &DrawContext::rect,
                                   "circle_filled", &DrawContext::circle_filled, "circle", &DrawContext::circle,
+                                  "arc", &DrawContext::arc,
                                   "text", &DrawContext::text, "world_to_screen", &DrawContext::world_to_screen);
     lua.new_usertype<HudContext>(
       "HudContext", sol::no_constructor, "begin_panel", &HudContext::begin_panel, "end_panel",
@@ -191,6 +206,15 @@ void run_object_draws(mod::LuaHost& host, const sol::object& ctx_obj, const Draw
         if (!res.valid()) {
             const sol::error err = res;
             std::fprintf(stderr, "[mod] '%s' draw() error: %s\n", d.id.c_str(), err.what());
+        }
+    }
+    // Object-less world draw hooks (mod:draw) run on the same per-player view.
+    for (const sol::protected_function& hook : host.state().draw_hooks) {
+        if (!hook.valid()) { continue; }
+        sol::protected_function_result res = hook(ctx_obj, view);
+        if (!res.valid()) {
+            const sol::error err = res;
+            std::fprintf(stderr, "[mod] draw() error: %s\n", err.what());
         }
     }
 }

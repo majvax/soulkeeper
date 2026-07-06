@@ -50,6 +50,16 @@ function main()
             end
         end)
 
+    -- World overlay: the revive progress arc over any downed player (their
+    -- networked C.Revive rides the snapshot; runs per player entity per frame).
+    mod:draw(function(ctx, view)
+        local rv = view:get(C.Revive)
+        if rv and rv.progress > 0 then
+            ctx:circle(view.x, view.y, 26, 40, 40, 40, 160, 5)               -- track
+            ctx:arc(view.x, view.y, 26, rv.progress, 255, 215, 100, 235, 5)  -- fill
+        end
+    end)
+
     -- HUD: the local player's stats, drawn by Lua in its own top-left panel.
     -- view:get reads our networked script comps (Weapon/Crit) AND our kernel
     -- stats (Speed/Hearts/Dash) — same field names as the server side.
