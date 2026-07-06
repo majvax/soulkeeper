@@ -35,9 +35,11 @@ std::expected<Engine, EngineError> Engine::create(const EngineConfig& config)
 void Engine::on_event(const SDL_Event& event)
 {
     ui_layer_.process_event(event);
-    scenes_.handle_event(event);
+    const bool unconsumed = scenes_.handle_event(event);
     if (event.type == SDL_EVENT_QUIT) { quit(); }
-    if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) { quit(); }
+    // Global exit key — only when no scene claimed the event (modal scenes
+    // like the console use ESC themselves).
+    if (unconsumed && event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) { quit(); }
 }
 
 void Engine::render(float alpha)

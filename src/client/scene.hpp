@@ -78,11 +78,15 @@ public:
         return !scenes_.empty() && scenes_.front().get() == scene;
     }
 
-    void handle_event(const SDL_Event& event)
+    // Returns true when the event fell through the whole stack unconsumed —
+    // the Engine uses this for global fallbacks (ESC quits the app ONLY when
+    // no scene claimed it; the console closes itself on ESC, for example).
+    bool handle_event(const SDL_Event& event)
     {
         for (auto& scene : scenes_) {
-            if (!scene->handle_event(event)) { return; }
+            if (!scene->handle_event(event)) { return false; }
         }
+        return true;
     }
 
     void update(float dt)
