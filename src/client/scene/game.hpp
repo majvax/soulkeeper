@@ -47,6 +47,17 @@ struct Remote
     float aim_y = 0.0f;
     bool firing = false;  // authoritative trigger (players) — Shoot vs Move/Idle
     float death_start = -1.0f; // anim clock when a player went down (-1 = alive)
+    float flash_until = -1.0f; // anim clock deadline for the red hit-flash
+};
+
+// A short client-only burst effect where an entity died/was picked up (the
+// entity itself is already gone from the render registry).
+struct Poof
+{
+    float x, y;      // world position at despawn
+    float t0;        // anim clock at spawn
+    float radius;    // final ring radius (scaled to what vanished)
+    bool pickup;     // orbs/hearts sparkle small and bright
 };
 
 // Everything draw_player needs to pick a clip in the directional player pack.
@@ -142,6 +153,7 @@ public:
         send_and_predict(dt);
         anim_time_ += dt;           // shared clock for all animation clips
         time_since_snapshot_ += dt; // drives remote interpolation (alpha toward the newest snapshot)
+        shake_amp_ *= std::exp(-9.0f * dt); // camera shake settles in ~0.3 s
         return Continue;
     }
 
@@ -211,10 +223,20 @@ private:
         if (input_.dash_queued && !downed) {
             dash_flag = 1;
             const bool moving = mx != 0 || my != 0;
-            start_dash(local_dash_, moving ? static_cast<float>(mx) : aim_x,
-                       moving ? static_cast<float>(my) : aim_y);
+            if (start_dash(local_dash_, moving ? static_cast<float>(mx) : aim_x,
+                           moving ? static_cast<float>(my) : aim_y)) {
+                shake_amp_ = std::max(shake_amp_, 3.0f); // dash kick
+            }
         }
         input_.dash_queued = false;
+
+        // Dash trail: sample the predicted position while bursting; ghosts
+        // fade fast (render_game draws them), so the ring stays tiny.
+        if (has_player_ && local_dash_.burst_remaining > 0.0f) {
+            const Position& pos = registry_.get<Position>(player_);
+            if (trail_.size() >= 12) { trail_.erase(trail_.begin()); }
+            trail_.push_back({ .x = pos.x, .y = pos.y, .t0 = anim_time_, .radius = 0, .pickup = false });
+        }
 
         engine_->session().send_input(proto::Input{ .move_x = mx, .move_y = my, .aim_x = aim_x,
                                                     .aim_y = aim_y, .firing = firing, .dash = dash_flag });
@@ -311,6 +333,7 @@ private:
 
             if (has_player_ && rec.id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = ex, .y = ey }; // snap correction
+                if (rec.health < my_health_) { shake_amp_ = 7.0f; }      // ouch: kick the camera
                 my_health_ = rec.health;      // current hearts
                 my_max_hearts_ = rec.variant; // max hearts
                 my_move_speed_ = rec.move_speed;
@@ -359,6 +382,7 @@ private:
                     rem.dir_y = step_y;
                 }
                 pos = { .x = ex, .y = ey };
+                if (rec.health < rem.health) { rem.flash_until = anim_time_ + 0.12f; } // hit!
                 rem.health = rec.health;
                 rem.scale = proto::dequantize_scale(rec.scale_q);
                 if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
@@ -371,8 +395,25 @@ private:
 
         // The decoded state is COMPLETE (deltas were merged over their baseline
         // by the codec), so absence still means despawn — for fulls and deltas.
+        // A despawn is the only "it died / got picked up" signal the client
+        // gets, so it doubles as the poof-effect trigger (players keep their
+        // Death clip instead).
         for (auto it = remotes_.begin(); it != remotes_.end();) {
             if (!seen.contains(it->first)) {
+                const Remote& rem = registry_.get<Remote>(it->second);
+                if (rem.kind != static_cast<std::uint8_t>(proto::EntityKind::Player)
+                    && poofs_.size() < 48) {
+                    const Position& pos = registry_.get<Position>(it->second);
+                    const bool pickup = rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)
+                                     || rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart);
+                    float arch_scale = 1.0f; // size the burst to what vanished (boss >> bandit)
+                    if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
+                        arch_scale = def->scale;
+                    }
+                    poofs_.push_back({ .x = pos.x, .y = pos.y, .t0 = anim_time_,
+                                       .radius = pickup ? 10.0f : 20.0f * rem.scale * arch_scale,
+                                       .pickup = pickup });
+                }
                 registry_.destroy(it->second);
                 it = remotes_.erase(it);
             } else {
@@ -422,8 +463,12 @@ private:
         }
         const float ww = static_cast<float>(engine_->width());
         const float wh = static_cast<float>(engine_->height());
-        const float ox = (ww * 0.5f) - cam_x;
-        const float oy = (wh * 0.5f) - cam_y;
+        // Camera shake: a decaying two-frequency jitter on the world offset.
+        // Plugin draws shake too (they share draw_ctx_) — they're world-space.
+        const float shake_x = shake_amp_ > 0.05f ? std::sin(anim_time_ * 71.0f) * shake_amp_ : 0.0f;
+        const float shake_y = shake_amp_ > 0.05f ? std::cos(anim_time_ * 57.0f) * shake_amp_ : 0.0f;
+        const float ox = (ww * 0.5f) - cam_x + shake_x;
+        const float oy = (wh * 0.5f) - cam_y + shake_y;
         draw_ctx_.ox = ox; // keep the plugin draw context's camera current
         draw_ctx_.oy = oy;
 
@@ -443,6 +488,33 @@ private:
             ImGui::GetForegroundDrawList()->AddText(
               font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.22f),
               IM_COL32(255, 225, 140, static_cast<int>(alpha * 255.0f)), banner);
+        }
+
+        // Death poofs + dash trail: short-lived world-space rings (ImGui bg
+        // list composites over SDL — fine, they're bursts ON things).
+        if (engine_->scenes().is_top(this)) {
+            ImDrawList* fx = ImGui::GetBackgroundDrawList();
+            constexpr float poof_life = 0.35f;
+            std::erase_if(poofs_, [&](const Poof& p) { return anim_time_ - p.t0 > poof_life; });
+            for (const Poof& p : poofs_) {
+                const float age = (anim_time_ - p.t0) / poof_life; // 0..1
+                const auto alpha = static_cast<int>((1.0f - age) * 200.0f);
+                const ImVec2 at(p.x + ox, p.y + oy);
+                const ImU32 col = p.pickup ? IM_COL32(160, 240, 255, alpha)
+                                           : IM_COL32(255, 180, 90, alpha);
+                fx->AddCircle(at, 4.0f + (age * p.radius), col, 0, p.pickup ? 2.0f : 3.0f);
+                if (!p.pickup) { // inner flash on kills
+                    fx->AddCircleFilled(at, (1.0f - age) * p.radius * 0.35f,
+                                        IM_COL32(255, 230, 170, alpha / 2));
+                }
+            }
+            constexpr float trail_life = 0.22f;
+            std::erase_if(trail_, [&](const Poof& g) { return anim_time_ - g.t0 > trail_life; });
+            for (const Poof& g : trail_) {
+                const float age = (anim_time_ - g.t0) / trail_life;
+                fx->AddCircleFilled(ImVec2(g.x + ox, g.y + oy), (1.0f - age) * 9.0f + 2.0f,
+                                    IM_COL32(140, 210, 255, static_cast<int>((1.0f - age) * 110.0f)));
+            }
         }
 
         // "Net" = debug/team panel only (fps/ms + wave/level/xp). Per-player
@@ -633,9 +705,17 @@ private:
             }
         }
 
-        if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
+        const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant);
+        if (def != nullptr) {
             scale = def->scale * rem.scale; // archetype size x dynamic kernel Scale
             tint = SDL_Color{ def->tint[0], def->tint[1], def->tint[2], 255 };
+        }
+        // Hit flash: a short red pulse when a snapshot showed its health drop.
+        // (Color-mod is multiplicative, so red — not white — is the loud one.)
+        if (anim_time_ < rem.flash_until) {
+            tint = SDL_Color{ 255, 70, 70, 255 };
+        }
+        if (def != nullptr) {
             if (!def->sprite.empty()) {
                 if (const client::SpritePack* pack = packs_.get(def->sprite)) {
                     if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
@@ -846,6 +926,10 @@ private:
     std::uint8_t xp_frac_ = 0;
     std::uint16_t wave_ = 1;
     float banner_until_ = -1.0f; // anim_time_ deadline for the "WAVE N" banner
+    // Game-feel state (client-only, inferred from snapshot deltas).
+    float shake_amp_ = 0.0f;     // camera shake amplitude px (decays in update)
+    std::vector<Poof> poofs_;    // death/pickup bursts (cap 48)
+    std::vector<Poof> trail_;    // dash ghost samples (radius unused)
     float time_since_snapshot_ = 0.0f;
     float anim_time_ = 0.0f;   // drives every animation clip
     float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)
