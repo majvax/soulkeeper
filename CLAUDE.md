@@ -61,7 +61,8 @@ src/
     scene/{lobby,game,console,level_up}.hpp
   client.cpp       # ~15-line bootstrap: argv host/name -> Engine::create -> run()
 mods/core/         # ALL built-in content as a Lua plugin (upgrades, objects, components, systems)
-types/library.lua  # lua-language-server stubs for the mod API (editor autocomplete)
+types/kernel.lua   # lua-language-server stubs for the ENGINE mod API (editor autocomplete);
+                   # a mod's own types go in mods/<name>/types.lua (component shapes inferred inline)
 modding.md         # the full modding guide (API reference, performance model, internals)
 ```
 
@@ -89,7 +90,7 @@ modding.md         # the full modding guide (API reference, performance model, i
 
 ## Modding layer (the game = Lua plugins)
 ALL game logic is **Lua 5.4 plugins** (sol2) over kernel services — see `modding.md` (full
-guide), `mods/core/` (Soulkeeper's entire gameplay), `types/library.lua` (LSP stubs).
+guide), `mods/core/` (Soulkeeper's entire gameplay), `types/kernel.lua` (engine LSP stubs).
 - **Handle-based API (v2, no strings)**: `mod:component("ranged", {range=340,...})` returns a
   `ComponentRef` handle; `e:get/set/has/remove`, `world:each/nearby`, the enemy builder and
   `view:get` take handles only. Kernel comps are prelude handles (`Position`, `Hearts`, ...).

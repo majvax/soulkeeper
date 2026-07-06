@@ -1,7 +1,12 @@
 ---@meta
--- Soulkeeper modding API — type annotations for lua-language-server (LuaCATS).
--- This file is NOT loaded by the game (the loader only runs mods/<name>/mod.lua).
--- Point your editor's Lua library path at the `types/` folder for autocomplete.
+-- Soulkeeper KERNEL modding API — type annotations for lua-language-server.
+-- This is the ENGINE surface: the Mod/Entity/World/DrawView/Hud handles, the
+-- kernel component *Fields + prelude globals, spawn_*/include/import. A mod's
+-- OWN types (component shapes, custom event payloads) live with the mod:
+-- component shapes are inferred inline in its components.lua; extra hand-written
+-- types can go in mods/<name>/types.lua (any ---@meta file is auto-loaded).
+-- NOT loaded by the game (the loader only runs mods/<name>/mod.lua). Point your
+-- editor's Lua library path at `types/` (the repo's .luarc.json already does).
 
 --=============================================================================
 -- Component handles. EVERY component — kernel (C++) or Lua-defined — is a
@@ -9,8 +14,13 @@
 -- Mod:component(). All APIs take handles; there are no string component ids.
 --=============================================================================
 
----@class Component
----@field id string  # full id, e.g. "Position" or "core:ranged" (read-only)
+--- A component HANDLE — the prelude globals below, or a `Mod:component` return.
+--- Typed permissively so every handle is accepted by has/set/each/nearby/closest;
+--- the field TYPE flows on the READ side (`e:get`/`view:get`), via an identity
+--- generic: `e:get(H)` returns H's own field shape. Kernel handles are typed as
+--- their `*Fields` class (closed → autocomplete + typo errors); Lua handles get
+--- the defaults-table shape inferred by `Mod:component` (autocomplete).
+---@alias Component any
 
 -- Kernel component field shapes (what e:get(Handle) returns for each prelude
 -- handle; mutate fields in place).
@@ -53,6 +63,8 @@
 ---@field cooldown_max number     # seconds per charge refill
 ---@field cooldown number         # time until the next charge
 ---@field burst_remaining number  # > 0 while dashing
+---@field dir_x number            # normalized burst direction
+---@field dir_y number
 ---@field shockwave number        # damage to enemies passed through (0 = off)
 ---@field charges integer
 ---@field max_charges integer
@@ -63,34 +75,35 @@
 ---@class ScaleFields
 ---@field value number  # on-screen size multiplier (networked; 1.0 = normal, capped ~8x on the wire). Players spawn with it; enemies multiply it onto their archetype scale. Visual only — Radius is the hitbox.
 
--- The kernel prelude (same handles in both VMs).
----@type Component
+-- The kernel prelude (same handles in both VMs). Each carries its field shape so
+-- e:get(Handle) autocompletes (Enemy/Player are membership-only tags: no fields).
+---@type PositionFields
 Position = nil
----@type Component
+---@type VelocityFields
 Velocity = nil
----@type Component
+---@type SpeedFields
 Speed = nil
----@type Component
+---@type HealthFields
 Health = nil
----@type Component
+---@type HeartsFields
 Hearts = nil
----@type Component
+---@type RadiusFields
 Radius = nil
----@type Component
+---@type AimStateFields
 AimState = nil
----@type Component
+---@type DashFields
 Dash = nil
----@type Component
+---@type XpRewardFields
 XpReward = nil
----@type Component
+---@type RenderFields
 Render = nil
----@type Component
+---@type DownedFields
 Downed = nil
 ---@type Component
-Enemy = nil -- membership-only tag
+Enemy = nil  -- membership-only tag (no fields)
 ---@type Component
-Player = nil -- membership-only tag
----@type Component
+Player = nil -- membership-only tag (no fields)
+---@type ScaleFields
 Scale = nil
 
 ---Render.kind values for Lua-spawned drawables.
@@ -104,10 +117,15 @@ KIND = nil
 ---@class Entity
 local Entity = {}
 
----Return the component (mutate its fields in place), or nil if absent.
+---Return the component (mutate its fields in place). The returned table has the
+---handle's field shape — autocomplete + unknown-field typo-check. Typed as
+---always-present to fit the `world:each(A, B, …)`/`e:has(H)` idiom (where the
+---filter already guarantees it); it is nil only if the entity truly lacks the
+---component, so still `if c then …` when presence isn't guaranteed.
 ---Lua-defined components are strict: reading/writing an unknown field errors.
----@param component Component
----@return table|nil
+---@generic T
+---@param component T
+---@return T
 function Entity:get(component) end
 
 ---@param component Component
@@ -174,10 +192,12 @@ function world:add_xp(value) end
 ---Attach your bullet component for behavior; set Render.variant for tint.
 ---@return Entity
 function spawn_bullet(x, y, vx, vy) end
+
 ---Spawn a bare drawable (Position + Render). Set Render.kind (see KIND) and
 ---attach components — how drops/markers are made.
 ---@return Entity
 function spawn_entity(x, y) end
+
 ---Spawn a registered enemy archetype (applies its component bag at the
 ---current wave + fires its on_spawn hook).
 ---@param id string  # a registered enemy id, e.g. "core:brute"
@@ -211,22 +231,29 @@ function import(name) end
 ---@field y number
 local DrawView = {}
 
----Read a component's fields as a table, or nil if absent. Works for NETWORKED
----Lua components. Inside a mod:hud hook it ALSO resolves the local player's
----kernel handles: Position, Speed, Hearts, Dash, Scale (same field names as the
----server side) — those aren't readable in world draw hooks.
----@param component Component
----@return table|nil
+---Read a component's fields (typed by the handle). Works for NETWORKED Lua
+---components. Inside a mod:hud hook it ALSO resolves the local player's kernel
+---handles: Position, Speed, Hearts, Dash, Scale (same schema as the server
+---side) — those aren't readable in world draw hooks. Returns nil if the entity
+---lacks the component, so guard with `if c then …` when it isn't guaranteed.
+---@generic T
+---@param component T
+---@return T
 function DrawView:get(component) end
 
 ---@class DrawContext
 local DrawContext = {}
 
 function DrawContext:texture(path, x, y, w, h) end
+
 function DrawContext:rect(x, y, w, h, r, g, b, a) end
+
 function DrawContext:circle_filled(cx, cy, radius, r, g, b, a) end
+
 function DrawContext:circle(cx, cy, radius, r, g, b, a, thickness) end
+
 function DrawContext:text(x, y, s, r, g, b, a) end
+
 ---@return number sx, number sy
 function DrawContext:world_to_screen(wx, wy) end
 
@@ -242,27 +269,34 @@ local HudContext = {}
 ---@param x? number
 ---@param y? number
 function HudContext:begin_panel(title, x, y) end
+
 function HudContext:end_panel() end
 
 ---@param s string
 function HudContext:text(s) end
+
 ---@param r integer  # 0..255
 ---@param g integer
 ---@param b integer
 ---@param s string
 function HudContext:text_colored(r, g, b, s) end
+
 function HudContext:separator() end
+
 ---Keep the next item on the same line (lay icons/circles in a row).
 function HudContext:same_line() end
+
 ---Draw a cached texture (by asset path) at size x size, at the cursor.
 ---@param path string
 ---@param size number
 function HudContext:image(path, size) end
+
 ---Same as image() but multiplied by an RGBA tint (e.g. dim an empty heart).
 ---@param path string
 ---@param size number
 ---@param r integer @param g integer @param b integer @param a integer
 function HudContext:image_tinted(path, size, r, g, b, a) end
+
 ---Cooldown/loading disc: a faint ring plus a wedge filled for `fraction` (0..1)
 ---of a turn from the top (full disc at >= 1). Advances the cursor by 2*radius.
 ---@param radius number
@@ -331,11 +365,14 @@ function EnemyArchetype:component(component, fields) end
 local Mod = {}
 
 ---Define a component: fields with their defaults. Returns THE handle — store
----it, use it everywhere, export it for other plugins.
+---it, use it everywhere, export it for other plugins. The defaults table's shape
+---becomes the handle's field type, so `e:get(H).field` autocompletes with
+---nothing else to declare.
+---@generic T
 ---@param name string  # bare name; auto-namespaced
----@param fields table<string, number>  # field -> default value
+---@param fields T  # field -> default value (its shape types the handle)
 ---@param opts? ComponentOpts
----@return Component
+---@return T
 function Mod:component(name, fields, opts) end
 
 ---Define a system: fn(dt) run each tick (or throttled) at a pipeline phase.

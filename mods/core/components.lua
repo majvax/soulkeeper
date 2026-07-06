@@ -4,7 +4,9 @@
 -- knows Position/Velocity/Health/Hearts/Radius/Dash/Render. mod:component
 -- returns a HANDLE: store it, pass it to e:get/set, world:each/nearby,
 -- enemy :component(...), view:get(...). Fields declare their defaults.
+---@param mod Mod
 return function(mod)
+    ---@class core.Components
     local C = {}
 
     -- Player loadout (attached in on_player_spawn; mutated by upgrades).
@@ -47,6 +49,6 @@ return function(mod)
         timer = 1.0, -- brief grace period after spawning
     })
     C.AutoTarget = mod:component("autotarget", { enabled = 1 })
-
+    C.Boss = mod:component("boss", { enabled = 1 })
     return C
 end

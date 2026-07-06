@@ -1,4 +1,6 @@
 -- mods/core/objects.lua — one-time objects (each grants its own component).
+---@param mod Mod
+---@param C core.Components
 return function(mod, C)
     mod:object("onion", "Onion",
         function(e) e:set(C.Aura, { radius = 120, per_second = 25 }) end,

@@ -3,8 +3,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <memory>
 
 #include <imgui.h>
+
+#include "shared/mod/sim_bindings.hpp" // register_engine_components (shared kernel schema)
 
 namespace client {
 
@@ -130,23 +133,15 @@ void HudContext::pie(float radius, float fraction, int r, int g, int b, int a)
 sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) const
 {
     sol::state_view lua(ts);
-    // Engine (kernel) handles: not in the script blob. Readable only on the HUD
-    // view, from the local player's stats the client already holds.
+    // Engine (kernel) handles: dispatch through the SAME BindingTable the sim
+    // uses (mirror of sim_bindings' EntityHandle::get), over the client's render
+    // registry. Set only on the HUD view; null elsewhere -> nil, as before.
     if (ref.is_engine()) {
-        if (local == nullptr) { return sol::lua_nil; }
-        const std::string& id = ref.id;
-        if (id == "Position") { return lua.create_table_with("x", local->x, "y", local->y); }
-        if (id == "Speed") { return lua.create_table_with("value", local->speed); }
-        if (id == "Scale") { return lua.create_table_with("value", local->scale); }
-        if (id == "Hearts") {
-            return lua.create_table_with("current", local->hearts, "max", local->max_hearts);
+        if (reg == nullptr || table == nullptr
+            || ref.engine_tag >= static_cast<int>(table->size())) {
+            return sol::lua_nil;
         }
-        if (id == "Dash") {
-            return lua.create_table_with("charges", local->dash_charges, "max_charges", local->dash_max,
-                                         "cooldown", local->dash_cooldown,
-                                         "cooldown_max", local->dash_cooldown_max);
-        }
-        return sol::lua_nil; // other kernel comps aren't mirrored to the client HUD
+        return (*table)[ref.engine_tag].get(ts, *reg, entity);
     }
     // Script (Lua-defined) components: read from the entity's networked blob.
     if (comps == nullptr) { return sol::lua_nil; }
@@ -166,6 +161,15 @@ sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) cons
 void install_render_bindings(mod::LuaHost& host)
 {
     sol::state& lua = host.lua();
+
+    // Give the render VM the same kernel-component dispatch table as the sim, so
+    // a HUD hook's view:get(Hearts/Speed/Dash/...) resolves through one schema
+    // (no client-only field-name copy). The render VM already has the prelude
+    // Hearts/Dash/... handles from lua_host; this fills in the missing table.
+    auto table = std::make_shared<mod::BindingTable>();
+    mod::register_engine_components(lua, *table);
+    host.state().bindings = table;
+
     lua.new_usertype<DrawView>("DrawView", sol::no_constructor, "x", &DrawView::x, "y", &DrawView::y,
                                "get", &DrawView::get);
     lua.new_usertype<DrawContext>("DrawContext", sol::no_constructor,

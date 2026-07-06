@@ -7,6 +7,7 @@
 function main()
     local mod = register_mod("core", "Soulkeeper's built-in content", "majvax")
 
+    ---@type core.Components
     local C = include("components.lua")(mod) -- component handles (Weapon, Bullet, ...)
     include("systems.lua")(mod, C)
     include("upgrades.lua")(mod, C)

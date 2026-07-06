@@ -5,6 +5,8 @@
 local MIN_COOLDOWN = 0.08 -- fire-rate floor (keeps the game fun)
 
 
+---@param mod Mod
+---@param C core.Components
 return function(mod, C)
     mod:upgrade("damage", "Sharp Rounds", { 3, 5, 8, 12, 20 },
         function(e, _, amount)

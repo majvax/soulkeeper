@@ -6,7 +6,9 @@ snapshots, rendering — and **every game rule is a plugin**: weapons, bullets, 
 i-frames, deaths, drops, pickups, enemy AI, upgrades, objects, enemy archetypes. `mods/core/` *is*
 Soulkeeper's gameplay; your plugin sits right next to it with the same powers.
 
-For editor autocomplete, point your Lua LSP's library path at `types/` (see `types/library.lua`).
+For editor autocomplete, point your Lua LSP's library path at `types/` (the repo's `.luarc.json`
+already does). The **engine** surface is `types/kernel.lua`; a mod declares its OWN extra types in
+`mods/<name>/types.lua` (auto-loaded) — component shapes are inferred inline (see §2).
 
 ---
 
@@ -27,7 +29,7 @@ callbacks.
 Kernel components — available as **prelude globals**: `Position{x,y}`, `Velocity{dx,dy}`,
 `Speed{value}`, `Health{current,max}` (float HP, enemies), `Hearts{current,max}` (player heart
 life), `Radius{value}`, `AimState{dx,dy,firing}`, `Dash{cooldown_max, cooldown, burst_remaining,
-shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind,variant}` (how the client draws
+dir_x, dir_y, shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind,variant}` (how the client draws
 an entity), `Scale{value}` (networked on-screen size multiplier — mutate it from rules like
 Vitality; visual only, `Radius` stays the hitbox), `Downed{respawn_wave}`, plus the `Enemy` /
 `Player` tags. Kernel systems: spatial-hash rebuild, dash (client-predicted), movement
@@ -79,6 +81,31 @@ local Ranged = mod:component("ranged", {
 
 Fields are numbers (stored as doubles in flat pools). Field order is the sorted field-name order —
 deterministic for the networked wire layout.
+
+**Editor types.** `e:get(H)` returns H's field shape (autocomplete + typo-check), via an *identity
+generic* — the handle is typed as its fields. Kernel handles carry their `*Fields` class; a Lua
+handle gets the shape **inferred from the defaults table** you pass to `mod:component` (the defaults
+ARE the schema — nothing extra to declare). `e:get(H)` is typed always-present to fit the
+`world:each(A, B, …)` idiom — guard with `if c then` only when presence isn't guaranteed.
+
+For this to flow through your files, annotate the plugin's function params (LuaLS can't infer them
+across the `include(...)` boundary):
+
+```lua
+-- components.lua                         -- systems.lua / upgrades.lua / …
+---@param mod Mod                         ---@param mod Mod
+return function(mod)                      ---@param C core.Components
+    ---@class core.Components             return function(mod, C)
+    local C = {}                              mod:upgrade("x", "X", {1}, function(e)
+    C.Weapon = mod:component("weapon", {          e:get(C.Weapon).damage  -- autocompletes
+        damage = 10, cooldown = 0 })              e:get(Speed).value      -- kernel handle
+    return C                                  end)                        -- e:Entity because mod:Mod
+end                                       end
+```
+
+`---@param mod Mod` is what makes `mod:upgrade`/`mod:system` resolve so the callback's `e` is typed
+`Entity`. Importers add `---@type core.Components local core = import("core")`. The repo's
+`.luarc.json` already points the language server at `types/`.
 
 ## 3. Systems — the gameplay pipeline
 
@@ -244,8 +271,9 @@ The hook opens its **own** window with `begin_panel`/`end_panel` (fixed, borderl
 top-left by default — separate from the built-in "Net" debug window). `view:get(H)` reads:
 - **networked script components** — mark a stats component `{ networked = true }` to show live
   upgrade values (e.g. `core`'s Weapon/Crit); and
-- the local player's **kernel** handles — `Position`, `Speed`, `Hearts`, `Dash`, `Scale` (same
-  field names as the server), which the client already has for itself.
+- the local player's **kernel** handles — `Position`, `Speed`, `Hearts`, `Dash`, `Scale` — which
+  the client mirrors for itself and resolves through the **same schema as the sim** (no separate
+  client field list), so `e:get(H)` and `view:get(H)` agree field-for-field.
 
 Drawing primitives (`end` is a Lua keyword → `end_panel`):
 ```

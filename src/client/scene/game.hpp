@@ -7,6 +7,7 @@
 #include "client/scene/console.hpp"
 #include "client/scene/level_up.hpp"
 #include "client/sprites.hpp"
+#include "client/trainer.hpp"
 #include "shared/components/combat.hpp"
 #include "shared/components/physics.hpp"
 #include "shared/protocol.hpp"
@@ -185,6 +186,9 @@ private:
             aim_x = 1.0f;
             aim_y = 0.0f;
         }
+        // Trainer (SK_TRAINER=1): snap aim to the nearest enemy. No-op otherwise.
+        // Wrap in `if (input_.firing)` to only assist while shooting (subtler).
+        trainer::autoaim<Remote>(registry_, player_, has_player_, aim_x, aim_y);
         const std::uint8_t firing = (input_.firing && !downed) ? 1 : 0;
 
         // Dash: forward the edge to the server and mirror it locally so the
@@ -261,6 +265,12 @@ private:
                 my_max_hearts_ = entry->variant; // max hearts
                 my_move_speed_ = entry->move_speed;
                 my_scale_ = proto::dequantize_scale(entry->scale_q);
+                // Mirror kernel stats into the render registry for the Lua HUD
+                // (view:get(Hearts/Speed/Scale) dispatches through the shared table).
+                set_local(Hearts{ .current = static_cast<std::int16_t>(entry->health),
+                                  .max = static_cast<std::int16_t>(entry->variant) });
+                set_local(Speed{ .value = static_cast<float>(entry->move_speed) });
+                set_local(Scale{ .value = my_scale_ });
                 script_state_[entry->id] = std::move(comps);
                 seen.insert(entry->id);
                 continue;
@@ -382,19 +392,15 @@ private:
         // Plugin HUD hooks (mod:hud): the local player's own stats/upgrades, in
         // the mod's OWN panel (begin_panel). Outside the Net window's Begin/End so
         // the hook opens a top-level window. The view exposes our networked script
-        // comps (Weapon/Crit) AND our kernel stats (Speed/Hearts/Dash via `local`).
+        // comps (Weapon/Crit) AND our kernel stats (Position/Speed/Hearts/Dash),
+        // both resolved via view:get through the shared BindingTable.
         if (has_player_) {
-            const client::LocalStats stats{ .x = 0.0f, .y = 0.0f,
-                                            .speed = static_cast<float>(my_move_speed_),
-                                            .scale = my_scale_,
-                                            .hearts = my_health_, .max_hearts = my_max_hearts_,
-                                            .dash_charges = local_dash_.charges,
-                                            .dash_max = local_dash_.max_charges,
-                                            .dash_cooldown = local_dash_.cooldown,
-                                            .dash_cooldown_max = local_dash_.cooldown_max };
+            set_local(local_dash_); // predicted dash -> render registry for the HUD
             const client::DrawView view{ .scripts = &engine_->mods().scripts(),
                                          .comps = script_state_for(my_net_id_),
-                                         .local = &stats };
+                                         .reg = &registry_,
+                                         .entity = player_,
+                                         .table = engine_->mods().state().bindings.get() };
             client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
         }
 
@@ -730,6 +736,16 @@ private:
         bool dash_queued = false; // edge: set on SHIFT keydown, consumed per tick
     };
     void clear_input() { input_ = {}; }
+
+    // Mirror one of the local player's kernel components into the render registry
+    // (create on first sight, then overwrite), so the Lua HUD can read it through
+    // the same BindingTable the sim uses. Only called while has_player_.
+    template <typename T>
+    void set_local(const T& value)
+    {
+        if (T* p = registry_.try_get<T>(player_)) { *p = value; }
+        else { registry_.assign(player_, T{ value }); }
+    }
 
     client::Textures textures_;
     client::SpritePacks packs_{ &textures_ }; // animation packs (Idle/Move strips)

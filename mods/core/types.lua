@@ -1,0 +1,17 @@
+---@meta
+-- mods/core/types.lua — hand-written type declarations for the `core` plugin.
+--
+-- The engine surface lives in types/kernel.lua. A mod's OWN types live here.
+-- core's COMPONENT types are NOT redeclared: `core.Components` is inferred inline
+-- in components.lua from the mod:component defaults (one source of truth), so
+-- `e:get(C.Weapon).damage` already autocompletes. Put a mod's EXTRA types here —
+-- custom event payloads, enums, helper classes exposed to other plugins.
+--
+-- This file is never run by the game; LuaLS auto-loads any ---@meta file in the
+-- workspace. core has no extra types yet — this marks the per-mod convention.
+--
+-- Example (when core grows a custom event):
+---@class core.BossSpawned
+---@field x number
+---@field y number
+---@field tier integer

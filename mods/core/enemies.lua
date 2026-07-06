@@ -32,6 +32,8 @@ local function xp(base)
     end
 end
 
+---@param mod Mod
+---@param C core.Components
 return function(mod, C)
     mod:enemy("bandit", "Bandit", {
         weight = 6,
@@ -111,4 +113,33 @@ return function(mod, C)
         :component(Radius, { value = 10 })
         :component(XpReward, xp(4))
         :component(C.Ranged, { range = 380, cooldown = 1.2, bullet_speed = 320 })
+
+    -- Mini-boss: hand-spawned every 5 waves (weight 0 = never rolls naturally).
+    -- Huge, slow, very tanky bruiser — a wave milestone that scales like the rest.
+    mod:enemy("miniboss", "Mini-Boss", {
+        weight = 0,
+        sprite = "assets/sprite/FrogBoss",
+        scale = 2.6,
+        tint = { 255, 150, 150 },           -- reddish: reads as "elite"
+    })
+        :component(Health, health(350))     -- ~6x a Brute; scales +5%/wave
+        :component(Speed, speed(80))        -- lumbering
+        :component(C.Touch, { hearts = 2 }) -- heavy contact (i-frames still apply)
+        :component(Radius, { value = 32 })  -- big hitbox to match the size
+        :component(XpReward, xp(20))        -- worth the fight
+
+    -- Every 5th wave, drop a mini-boss on the spawn ring around a live player.
+    -- Runs in the SIM VM only (on_wave_start is server-emitted); world / spawn_enemy
+    -- are kernel globals. No boss if everyone's downed at the milestone.
+    mod:subscribe("on_wave_start", function(wave)
+        if wave % 5 ~= 0 then return end
+        for p in world:each(Player, Position) do
+            if not p:has(Downed) then
+                local pp = p:get(Position)
+                local a = math.random() * 2 * math.pi
+                spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, "core:miniboss")
+                return
+            end
+        end
+    end)
 end

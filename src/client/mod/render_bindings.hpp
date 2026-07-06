@@ -12,36 +12,31 @@
 #include <SDL3/SDL.h>
 
 #include "client/renderer.hpp"
+#include "core/ecs.hpp"
+#include "shared/mod/bindings_table.hpp"
 #include "shared/mod/lua_host.hpp"
 #include "shared/mod/script_ecs.hpp"
 
 namespace client {
 
-// The local player's KERNEL stats, so a HUD hook can read engine handles the
-// client has locally (they aren't script components). Set only on the HUD view;
-// null for world draw hooks (there, engine handles resolve to nil as before).
-struct LocalStats
-{
-    float x = 0.0f, y = 0.0f;
-    float speed = 0.0f;       // Speed.value (px/s)
-    float scale = 1.0f;       // Scale.value
-    int hearts = 0, max_hearts = 0;             // Hearts.current / .max
-    int dash_charges = 0, dash_max = 0;         // Dash.charges / .max_charges
-    float dash_cooldown = 0.0f, dash_cooldown_max = 0.0f; // Dash.cooldown / .cooldown_max
-};
-
 // What a draw hook receives about the entity being drawn (screen-space `x,y`),
 // plus access to its networked script components: `view:get(C.Slow)` returns a
 // table of that component's fields, or nil if the entity lacks it. Inside a
-// mod:hud hook `local` is also set, so `view:get(Speed/Hearts/Dash/Scale)` reads
-// the local player's kernel stats.
+// mod:hud hook `reg`/`entity`/`table` are also set, so `view:get(Speed/Hearts/
+// Dash/Scale/Position)` dispatches through the SAME kernel-component schema as
+// the sim (see mod::register_engine_components) — no hardcoded field-name copy.
 struct DrawView
 {
     float x = 0.0f;
     float y = 0.0f;
     const mod::ScriptComponentRegistry* scripts = nullptr; // kept for schema lookups
     const std::vector<mod::NetComp>* comps = nullptr;
-    const LocalStats* local = nullptr; // HUD view only: local player's kernel stats
+    // HUD view only: the client's render registry + local player entity + the
+    // kernel dispatch table, so engine handles resolve like on the sim side.
+    // Left null for world draw hooks (there, engine handles resolve to nil).
+    core::Registry* reg = nullptr;
+    core::Entity entity = core::null_entity;
+    const mod::BindingTable* table = nullptr;
 
     [[nodiscard]] sol::object get(const mod::ComponentRef& ref, sol::this_state ts) const;
 };

@@ -18,6 +18,8 @@ local function auto_aim(player)
     aim.firing = 1
 end
 
+---@param mod Mod
+---@param C core.Components
 return function(mod, C)
     -- Nearest live player to (x, y), or nil (+ squared distance). Downed
     -- players are ignored. world:closest is a single engine call — never loop
@@ -215,7 +217,7 @@ return function(mod, C)
             if p:has(Downed) then return end
             local pp = p:get(Position)
             for orb in world:nearby(pp.x, pp.y, 45, C.Xp) do
-                world:add_xp(math.tointeger(orb:get(C.Xp).value)) -- crashes without tointeger
+                world:add_xp(math.tointeger(orb:get(C.Xp).value) or 0) -- crashes without tointeger
                 orb:destroy()
             end
             local h = p:get(Hearts)
@@ -332,7 +334,7 @@ return function(mod, C)
             for p in world:each(Player, Position) do
                 local pp = p:get(Position)
                 for orb in world:nearby(pp.x, pp.y, 1000, C.Xp) do
-                    world:add_xp(math.tointeger(orb:get(C.Xp).value))
+                    world:add_xp(math.tointeger(orb:get(C.Xp).value) or 0)
                     orb:destroy()
                 end
                 local h = p:get(Hearts)
