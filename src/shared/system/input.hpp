@@ -8,12 +8,8 @@
 // authority on how fast a player moves.
 inline constexpr float PLAYER_SPEED = 240.0f;
 
-// Dash tuning: a burst of DASH_MULT x speed for DASH_DURATION seconds
-// (~155 px at base speed), one charge, DASH_COOLDOWN s to refill. Shared so
-// client prediction runs the exact same math as the server.
-inline constexpr float DASH_MULT = 4.0f;
-inline constexpr float DASH_DURATION = 0.16f;
-inline constexpr float DASH_COOLDOWN = 4.0f;
+// (DASH_MULT / DASH_DURATION / DASH_COOLDOWN live next to the Dash component
+// in components/combat.hpp — its default member initializers use them.)
 
 // Turn a movement intent (-1/0/+1 on each axis) into a velocity at `speed`.
 // Diagonals are normalized so they aren't faster than cardinal movement.

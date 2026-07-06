@@ -16,13 +16,11 @@ inline core::Entity create_player(core::Registry& registry, float x, float y)
     registry.assign(player, PrevPosition{ .x = x, .y = y });
     registry.assign(player, Velocity{ .dx = 0, .dy = 0 });
     registry.assign(player, PlayerTag{});
-    registry.assign(player, Hearts{ .current = 3, .max = 3 });
+    registry.assign(player, Hearts{}); // 3/3 — the struct's defaults
     registry.assign(player, Radius{ .value = 12 });
     registry.assign(player, Speed{ .value = PLAYER_SPEED });
     registry.assign(player, AimState{ .dx = 1.0f, .dy = 0.0f, .firing = 0 });
-    registry.assign(player, Dash{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f,
-                                  .burst_remaining = 0.0f, .dir_x = 1.0f, .dir_y = 0.0f,
-                                  .shockwave = 0.0f, .charges = 1, .max_charges = 1 });
+    registry.assign(player, Dash{}); // 1 charge, DASH_COOLDOWN — the struct's defaults
     registry.assign(player, Render{ .kind = static_cast<std::uint8_t>(proto::EntityKind::Player),
                                     .variant = 0 });
     registry.assign(player, Scale{ .value = 1.0f }); // Lua rules mutate it (e.g. Vitality)

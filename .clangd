@@ -1,0 +1,6 @@
+# clangd can't drive the GCC-only C++26 flags (P2996 reflection / P2900
+# contracts); strip them so the editor keeps working project-wide. Files that
+# use ^^ / pre() syntax directly will still show false parse errors — g++ is
+# the ground truth there.
+CompileFlags:
+  Remove: [-freflection, -fcontracts]

@@ -18,7 +18,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cassert>
 #include <concepts>
 #include <cstdint>
 #include <limits>
@@ -146,8 +145,7 @@ template <Component T>
 class ComponentPool final : public SparseSet {
 public:
     template <typename... Args>
-    T& emplace(Entity e, Args&&... args) {
-        assert(!contains(e) && "component already assigned to entity");
+    T& emplace(Entity e, Args&&... args) pre(!contains(e)) {
         emplace_slot(e);
         return components_.emplace_back(std::forward<Args>(args)...);
     }
@@ -164,13 +162,11 @@ public:
         components_.pop_back();
     }
 
-    [[nodiscard]] T& get(Entity e) noexcept {
-        assert(contains(e) && "get() on entity without component");
+    [[nodiscard]] T& get(Entity e) noexcept pre(contains(e)) {
         return components_[slot_of(e)];
     }
 
-    [[nodiscard]] const T& get(Entity e) const noexcept {
-        assert(contains(e) && "get() on entity without component");
+    [[nodiscard]] const T& get(Entity e) const noexcept pre(contains(e)) {
         return components_[slot_of(e)];
     }
 
@@ -308,7 +304,7 @@ public:
             return make_entity(idx, versions_[idx]);
         }
         const auto idx = static_cast<std::uint32_t>(versions_.size());
-        assert(idx < null_index && "entity index space exhausted");
+        contract_assert(idx < null_index); // entity index space exhausted
         versions_.push_back(0u);
         return make_entity(idx, 0u);
     }
@@ -321,8 +317,7 @@ public:
 
     // Destroy `e`: strip it from every pool, then recycle its index with a
     // bumped version so old handles stop validating.
-    void destroy(Entity e) {
-        assert(valid(e) && "destroy() on stale or unknown entity");
+    void destroy(Entity e) pre(valid(e)) {
         for (auto& pool : pools_) {
             if (pool) {
                 pool->remove(e);
@@ -339,8 +334,7 @@ public:
     }
 
     template <Component T, typename... Args>
-    T& emplace(Entity e, Args&&... args) {
-        assert(valid(e) && "emplace() on stale or unknown entity");
+    T& emplace(Entity e, Args&&... args) pre(valid(e)) {
         return pool<T>().emplace(e, std::forward<Args>(args)...);
     }
 
@@ -351,8 +345,7 @@ public:
     }
 
     template <Component T>
-    void remove(Entity e) {
-        assert(valid(e) && "remove() on stale or unknown entity");
+    void remove(Entity e) pre(valid(e)) {
         if (SparseSet* p = find_pool<T>()) {
             p->remove(e);
         }
@@ -365,14 +358,12 @@ public:
     }
 
     template <Component T>
-    [[nodiscard]] T& get(Entity e) noexcept {
-        assert(has<T>(e) && "get() on entity without component");
+    [[nodiscard]] T& get(Entity e) noexcept pre(has<T>(e)) {
         return pool<T>().get(e);
     }
 
     template <Component T>
-    [[nodiscard]] const T& get(Entity e) const noexcept {
-        assert(has<T>(e) && "get() on entity without component");
+    [[nodiscard]] const T& get(Entity e) const noexcept pre(has<T>(e)) {
         return find_pool<T>()->get(e);
     }
 

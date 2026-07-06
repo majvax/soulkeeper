@@ -6,10 +6,12 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <meta>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "shared/components/combat.hpp"
@@ -20,33 +22,53 @@
 #include "shared/mod/script_ecs.hpp"
 #include "shared/protocol.hpp" // EntityKind for spawn_bullet
 #include "shared/sim/world.hpp"
-#include "shared/system/input.hpp" // DASH_COOLDOWN default for the Dash binding
 
 namespace mod {
 
 namespace {
 
-// Register an engine component usertype + its dispatch entry. The table index
-// MUST match the component's position in engine_component_names (the prelude
-// handles installed by lua_host carry that index as their engine_tag).
-template <typename T, typename Builder, typename... Fields>
-void register_component(sol::state& lua, BindingTable& table, const char* name, Builder builder,
-                        Fields&&... fields)
+// P2996 reflection helpers. NOTE: GCC 16.1 can't splice a `template for` loop
+// variable yet, so all member iteration below uses the index-pack pattern.
+consteval std::meta::info member_at(std::meta::info type, std::size_t i)
 {
-    if (std::string_view(engine_component_names.at(table.size())) != name) {
-        std::fprintf(stderr, "[mod] FATAL: engine component '%s' registered out of prelude order\n", name);
-    }
+    return std::meta::nonstatic_data_members_of(type, std::meta::access_context::unchecked())[i];
+}
+consteval std::size_t member_count(std::meta::info type)
+{
+    return std::meta::nonstatic_data_members_of(type, std::meta::access_context::unchecked()).size();
+}
+consteval const char* member_name(std::meta::info type, std::size_t i)
+{
+    return std::define_static_string(std::meta::identifier_of(member_at(type, i)));
+}
+
+// Register an engine component usertype + its dispatch entry, entirely
+// reflected off T's data members: the Lua field accessors, the field names,
+// and the `set` builder (T{}'s default member initializers are the defaults,
+// overridden by whatever the Lua table provides — numbers only, matching the
+// all-arithmetic kernel components).
+template <typename T, std::size_t... Is>
+void register_component(sol::state& lua, BindingTable& table, const char* name,
+                        std::index_sequence<Is...>)
+{
     // Hidden metatable name so it doesn't shadow the `name` prelude handle.
-    lua.new_usertype<T>(std::string("_ct_") + name, std::forward<Fields>(fields)...);
+    sol::usertype<T> ut = lua.new_usertype<T>(std::string("_ct_") + name);
+    (..., (ut[member_name(^^T, Is)] = &[:member_at(^^T, Is):]));
+
     table.push_back(ComponentBinding{
       .has = [](core::Registry& r, core::Entity e) { return r.has<T>(e); },
       .get = [](sol::state_view sv, core::Registry& r, core::Entity e) -> sol::object {
           T* p = r.try_get<T>(e);
           return p ? sol::make_object(sv, std::ref(*p)) : sol::lua_nil;
       },
-      .assign = [builder](core::Registry& r, core::Entity e, const sol::table& t) {
+      .assign = [](core::Registry& r, core::Entity e, const sol::table& t) {
           if (r.has<T>(e)) { r.remove<T>(e); } // set == replace
-          r.assign(e, builder(t));
+          T c{};
+          (..., (c.[:member_at(^^T, Is):] =
+                   static_cast<typename[:std::meta::type_of(member_at(^^T, Is)):]>(
+                     t.get_or(member_name(^^T, Is),
+                              static_cast<double>(c.[:member_at(^^T, Is):])))));
+          r.assign(e, std::move(c));
       },
       .remove = [](core::Registry& r, core::Entity e) { if (r.has<T>(e)) { r.remove<T>(e); } },
       .pool = [](core::Registry& r) { return r.raw_pool(core::type_id<T>()); },
@@ -296,76 +318,27 @@ private:
 
 } // namespace
 
+// Kernel-component usertypes + their dispatch entries, generated from the
+// canonical engine_components list (bindings_table.hpp) — prelude-tag order is
+// the list order by construction. Shared by the sim VM (install_sim_bindings)
+// and the client render VM (a HUD hook reads kernel handles through this same
+// schema).
+void register_engine_components(sol::state& lua, BindingTable& table)
+{
+    [&]<std::size_t... Ks>(std::index_sequence<Ks...>) {
+        (..., register_component<typename[:engine_components()[Ks].type:]>(
+                lua, table, engine_component_names[Ks],
+                std::make_index_sequence<member_count(engine_components()[Ks].type)>{}));
+    }(std::make_index_sequence<engine_components().size()>{});
+}
+
 void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
 {
     sol::state& lua = host.lua();
     host.scripts().bind(&world_reg); // mod:component allocates pools in this registry
     auto table = std::make_shared<BindingTable>();
     host.state().bindings = table; // spawn path + game server dispatch through this
-
-    // Kernel components, in engine_component_names order (= prelude tags).
-    register_component<Position>(lua, *table, "Position",
-      [](const sol::table& t) { return Position{ .x = t.get_or("x", 0.0f), .y = t.get_or("y", 0.0f) }; },
-      "x", &Position::x, "y", &Position::y);
-    register_component<Velocity>(lua, *table, "Velocity",
-      [](const sol::table& t) { return Velocity{ .dx = t.get_or("dx", 0.0f), .dy = t.get_or("dy", 0.0f) }; },
-      "dx", &Velocity::dx, "dy", &Velocity::dy);
-    register_component<Speed>(lua, *table, "Speed",
-      [](const sol::table& t) { return Speed{ .value = t.get_or("value", 0.0f) }; },
-      "value", &Speed::value);
-    register_component<Health>(lua, *table, "Health",
-      [](const sol::table& t) { return Health{ .current = t.get_or("current", 0.0f), .max = t.get_or("max", 0.0f) }; },
-      "current", &Health::current, "max", &Health::max);
-    register_component<Hearts>(lua, *table, "Hearts",
-      [](const sol::table& t) {
-          return Hearts{ .current = static_cast<std::int16_t>(t.get_or("current", 3)),
-                         .max = static_cast<std::int16_t>(t.get_or("max", 3)) };
-      },
-      "current", &Hearts::current, "max", &Hearts::max);
-    register_component<Radius>(lua, *table, "Radius",
-      [](const sol::table& t) { return Radius{ .value = t.get_or("value", 0.0f) }; },
-      "value", &Radius::value);
-    register_component<AimState>(lua, *table, "AimState",
-      [](const sol::table& t) {
-          return AimState{ .dx = t.get_or("dx", 0.0f), .dy = t.get_or("dy", 0.0f),
-                           .firing = static_cast<std::uint8_t>(t.get_or("firing", 0)) };
-      },
-      "dx", &AimState::dx, "dy", &AimState::dy, "firing", &AimState::firing);
-    register_component<Dash>(lua, *table, "Dash",
-      [](const sol::table& t) {
-          return Dash{ .cooldown_max = t.get_or("cooldown_max", DASH_COOLDOWN),
-                       .cooldown = t.get_or("cooldown", 0.0f),
-                       .burst_remaining = 0.0f,
-                       .dir_x = 1.0f, .dir_y = 0.0f,
-                       .shockwave = t.get_or("shockwave", 0.0f),
-                       .charges = static_cast<std::uint8_t>(t.get_or("charges", 1)),
-                       .max_charges = static_cast<std::uint8_t>(t.get_or("max_charges", 1)) };
-      },
-      "cooldown_max", &Dash::cooldown_max, "cooldown", &Dash::cooldown,
-      "burst_remaining", &Dash::burst_remaining, "shockwave", &Dash::shockwave,
-      "charges", &Dash::charges, "max_charges", &Dash::max_charges);
-    register_component<XpReward>(lua, *table, "XpReward",
-      [](const sol::table& t) {
-          return XpReward{ .value = static_cast<std::uint32_t>(t.get_or("value", 1)) };
-      },
-      "value", &XpReward::value);
-    register_component<Render>(lua, *table, "Render",
-      [](const sol::table& t) {
-          return Render{ .kind = static_cast<std::uint8_t>(t.get_or("kind", 0)),
-                         .variant = static_cast<std::uint8_t>(t.get_or("variant", 0)) };
-      },
-      "kind", &Render::kind, "variant", &Render::variant);
-    register_component<Downed>(lua, *table, "Downed",
-      [](const sol::table& t) {
-          return Downed{ .respawn_wave = static_cast<std::uint16_t>(t.get_or("respawn_wave", 0)) };
-      },
-      "respawn_wave", &Downed::respawn_wave);
-    // Tag components — no fields; used for membership in queries (`Enemy`, `Player`).
-    register_component<EnemyTag>(lua, *table, "Enemy", [](const sol::table&) { return EnemyTag{}; });
-    register_component<PlayerTag>(lua, *table, "Player", [](const sol::table&) { return PlayerTag{}; });
-    register_component<Scale>(lua, *table, "Scale",
-      [](const sol::table& t) { return Scale{ .value = t.get_or("value", 1.0f) }; },
-      "value", &Scale::value);
+    register_engine_components(lua, *table); // kernel usertypes + dispatch entries
 
     // Write-through proxy for script component fields (strict on unknowns).
     lua.new_usertype<ScriptFieldProxy>(

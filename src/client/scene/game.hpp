@@ -749,9 +749,8 @@ private:
     std::uint8_t my_max_hearts_ = 3;   // max hearts (snapshot variant byte)
     std::uint16_t my_move_speed_ = 0;
     float my_scale_ = 1.0f; // kernel Scale off the wire (Lua-driven, e.g. Vitality)
-    // Local dash prediction (base constants; server is authoritative).
-    Dash local_dash_{ .cooldown_max = DASH_COOLDOWN, .cooldown = 0.0f, .burst_remaining = 0.0f,
-                      .dir_x = 1.0f, .dir_y = 0.0f, .shockwave = 0.0f, .charges = 1, .max_charges = 1 };
+    // Local dash prediction (struct defaults = base constants; server is authoritative).
+    Dash local_dash_{};
     // Per-entity networked script components (net id -> components), for draw hooks.
     std::unordered_map<std::uint32_t, std::vector<mod::NetComp>> script_state_;
     std::uint16_t level_ = 1;

@@ -15,5 +15,5 @@ struct GameStats
 // death system.
 struct Downed
 {
-    std::uint16_t respawn_wave; // respawns once GameStats.wave reaches this
+    std::uint16_t respawn_wave = 0; // respawns once GameStats.wave reaches this
 };

@@ -34,6 +34,13 @@ struct EntityHandle
 // authoritative registry). Call once, before load_dir().
 void install_sim_bindings(LuaHost& host, core::Registry& world_reg);
 
+// Register just the kernel-component usertypes + their dispatch entries into
+// `lua`, filling `table` in engine_component_names order. Shared by the sim VM
+// (via install_sim_bindings) and the client render VM, so a HUD hook resolves
+// kernel handles (`view:get(Hearts)`) through the SAME schema — no hardcoded
+// field-name copy on the client. Call once per sol::state.
+void register_engine_components(sol::state& lua, BindingTable& table);
+
 // Create an enemy from a registered def: kernel comps from the factory, then
 // the archetype's (possibly wave-resolved) component inits, then the optional
 // on_spawn hook (protected; errors logged). Used by the wave spawner (cached
