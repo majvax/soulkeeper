@@ -50,5 +50,15 @@ return function(mod)
     })
     C.AutoTarget = mod:component("autotarget", { enabled = 1 })
     C.Boss = mod:component("boss", { enabled = 1 })
+
+    -- Boss special: every `cooldown` s, a radial ring of `bullets` hostile
+    -- projectiles. Presence also marks the entity for guaranteed death drops.
+    C.Nova = mod:component("nova", {
+        cooldown = 3.0,
+        timer = 2.0, -- first ring shortly after the arena entrance
+        bullets = 16,
+        bullet_speed = 210,
+        damage = 1,
+    })
     return C
 end

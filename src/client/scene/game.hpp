@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <imgui.h>
 #include <iterator>
@@ -295,6 +296,9 @@ private:
     {
         level_ = state.level;
         xp_frac_ = state.xp_frac;
+        if (state.wave != wave_ && state.wave > 1) { // wave banner (skip the initial wave 1)
+            banner_until_ = anim_time_ + 2.5f;
+        }
         wave_ = state.wave;
 
         std::unordered_set<std::uint32_t> seen;
@@ -424,6 +428,22 @@ private:
         draw_ctx_.oy = oy;
 
         draw_background(r, cam_x, cam_y, ww, wh, ox, oy);
+
+        // Wave banner: big centered "WAVE N", fading out over its last second.
+        // Skipped when a modal (console/level-up/game-over) is stacked above —
+        // foreground-list text would bleed over it.
+        if (anim_time_ < banner_until_ && engine_->scenes().is_top(this)) {
+            const float remain = banner_until_ - anim_time_;
+            const float alpha = std::clamp(remain, 0.0f, 1.0f); // fade the last second
+            constexpr float banner_px = 56.0f;
+            char banner[32];
+            (void)std::snprintf(banner, sizeof(banner), "WAVE %u", static_cast<unsigned>(wave_));
+            ImFont* font = ImGui::GetFont();
+            const ImVec2 size = font->CalcTextSizeA(banner_px, FLT_MAX, 0.0f, banner);
+            ImGui::GetForegroundDrawList()->AddText(
+              font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.22f),
+              IM_COL32(255, 225, 140, static_cast<int>(alpha * 255.0f)), banner);
+        }
 
         // "Net" = debug/team panel only (fps/ms + wave/level/xp). Per-player
         // stats (hearts/dash/speed/...) are drawn by Lua mod:hud hooks below.
@@ -825,6 +845,7 @@ private:
     std::uint16_t level_ = 1;
     std::uint8_t xp_frac_ = 0;
     std::uint16_t wave_ = 1;
+    float banner_until_ = -1.0f; // anim_time_ deadline for the "WAVE N" banner
     float time_since_snapshot_ = 0.0f;
     float anim_time_ = 0.0f;   // drives every animation clip
     float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)

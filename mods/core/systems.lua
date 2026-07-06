@@ -255,6 +255,21 @@ return function(mod, C)
                     heart:get(Render).kind = KIND.heart
                     heart:set(C.Heal, {})
                 end
+                -- A nova-bearer (the boss) always pays out: two hearts + a
+                -- spray of bonus orbs around the corpse.
+                if e:has(C.Nova) then
+                    for i = 1, 2 do
+                        local heart = spawn_entity(ep.x - 20 * i, ep.y + 10)
+                        heart:get(Render).kind = KIND.heart
+                        heart:set(C.Heal, {})
+                    end
+                    for i = 1, 6 do
+                        local a = (i / 6) * 2 * math.pi
+                        local bonus = spawn_entity(ep.x + math.cos(a) * 30, ep.y + math.sin(a) * 30)
+                        bonus:get(Render).kind = KIND.orb
+                        bonus:set(C.Xp, { value = 5 })
+                    end
+                end
                 e:destroy()
             end
         end
@@ -312,6 +327,28 @@ return function(mod, C)
                         r.timer = r.cooldown
                     end
                 end
+            end
+        end
+    end)
+
+    -- Boss nova: a radial ring of hostile bullets every Nova.cooldown seconds.
+    -- 10 Hz is plenty for multi-second cooldowns; the timer uses the
+    -- accumulated dt. One boss alive at a time, so the walk is tiny.
+    mod:system("nova", { phase = "update", rate = 10, stagger = 0.33 }, function(dt)
+        for e in world:each(C.Nova, Position, Enemy) do
+            local nova = e:get(C.Nova)
+            nova.timer = nova.timer - dt
+            if nova.timer <= 0 then
+                local ep = e:get(Position)
+                local n = math.floor(nova.bullets)
+                for i = 1, n do
+                    local a = (i / n) * 2 * math.pi
+                    local b = spawn_bullet(ep.x, ep.y, math.cos(a) * nova.bullet_speed,
+                                           math.sin(a) * nova.bullet_speed)
+                    b:set(C.Bullet, { damage = nova.damage, hostile = 1, lifetime = 2.2 })
+                    b:get(Render).variant = 1 -- hostile: red
+                end
+                nova.timer = nova.cooldown
             end
         end
     end)

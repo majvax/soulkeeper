@@ -128,16 +128,35 @@ return function(mod, C)
         :component(Radius, { value = 32 })  -- big hitbox to match the size
         :component(XpReward, xp(20))        -- worth the fight
 
-    -- Every 5th wave, drop a mini-boss on the spawn ring around a live player.
-    -- Runs in the SIM VM only (on_wave_start is server-emitted); world / spawn_enemy
-    -- are kernel globals. No boss if everyone's downed at the milestone.
+    -- THE boss: hand-spawned every 10 waves. A towering, golden Frog King —
+    -- slow, enormously tanky, and every few seconds it blasts a radial NOVA of
+    -- hostile bullets (C.Nova system). Its death guarantees drops (death system
+    -- keys on C.Nova). Health scales like everything else, so wave 20's king
+    -- is meaner than wave 10's.
+    mod:enemy("boss", "Frog King", {
+        weight = 0,
+        sprite = "assets/sprite/FrogBoss",
+        scale = 3.4,
+        tint = { 255, 215, 120 },            -- gold: unmistakably THE boss
+    })
+        :component(Health, health(1200))     -- a proper health bar to chew through
+        :component(Speed, speed(60))         -- walks, never runs
+        :component(C.Touch, { hearts = 2 })
+        :component(Radius, { value = 44 })
+        :component(XpReward, xp(60))
+        :component(C.Nova, {})               -- radial bullet rings (defaults)
+
+    -- Wave milestones: every 10th wave THE boss, every other 5th a mini-boss,
+    -- dropped on the spawn ring around a live player. Runs in the SIM VM only
+    -- (on_wave_start is server-emitted); no spawn if everyone's downed.
     mod:subscribe("on_wave_start", function(wave)
         if wave % 5 ~= 0 then return end
+        local id = (wave % 10 == 0) and "core:boss" or "core:miniboss"
         for p in world:each(Player, Position) do
             if not p:has(Downed) then
                 local pp = p:get(Position)
                 local a = math.random() * 2 * math.pi
-                spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, "core:miniboss")
+                spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, id)
                 return
             end
         end
