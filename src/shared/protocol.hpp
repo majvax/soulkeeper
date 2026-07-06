@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 9;
+inline constexpr std::uint16_t protocol_version = 10;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -45,6 +45,7 @@ enum class MsgType : std::uint8_t {
     JoinDenied = 11,   // S2C: plugin-set hash mismatch; peer is then kicked (reliable)
     SnapshotDelta = 12, // S2C: world state as a delta vs an acked full/delta (unreliable)
     GameOver = 13,      // S2C: the run ended (won/lost + final stats); sim freezes (reliable)
+    LuaCommand = 14,    // C2S: a mod console command line, "name args..." (host-only, reliable)
 };
 
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };

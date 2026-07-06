@@ -429,6 +429,21 @@ function Mod:player_sprite(path) end
 ---@param fn HudFn
 function Mod:hud(fn) end
 
+---Register a console command: `/name args...` typed in the client's TAB
+---console runs fn on the SERVER (host-only, sim VM) with the invoking player
+---and the whitespace-split args — numeric tokens arrive as numbers, the rest
+---as strings. `usage` feeds the console's autocompletion and /help. Names are
+---bare (typed by hand — no namespace); on a clash the first registration wins.
+---```lua
+---mod:command("givexp", "/givexp <amount>  -- add team XP", function(player, amount)
+---    world:add_xp(math.floor(amount or 0))
+---end)
+---```
+---@param name string   # bare command name (no slash)
+---@param usage string  # one-line usage/help shown by autocomplete + /help
+---@param fn fun(player: Entity, ...: number|string)
+function Mod:command(name, usage, fn) end
+
 ---Subscribe to a game event. Engine events (server-side):
 ---  "on_wave_start"    fun(wave: integer)
 ---  "on_enemy_death"   fun(victim: { x: number, y: number, variant: integer, xp: integer })

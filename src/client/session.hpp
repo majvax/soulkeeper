@@ -162,6 +162,19 @@ public:
         client_->send(writer.bytes(), true);
     }
 
+    // A mod console command line ("givexp 50" — no leading slash). The server
+    // dispatches it to the matching mod:command callback (host-only).
+    void send_lua_command(std::string_view line)
+    {
+        if (!client_ || line.empty()) { return; }
+        proto::ByteWriter writer;
+        writer.put(proto::MsgType::LuaCommand);
+        const auto len = static_cast<std::uint8_t>(std::min<std::size_t>(line.size(), 255));
+        writer.put(len);
+        for (std::uint8_t i = 0; i < len; ++i) { writer.put(line[i]); }
+        client_->send(writer.bytes(), true);
+    }
+
     void send_select(std::uint8_t index)
     {
         leveling_ = false; // close the overlay; server resumes once all have chosen

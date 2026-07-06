@@ -264,6 +264,23 @@ struct ModHandle
     // <Clip>_<N>x1.png strips (or a plain .png). Render-VM metadata only.
     void player_sprite(const std::string& path) { state->player_sprite = path; }
 
+    // Register a console command: `/name args...` typed in the client console
+    // runs fn on the SERVER (host-only) with the invoking player's handle +
+    // the whitespace-split args (numeric tokens arrive as numbers). `usage`
+    // feeds the console's autocompletion and /help. Names are bare (no
+    // namespace — they're typed by hand); on a clash the first wins.
+    void command(const std::string& name, const std::string& usage, sol::protected_function fn)
+    {
+        for (const ModState::ConsoleCommand& cmd : state->commands) {
+            if (cmd.name == name) {
+                std::fprintf(stderr, "[mod] '%s': command '/%s' already registered — skipped\n",
+                             ns.c_str(), name.c_str());
+                return;
+            }
+        }
+        state->commands.push_back({ .name = name, .usage = usage, .fn = std::move(fn) });
+    }
+
     // Register a HUD panel hook: fn(hud, view) runs once per frame on the client
     // with the LOCAL player's view, printing stats via the hud context. Stored
     // in both VMs; the sim VM never calls it. Not hashed (pure render metadata).
@@ -328,6 +345,7 @@ void LuaHost::install_registration_api()
       "enemy", &ModHandle::enemy,
       "player_sprite", &ModHandle::player_sprite,
       "hud", &ModHandle::hud,
+      "command", &ModHandle::command,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);
 

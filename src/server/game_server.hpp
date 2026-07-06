@@ -51,6 +51,7 @@ private:
     void on_start(std::uint32_t peer_id);
     void on_input(std::uint32_t peer_id, proto::ByteReader& reader);
     void on_command(std::uint32_t peer_id, proto::ByteReader& reader);
+    void on_lua_command(std::uint32_t peer_id, proto::ByteReader& reader); // mod:command dispatch
     void on_select(std::uint32_t peer_id, proto::ByteReader& reader);
 
     void broadcast_roster();

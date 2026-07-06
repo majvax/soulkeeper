@@ -135,7 +135,8 @@ crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **hear
 **crit** (chance/multiplier; crit bullets render orange) · co-op **downed → respawn a few waves
 later** · **game-over/win** (Lua rule via `world:end_game`: all downed = defeat, wave 20 = win;
 frozen-world overlay with final stats, host returns everyone to the lobby for a fresh run) ·
-`/pause` `/resume` console.
+TAB console: `/pause` `/resume` + **mod commands** (`mod:command`, host-only server-side callbacks
+— core ships `/givexp <n>` and `/heal`) with TAB-completion, live suggestions and input history.
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.

@@ -56,6 +56,17 @@ struct ModState
     // with (hud_ctx, local-player view) so plugins can print the local player's
     // stats into the HUD. Stored in BOTH VMs but only the client ever calls them.
     std::vector<sol::protected_function> hud_hooks;
+
+    // Console commands (mod:command). Registered in BOTH VMs from the same
+    // mod.lua: the SIM VM runs fn (server side, host-typed `/name args...`);
+    // the render VM only reads name+usage for console autocompletion/help.
+    struct ConsoleCommand
+    {
+        std::string name;  // bare (typed as /name — no namespace, first wins)
+        std::string usage; // e.g. "/givexp <amount>  -- add team XP"
+        sol::protected_function fn; // fn(player, args...) — numeric args arrive as numbers
+    };
+    std::vector<ConsoleCommand> commands;
 };
 
 class LuaHost

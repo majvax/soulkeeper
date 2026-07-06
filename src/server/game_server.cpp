@@ -16,8 +16,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <numbers>
 #include <random>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -97,6 +99,8 @@ void GameServer::poll()
                 on_input(ev.peer_id, reader);
             } else if (type == proto::MsgType::Command) {
                 on_command(ev.peer_id, reader);
+            } else if (type == proto::MsgType::LuaCommand) {
+                on_lua_command(ev.peer_id, reader);
             } else if (type == proto::MsgType::SelectUpgrade) {
                 on_select(ev.peer_id, reader);
             }
@@ -421,6 +425,73 @@ void GameServer::on_command(std::uint32_t peer_id, proto::ByteReader& reader)
         // Only meaningful on the game-over screen: full run reset to Lobby.
         if (run_over_) { reset_run(); }
         break;
+    }
+}
+
+// A mod console command from the client: "name args..." (no slash). Host-only
+// and Playing-only (callbacks poke live entities). Dispatch to the matching
+// mod:command callback with (invoking player, args...) — numeric tokens are
+// passed as numbers, the rest as strings. Protected call: a broken command
+// logs and is skipped, like every other mod hook.
+void GameServer::on_lua_command(std::uint32_t peer_id, proto::ByteReader& reader)
+{
+    const auto len = reader.get<std::uint8_t>();
+    const auto it = peer_token_.find(peer_id);
+    if (!len || it == peer_token_.end() || it->second != host_token_ // host only
+        || state_ != proto::GameState::Playing) {
+        return;
+    }
+    std::string line;
+    line.reserve(*len);
+    for (std::uint8_t i = 0; i < *len; ++i) {
+        const auto ch = reader.get<char>();
+        if (!ch) { return; }
+        line.push_back(*ch);
+    }
+
+    std::vector<std::string> tokens;
+    for (std::size_t pos = 0; pos < line.size();) {
+        const std::size_t start = line.find_first_not_of(' ', pos);
+        if (start == std::string::npos) { break; }
+        const std::size_t end = line.find(' ', start);
+        tokens.push_back(line.substr(start, end - start));
+        pos = end == std::string::npos ? line.size() : end;
+    }
+    if (tokens.empty()) { return; }
+
+    const mod::ModState::ConsoleCommand* cmd = nullptr;
+    for (const mod::ModState::ConsoleCommand& candidate : lua_host_.state().commands) {
+        if (candidate.name == tokens.front()) {
+            cmd = &candidate;
+            break;
+        }
+    }
+    if (cmd == nullptr) {
+        spdlog::warn("unknown console command '/{}'", tokens.front());
+        return;
+    }
+
+    sol::state& lua = lua_host_.lua();
+    std::vector<sol::object> args;
+    args.reserve(tokens.size());
+    core::Registry& registry = world_.registry();
+    args.push_back(sol::make_object(lua, mod::EntityHandle{ .reg = &registry,
+                                                            .entity = sessions_[it->second].entity }));
+    for (std::size_t i = 1; i < tokens.size(); ++i) {
+        char* parse_end = nullptr;
+        const double num = std::strtod(tokens[i].c_str(), &parse_end);
+        if (parse_end != nullptr && *parse_end == '\0' && parse_end != tokens[i].c_str()) {
+            args.push_back(sol::make_object(lua, num));
+        } else {
+            args.push_back(sol::make_object(lua, tokens[i]));
+        }
+    }
+    const sol::protected_function_result result = cmd->fn(sol::as_args(args));
+    if (!result.valid()) {
+        const sol::error err = result;
+        spdlog::warn("console command '/{}' failed: {}", cmd->name, err.what());
+    } else {
+        spdlog::info("console command '/{}' by host", line);
     }
 }
 

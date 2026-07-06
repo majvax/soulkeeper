@@ -268,6 +268,22 @@ ctx:circle_filled(cx, cy, rad, r, g, b, a)     ctx:circle(cx, cy, rad, r, g, b, 
 ctx:text(x, y, str, r, g, b, a)                ctx:world_to_screen(wx, wy) -> sx, sy
 ```
 
+### Console commands (`mod:command`)
+
+`mod:command(name, usage, fn)` registers a `/name` command for the client's TAB console. The
+callback runs on the **server** (sim VM), **host-only**, as `fn(player, args...)` — `player` is
+the invoking player's Entity, args are the whitespace-split tokens after the name (numeric tokens
+arrive as numbers). `usage` is the one-liner the console shows for **autocompletion** (TAB
+completes, a live suggestion list appears while typing `/…`) and `/help`. Names are bare — they're
+typed by hand, so no namespace; on a clash the first registration wins. Like every mod hook the
+call is protected: a broken command logs server-side and is skipped.
+
+```lua
+mod:command("givexp", "/givexp <amount>  -- add team XP", function(player, amount)
+    world:add_xp(math.floor(tonumber(amount) or 0))
+end)
+```
+
 ### HUD hooks (`mod:hud`)
 
 `mod:hud(function(hud, view) … end)` runs once per frame on the client, for the **local** player.

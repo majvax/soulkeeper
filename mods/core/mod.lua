@@ -25,6 +25,16 @@ function main()
         e:set(C.Crit, {})
     end)
 
+    -- Console commands (typed as /name in the TAB console; host-only, run on
+    -- the server with the invoking player's handle — numeric args are numbers).
+    mod:command("givexp", "/givexp <amount>  -- add team XP", function(_, amount)
+        world:add_xp(math.floor(tonumber(amount) or 0))
+    end)
+    mod:command("heal", "/heal  -- refill your hearts", function(player)
+        local h = player:get(Hearts)
+        if h then h.current = h.max end
+    end)
+
     -- HUD: the local player's stats, drawn by Lua in its own top-left panel.
     -- view:get reads our networked script comps (Weapon/Crit) AND our kernel
     -- stats (Speed/Hearts/Dash) — same field names as the server side.
