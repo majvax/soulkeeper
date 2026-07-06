@@ -119,7 +119,7 @@ void GameServer::update(core::FixedTimestep& timestep)
             emit_downed_transitions();
             check_level_up();
         }
-        if (tick_ % proto::snapshot_every_n_ticks == 0) { broadcast_snapshot(); }
+        if (tick_ % proto::snapshot_every_n_ticks == 0) { stream_snapshots(); }
         ++tick_;
         record_tick_time(std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - tick_start)
@@ -140,18 +140,20 @@ void GameServer::record_tick_time(double ms)
     if (tick_ms_count_ >= static_cast<std::uint32_t>(proto::sim_hz) * 5) {
         std::size_t entities = 0;
         world_.registry().view<Position>().each([&](core::Entity, const Position&) { ++entities; });
+        const double snap_kbps = static_cast<double>(snapshot_bytes_sent_) / 1024.0 / 5.0;
         if (tick_ms_over_ > 0) {
-            spdlog::warn("tick avg {:.2f}ms max {:.2f}ms ({} over {:.2f}ms budget) | {} entities",
+            spdlog::warn("tick avg {:.2f}ms max {:.2f}ms ({} over {:.2f}ms budget) | {} entities | snap {:.1f} kB/s",
                          tick_ms_sum_ / tick_ms_count_, tick_ms_max_, tick_ms_over_, budget_ms,
-                         entities);
+                         entities, snap_kbps);
         } else {
-            spdlog::info("tick avg {:.2f}ms max {:.2f}ms | {} entities",
-                         tick_ms_sum_ / tick_ms_count_, tick_ms_max_, entities);
+            spdlog::info("tick avg {:.2f}ms max {:.2f}ms | {} entities | snap {:.1f} kB/s",
+                         tick_ms_sum_ / tick_ms_count_, tick_ms_max_, entities, snap_kbps);
         }
         tick_ms_sum_ = 0.0;
         tick_ms_max_ = 0.0;
         tick_ms_count_ = 0;
         tick_ms_over_ = 0;
+        snapshot_bytes_sent_ = 0;
     }
 }
 
@@ -283,6 +285,10 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
         if (it->second.peer_id != 0) { peer_token_.erase(it->second.peer_id); }
         it->second.peer_id = peer_id;
         it->second.connected = true;
+        // The fresh client instance has no snapshot history: restart it on full
+        // snapshots (last_ack_tick only ever grows via max(), so it MUST be
+        // reset here or we'd delta against a baseline the client never had).
+        it->second.last_ack_tick = 0;
         peer_token_[peer_id] = join->token;
         reconnected = true;
         spdlog::info("'{}' reconnected -> entity {}", it->second.name, it->second.entity);
@@ -371,8 +377,12 @@ void GameServer::on_input(std::uint32_t peer_id, proto::ByteReader& reader)
     const auto input = reader.get<proto::Input>();
     const auto it = peer_token_.find(peer_id);
     if (!input || it == peer_token_.end() || state_ != proto::GameState::Playing) { return; }
+    Session& session = sessions_[it->second];
+    // Snapshot ack first — it must flow even for downed players (whose input is
+    // otherwise ignored), or their delta stream would stall while dead.
+    session.last_ack_tick = std::max(session.last_ack_tick, input->ack_tick);
     core::Registry& registry = world_.registry();
-    const core::Entity player = sessions_[it->second].entity;
+    const core::Entity player = session.entity;
     if (registry.try_get<Downed>(player) != nullptr) { return; } // no control while down
     if (Velocity* vel = registry.try_get<Velocity>(player)) {
         const float speed = registry.try_get<Speed>(player) != nullptr ? registry.get<Speed>(player).value : PLAYER_SPEED;
@@ -433,35 +443,34 @@ void GameServer::send_state(std::uint32_t peer_id)
     server_.send(peer_id, writer.bytes(), true);
 }
 
-void GameServer::broadcast_snapshot()
+void GameServer::stream_snapshots()
 {
     core::Registry& registry = world_.registry();
 
-    // Quantization origin: the players' centroid — positions travel as int16
-    // offsets from it (proto::quantize_pos), so it must sit near the action.
-    float origin_x = 0.0f;
-    float origin_y = 0.0f;
+    proto::SnapshotState state;
+    state.tick = tick_;
+    state.level = level_;
+
+    // Quantization origin: the players' centroid — full-snapshot positions
+    // travel as int16 offsets from it, so it must sit near the action.
     std::size_t player_count = 0;
     registry.view<PlayerTag, Position>().each(
       [&](core::Entity, const PlayerTag&, const Position& pos) {
-          origin_x += pos.x;
-          origin_y += pos.y;
+          state.origin_x += pos.x;
+          state.origin_y += pos.y;
           ++player_count;
       });
     if (player_count > 0) {
-        origin_x /= static_cast<float>(player_count);
-        origin_y /= static_cast<float>(player_count);
+        state.origin_x /= static_cast<float>(player_count);
+        state.origin_y /= static_cast<float>(player_count);
     }
     // Snap the origin to the quantization grid: with a free-moving origin the
     // rounded offset of a STATIONARY entity oscillates ±0.25 px between
     // snapshots (visible as sprite facing/idle flicker on the client).
-    origin_x = std::round(origin_x * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
-    origin_y = std::round(origin_y * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
+    state.origin_x = std::round(state.origin_x * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
+    state.origin_y = std::round(state.origin_y * proto::snapshot_pos_scale) / proto::snapshot_pos_scale;
 
-    std::vector<proto::SnapshotEntry>& entries = snapshot_entries_; // reused buffer
-    std::vector<proto::PlayerAim>& aims = player_aims_;             // reused buffer
-    entries.clear();
-    aims.clear();
+    proto::ByteWriter blob; // all script-comp bytes, sliced per entity below
     registry.view<Position>().each([&](core::Entity entity, const Position& pos) {
         // Kind + variant come straight from the kernel Render component
         // (stamped by factories, variant mutated freely by Lua).
@@ -503,7 +512,7 @@ void GameServer::broadcast_snapshot()
                 rec.dash_cd_ms = proto::seconds_to_ms(dash->cooldown);
                 rec.dash_cd_max_ms = proto::seconds_to_ms(dash->cooldown_max);
             }
-            aims.push_back(rec);
+            state.aims.push_back(rec);
         }
 
         std::uint8_t scale_q = 0; // 0 = no Scale component = 1.0
@@ -511,45 +520,65 @@ void GameServer::broadcast_snapshot()
             scale_q = proto::quantize_scale(scale->value);
         }
 
-        entries.push_back({ .id = entity,
-                            .qx = proto::quantize_pos(pos.x, origin_x),
-                            .qy = proto::quantize_pos(pos.y, origin_y),
-                            .move_speed = move_speed,
-                            .kind = kind, .health = health, .variant = variant,
-                            .scale_q = scale_q });
+        const std::size_t blob_start = blob.bytes().size();
+        mod::write_networked(blob, registry, lua_host_.scripts(), entity);
+        state.entities.push_back({ .id = entity,
+                                   .qx = proto::to_half_px(pos.x),
+                                   .qy = proto::to_half_px(pos.y),
+                                   .move_speed = move_speed,
+                                   .kind = kind, .health = health, .variant = variant,
+                                   .scale_q = scale_q,
+                                   .script_off = static_cast<std::uint32_t>(blob_start),
+                                   .script_len = static_cast<std::uint16_t>(blob.bytes().size() - blob_start) });
     });
+    state.script_blob.assign(blob.bytes().begin(), blob.bytes().end());
+    state.sort_entities();
 
     // Shared XP progress + wave for the HUD.
-    std::uint8_t xp_frac = 0;
-    std::uint16_t wave = 1;
     registry.view<GameStats>().each([&](core::Entity, const GameStats& stats) {
         const float frac = std::clamp(static_cast<float>(stats.xp) / static_cast<float>(xp_needed_), 0.0f, 1.0f);
-        xp_frac = static_cast<std::uint8_t>(frac * 255.0f);
-        wave = stats.wave;
+        state.xp_frac = static_cast<std::uint8_t>(frac * 255.0f);
+        state.wave = stats.wave;
     });
 
-    proto::ByteWriter writer;
-    // Entry size + a few bytes for the networked-component blob each + trailer.
-    writer.reserve(1 + sizeof(proto::SnapshotHeader)
-                   + (entries.size() * (sizeof(proto::SnapshotEntry) + 4))
-                   + (aims.size() * sizeof(proto::PlayerAim)));
-    writer.put(proto::MsgType::Snapshot);
-    writer.put(proto::SnapshotHeader{ .server_tick = tick_,
-                                      .count = static_cast<std::uint16_t>(entries.size()),
-                                      .level = level_,
-                                      .xp_frac = xp_frac,
-                                      .wave = wave,
-                                      .player_count = static_cast<std::uint8_t>(aims.size()),
-                                      .origin_x = origin_x,
-                                      .origin_y = origin_y });
-    // Each entry is followed by the entity's networked script components.
-    for (const proto::SnapshotEntry& entry : entries) {
-        writer.put(entry);
-        mod::write_networked(writer, registry, lua_host_.scripts(), entry.id);
+    snapshot_history_.push_back(std::move(state));
+    if (snapshot_history_.size() > snapshot_history_len) { snapshot_history_.pop_front(); }
+    const proto::SnapshotState& current = snapshot_history_.back();
+
+    // Per-peer: delta against the peer's acked baseline when it's still in the
+    // ring, else a full snapshot (fresh join, stalled acks, long loss burst).
+    // Peers sharing a baseline share one encoding.
+    proto::ByteWriter full;
+    std::unordered_map<std::uint32_t, proto::ByteWriter> deltas; // baseline tick -> packet
+    for (const auto& [token, session] : sessions_) {
+        if (!session.connected) { continue; }
+        const proto::SnapshotState* baseline = nullptr;
+        for (const proto::SnapshotState& past : snapshot_history_) {
+            if (past.tick == session.last_ack_tick) {
+                baseline = &past;
+                break;
+            }
+        }
+        if (baseline != nullptr && baseline->tick != current.tick) {
+            proto::ByteWriter& packet = deltas[baseline->tick];
+            if (packet.bytes().empty()) {
+                packet.put(proto::MsgType::SnapshotDelta);
+                proto::encode_delta(current, *baseline, packet);
+            }
+            server_.send(session.peer_id, packet.bytes(), false);
+            snapshot_bytes_sent_ += packet.bytes().size();
+        } else {
+            if (full.bytes().empty()) {
+                full.reserve(1 + sizeof(proto::SnapshotHeader)
+                             + (current.entities.size() * (sizeof(proto::SnapshotEntry) + 4))
+                             + (current.aims.size() * sizeof(proto::PlayerAim)));
+                full.put(proto::MsgType::Snapshot);
+                proto::encode_full(current, full);
+            }
+            server_.send(session.peer_id, full.bytes(), false);
+            snapshot_bytes_sent_ += full.bytes().size();
+        }
     }
-    // Trailer: per-player authoritative aim (see PlayerAim).
-    for (const proto::PlayerAim& aim : aims) { writer.put(aim); }
-    server_.broadcast(writer.bytes(), false);
 }
 
 void GameServer::check_level_up()

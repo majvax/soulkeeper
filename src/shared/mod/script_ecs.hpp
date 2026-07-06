@@ -114,11 +114,26 @@ public:
         return nullptr;
     }
     [[nodiscard]] std::deque<ScriptSchema>& all() noexcept { return schemas_; }
+    [[nodiscard]] const std::deque<ScriptSchema>& all() const noexcept { return schemas_; }
 
 private:
     std::deque<ScriptSchema> schemas_;
     core::Registry* registry_ = nullptr;
 };
+
+// Field count per networked component, indexed by net id — just enough shape
+// for the snapshot codec to skip/copy a component blob without parsing it
+// (proto::ScriptFieldCounts). Stable after finalize (load_dir).
+[[nodiscard]] inline std::vector<std::uint8_t> networked_field_counts(const ScriptComponentRegistry& scripts)
+{
+    std::vector<std::uint8_t> counts;
+    for (const ScriptSchema& s : scripts.all()) {
+        if (s.net_id < 0) { continue; }
+        if (static_cast<std::size_t>(s.net_id) >= counts.size()) { counts.resize(s.net_id + 1, 0); }
+        counts[static_cast<std::size_t>(s.net_id)] = static_cast<std::uint8_t>(s.fields.size());
+    }
+    return counts;
+}
 
 // --- snapshot (de)serialization of an entity's networked script components ----
 // Wire layout per entity: uint8 count; then { uint8 net_id; float[fieldN] } × count.

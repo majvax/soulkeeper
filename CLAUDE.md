@@ -70,14 +70,22 @@ modding.md         # the full modding guide (API reference, performance model, i
 - **Server-authoritative; C++ is the engine, Lua is the game.** The kernel pipeline is
   `Grid → Dash → Movement` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
-  slotted into named phases between the kernel systems. Snapshots broadcast at 60 Hz carry
+  slotted into named phases between the kernel systems. Snapshots stream at 60 Hz carrying
   `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
   (int16 half-px offsets from a player-centroid origin in the header — 14 B/entity, cap 500
-  enemies), followed by a small **PlayerAim trailer** (≤4 × 7 B: authoritative aim dir +
-  firing bit per player, so the client drives sprite facing/shoot-pose from the SIM's aim — a
-  server-side override like autofire shows correctly — not the local mouse). Clients **predict**
-  the local player (same `apply_input`/`tick_dash`, corrected by snapshots) and **interpolate**
-  remotes. `Session` on the client mirrors control state; `GameScene` keeps a render-only `Registry`.
+  enemies), followed by a small **PlayerAim trailer** (≤4 × 13 B: authoritative aim dir +
+  firing bit + dash state per player, so the client drives sprite facing/shoot-pose from the
+  SIM's aim — a server-side override like autofire shows correctly — not the local mouse).
+  **Delta snapshots** (`shared/snapshot_codec.*`, Quake-style): each snapshot tick the server
+  captures a `SnapshotState` into a 32-deep ring; clients ack the newest APPLIED tick in every
+  `Input.ack_tick`, and the server sends each peer a per-entity field-delta vs its acked
+  baseline (flags byte: int8 pos delta / omitted-if-unchanged fields / explicit removals; full
+  snapshot on join, reconnect, or stale ack). The client keeps its own applied-state ring and
+  decodes with the SAME codec (`decode_delta` returns the complete merged state, so the apply
+  path is identical for full and delta). Telemetry logs `snap kB/s` every 5 s. Clients
+  **predict** the local player (same `apply_input`/`tick_dash`, corrected by snapshots) and
+  **interpolate** remotes. `Session` mirrors control state + ack; `GameScene` keeps a
+  render-only `Registry`.
 - **Scenes self-drive transitions** via `engine_->scenes()` (deferred push/pop, applied at safe
   points): Lobby→Game on `Playing`; GameScene TAB pushes Console (pops itself); GameScene pushes
   LevelUp on level-up (pops itself). The Engine only hardcodes the initial `LobbyScene`.
@@ -153,7 +161,7 @@ later** · `/pause` `/resume` console.
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- Game-over/win, XP magnet, delta/quantized snapshots, F11 fullscreen toggle.
+- Game-over/win, XP magnet, F11 fullscreen toggle.
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

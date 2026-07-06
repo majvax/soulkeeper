@@ -11,13 +11,16 @@
 #include "shared/components/combat.hpp"
 #include "shared/components/physics.hpp"
 #include "shared/protocol.hpp"
+#include "shared/snapshot_codec.hpp"
 #include "shared/system/input.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <imgui.h>
 #include <iterator>
 #include <limits>
+#include <span>
 #include <string>
 #include <utility>
 #include <unordered_map>
@@ -112,10 +115,7 @@ public:
 
         // Apply the latest server snapshot (world stays live even if input is
         // blocked by the console).
-        if (auto snap = session.take_snapshot()) {
-            proto::ByteReader reader(*snap);
-            apply_snapshot(reader);
-        }
+        if (auto snap = session.take_snapshot()) { consume_snapshot(*snap); }
         if (!has_player_ && session.has_id()) { spawn_local_player(session.my_net_id()); }
 
         // Open the level-up card scene on the rising edge of a level-up.
@@ -241,56 +241,91 @@ private:
         if (!downed) { my_death_start_ = -1.0f; }
     }
 
-    void apply_snapshot(proto::ByteReader& reader)
+    // Decode a snapshot packet (full or delta) into a complete SnapshotState
+    // via the shared codec, apply it, then remember + ack it — the state we
+    // just applied is what the server may delta against next.
+    void consume_snapshot(std::span<const std::byte> packet)
     {
-        const auto header = reader.get<proto::SnapshotHeader>();
-        if (!header) { return; }
-        level_ = header->level;
-        xp_frac_ = header->xp_frac;
-        wave_ = header->wave;
+        if (packet.empty()) { return; }
+        const auto tag = static_cast<proto::MsgType>(packet[0]);
+        const std::span<const std::byte> payload = packet.subspan(1);
+        if (!field_counts_ready_) { // stable after mod load; the codec needs blob shapes
+            script_field_counts_ = mod::networked_field_counts(engine_->mods().scripts());
+            field_counts_ready_ = true;
+        }
+
+        std::optional<proto::SnapshotState> state;
+        if (tag == proto::MsgType::Snapshot) {
+            state = proto::decode_full(payload, script_field_counts_);
+        } else if (tag == proto::MsgType::SnapshotDelta) {
+            proto::ByteReader peek(payload);
+            const auto header = peek.get<proto::DeltaHeader>();
+            if (!header) { return; }
+            const proto::SnapshotState* baseline = nullptr;
+            for (const proto::SnapshotState& past : snap_history_) {
+                if (past.tick == header->baseline_tick) {
+                    baseline = &past;
+                    break;
+                }
+            }
+            // Baseline fell out of our ring: skip (and don't ack) — the server
+            // falls back to full snapshots once our acks stall.
+            if (baseline == nullptr) { return; }
+            state = proto::decode_delta(payload, *baseline, script_field_counts_);
+        }
+        if (!state) { return; }
+        apply_state(*state);
+        engine_->session().set_acked(state->tick);
+        snap_history_.push_back(std::move(*state));
+        if (snap_history_.size() > snap_history_len) { snap_history_.pop_front(); }
+    }
+
+    void apply_state(const proto::SnapshotState& state)
+    {
+        level_ = state.level;
+        xp_frac_ = state.xp_frac;
+        wave_ = state.wave;
 
         std::unordered_set<std::uint32_t> seen;
-        for (std::uint16_t i = 0; i < header->count; ++i) {
-            const auto entry = reader.get<proto::SnapshotEntry>();
-            if (!entry) { break; }
-            // Positions travel quantized relative to the header origin.
-            const float ex = proto::dequantize_pos(entry->qx, header->origin_x);
-            const float ey = proto::dequantize_pos(entry->qy, header->origin_y);
-            // Every entry is followed by its networked script components.
-            std::vector<mod::NetComp> comps = mod::read_networked(reader, engine_->mods().scripts());
+        for (const proto::EntityRec& rec : state.entities) {
+            const float ex = proto::from_half_px(rec.qx);
+            const float ey = proto::from_half_px(rec.qy);
+            // Each entity carries its networked script components as a blob.
+            proto::ByteReader blob(state.script_of(rec));
+            std::vector<mod::NetComp> comps = mod::read_networked(blob, engine_->mods().scripts());
 
-            if (has_player_ && entry->id == my_net_id_) {
+            if (has_player_ && rec.id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = ex, .y = ey }; // snap correction
-                my_health_ = entry->health;      // current hearts
-                my_max_hearts_ = entry->variant; // max hearts
-                my_move_speed_ = entry->move_speed;
-                my_scale_ = proto::dequantize_scale(entry->scale_q);
+                my_health_ = rec.health;      // current hearts
+                my_max_hearts_ = rec.variant; // max hearts
+                my_move_speed_ = rec.move_speed;
+                my_scale_ = proto::dequantize_scale(rec.scale_q);
                 // Mirror kernel stats into the render registry for the Lua HUD
                 // (view:get(Hearts/Speed/Scale) dispatches through the shared table).
-                set_local(Hearts{ .current = static_cast<std::int16_t>(entry->health),
-                                  .max = static_cast<std::int16_t>(entry->variant) });
-                set_local(Speed{ .value = static_cast<float>(entry->move_speed) });
+                set_local(Hearts{ .current = static_cast<std::int16_t>(rec.health),
+                                  .max = static_cast<std::int16_t>(rec.variant) });
+                set_local(Speed{ .value = static_cast<float>(rec.move_speed) });
                 set_local(Scale{ .value = my_scale_ });
-                script_state_[entry->id] = std::move(comps);
-                seen.insert(entry->id);
+                script_state_[rec.id] = std::move(comps);
+                seen.insert(rec.id);
                 continue;
             }
 
-            seen.insert(entry->id);
-            script_state_[entry->id] = std::move(comps);
-            const auto it = remotes_.find(entry->id);
+            seen.insert(rec.id);
+            script_state_[rec.id] = std::move(comps);
+            const auto it = remotes_.find(rec.id);
             if (it == remotes_.end()) {
                 const core::Entity e = registry_.create();
                 registry_.assign(e, Position{ .x = ex, .y = ey });
                 registry_.assign(e, PrevPosition{ .x = ex, .y = ey });
-                registry_.assign(e, Remote{ .kind = entry->kind, .net_id = entry->id, .health = entry->health,
-                                            .variant = entry->variant });
-                remotes_[entry->id] = e;
+                registry_.assign(e, Remote{ .kind = rec.kind, .net_id = rec.id, .health = rec.health,
+                                            .variant = rec.variant });
+                remotes_[rec.id] = e;
             } else {
                 Position& pos = registry_.get<Position>(it->second);
                 registry_.get<PrevPosition>(it->second) = { .x = pos.x, .y = pos.y };
                 Remote& rem = registry_.get<Remote>(it->second);
-                // Animation state from the snapshot delta: Move vs Idle + facing.
+                // Animation state from the snapshot step: Move vs Idle + facing.
                 // The flip needs a full quantization step (0.5 px) of hysteresis
                 // — a nearly-vertical chase has a tiny alternating-sign x step
                 // that would otherwise thrash the sprite left/right.
@@ -309,16 +344,18 @@ private:
                     rem.dir_y = step_y;
                 }
                 pos = { .x = ex, .y = ey };
-                rem.health = entry->health;
-                rem.scale = proto::dequantize_scale(entry->scale_q);
-                if (entry->kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
+                rem.health = rec.health;
+                rem.scale = proto::dequantize_scale(rec.scale_q);
+                if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                     // Downed players stay in the snapshot with 0 hearts.
-                    if (entry->health == 0 && rem.death_start < 0.0f) { rem.death_start = anim_time_; }
-                    if (entry->health != 0) { rem.death_start = -1.0f; }
+                    if (rec.health == 0 && rem.death_start < 0.0f) { rem.death_start = anim_time_; }
+                    if (rec.health != 0) { rem.death_start = -1.0f; }
                 }
             }
         }
 
+        // The decoded state is COMPLETE (deltas were merged over their baseline
+        // by the codec), so absence still means despawn — for fulls and deltas.
         for (auto it = remotes_.begin(); it != remotes_.end();) {
             if (!seen.contains(it->first)) {
                 registry_.destroy(it->second);
@@ -334,28 +371,26 @@ private:
         // Trailer: authoritative per-player aim + trigger. Drives sprite facing
         // and the shoot pose so a server-side aim override (autofire) shows up,
         // and remote players aim correctly instead of only facing their motion.
-        for (std::uint8_t i = 0; i < header->player_count; ++i) {
-            const auto pa = reader.get<proto::PlayerAim>();
-            if (!pa) { break; }
-            const float ax = proto::dequantize_aim(pa->aim_qx);
-            const float ay = proto::dequantize_aim(pa->aim_qy);
-            if (has_player_ && pa->id == my_net_id_) {
+        for (const proto::PlayerAim& pa : state.aims) {
+            const float ax = proto::dequantize_aim(pa.aim_qx);
+            const float ay = proto::dequantize_aim(pa.aim_qy);
+            if (has_player_ && pa.id == my_net_id_) {
                 auth_aim_x_ = ax;
                 auth_aim_y_ = ay;
-                auth_firing_ = pa->firing != 0;
+                auth_firing_ = pa.firing != 0;
                 // Dash params + state are authoritative (the game/Lua sets
                 // max_charges/cooldown_max — the client can't guess them). Correct
                 // the prediction here; the burst (burst_remaining) stays predicted,
                 // and tick_dash smooths the cooldown between snapshots.
-                local_dash_.max_charges = pa->dash_max;
-                local_dash_.charges = pa->dash_charges;
-                local_dash_.cooldown = proto::ms_to_seconds(pa->dash_cd_ms);
-                local_dash_.cooldown_max = proto::ms_to_seconds(pa->dash_cd_max_ms);
-            } else if (const auto it = remotes_.find(pa->id); it != remotes_.end()) {
+                local_dash_.max_charges = pa.dash_max;
+                local_dash_.charges = pa.dash_charges;
+                local_dash_.cooldown = proto::ms_to_seconds(pa.dash_cd_ms);
+                local_dash_.cooldown_max = proto::ms_to_seconds(pa.dash_cd_max_ms);
+            } else if (const auto it = remotes_.find(pa.id); it != remotes_.end()) {
                 Remote& rem = registry_.get<Remote>(it->second);
                 rem.aim_x = ax;
                 rem.aim_y = ay;
-                rem.firing = pa->firing != 0;
+                rem.firing = pa.firing != 0;
             }
         }
         time_since_snapshot_ = 0.0f;
@@ -767,6 +802,12 @@ private:
     float my_scale_ = 1.0f; // kernel Scale off the wire (Lua-driven, e.g. Vitality)
     // Local dash prediction (struct defaults = base constants; server is authoritative).
     Dash local_dash_{};
+    // Applied-snapshot ring: the delta baselines we can decode against (the
+    // server only deltas vs ticks we acked, i.e. states stored here).
+    static constexpr std::size_t snap_history_len = 32;
+    std::deque<proto::SnapshotState> snap_history_;
+    std::vector<std::uint8_t> script_field_counts_; // blob shapes for the codec
+    bool field_counts_ready_ = false;
     // Per-entity networked script components (net id -> components), for draw hooks.
     std::unordered_map<std::uint32_t, std::vector<mod::NetComp>> script_state_;
     std::uint16_t level_ = 1;

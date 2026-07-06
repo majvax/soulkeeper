@@ -5,9 +5,11 @@
 #include "shared/net/net.hpp"
 #include "shared/protocol.hpp"
 #include "shared/sim/world.hpp"
+#include "shared/snapshot_codec.hpp"
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -26,6 +28,9 @@ struct Session
     std::uint32_t peer_id = 0;
     bool connected = false;
     bool was_downed = false; // for the on_player_downed rising edge
+    // Newest snapshot tick this client applied (from Input.ack_tick) — the
+    // delta baseline. 0 = never acked: keep sending full snapshots.
+    std::uint32_t last_ack_tick = 0;
 };
 
 // Authoritative game server: owns the simulation + all session bookkeeping.
@@ -50,7 +55,7 @@ private:
 
     void broadcast_roster();
     void send_state(std::uint32_t peer_id);
-    void broadcast_snapshot();
+    void stream_snapshots(); // capture SnapshotState, then per-peer full/delta
 
     void record_tick_time(double ms); // rolling avg/max log + over-budget warnings
 
@@ -91,14 +96,17 @@ private:
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;
 
-    std::vector<proto::SnapshotEntry> snapshot_entries_; // reused per broadcast
-    std::vector<proto::PlayerAim> player_aims_;          // reused per broadcast (trailer)
+    // Snapshot history ring: the last N captured states, the delta baselines
+    // clients can ack (32 @ 60 Hz ≈ 0.5 s — an ack older than that gets fulls).
+    static constexpr std::size_t snapshot_history_len = 32;
+    std::deque<proto::SnapshotState> snapshot_history_;
 
     // Tick-time telemetry window (record_tick_time).
     double tick_ms_sum_ = 0.0;
     double tick_ms_max_ = 0.0;
     std::uint32_t tick_ms_count_ = 0;
     std::uint32_t tick_ms_over_ = 0;
+    std::uint64_t snapshot_bytes_sent_ = 0; // window total, logged as kB/s
 
     // Spawn table for the current wave: Lua weight/component-init callbacks run
     // once per wave (refresh_spawn_weights), the per-spawn hot path just samples

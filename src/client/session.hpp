@@ -67,6 +67,7 @@ public:
         roster_.clear();
         names_.clear();
         state_ = proto::GameState::Lobby;
+        ack_tick_ = 0;
     }
 
     // Drive the connection once per frame: reconnect if dropped, then drain the
@@ -115,7 +116,8 @@ public:
         return it != names_.end() ? it->second : std::string{};
     }
 
-    // Consume the most recent snapshot payload (bytes after the MsgType tag).
+    // Consume the most recent snapshot packet, INCLUDING its MsgType tag —
+    // the consumer needs it to pick full vs delta decoding.
     [[nodiscard]] std::optional<std::vector<std::byte>> take_snapshot()
     {
         if (!latest_snapshot_) { return std::nullopt; }
@@ -124,10 +126,16 @@ public:
         return out;
     }
 
+    // Record the newest snapshot tick the scene fully APPLIED; piggybacked on
+    // every Input so the server can delta against it (never ack un-applied).
+    void set_acked(std::uint32_t tick) noexcept { ack_tick_ = std::max(ack_tick_, tick); }
+    [[nodiscard]] std::uint32_t acked_tick() const noexcept { return ack_tick_; }
+
     // --- send ---
-    void send_input(const proto::Input& input)
+    void send_input(proto::Input input)
     {
         if (!client_) { return; }
+        input.ack_tick = ack_tick_; // the session owns ack bookkeeping
         proto::ByteWriter writer;
         writer.put(proto::MsgType::Input);
         writer.put(input);
@@ -170,6 +178,7 @@ private:
             return;
         }
         client_ = std::move(*opened);
+        ack_tick_ = 0; // fresh connection: the server also resets its side on join
         proto::Join join{ .token = token_, .mods_hash = mods_hash_, .name = {} };
         proto::write_name(join.name, name_);
         proto::ByteWriter writer;
@@ -199,9 +208,9 @@ private:
                 if (const auto c = reader.get<proto::LevelUpChoice>()) { choice = *c; }
             }
             leveling_ = true;
-        } else if (type == proto::MsgType::Snapshot) {
-            // Keep the payload after the 1-byte MsgType for GameScene to apply.
-            latest_snapshot_ = std::vector<std::byte>(payload.begin() + 1, payload.end());
+        } else if (type == proto::MsgType::Snapshot || type == proto::MsgType::SnapshotDelta) {
+            // Keep the whole packet (tag included) for GameScene to decode.
+            latest_snapshot_ = std::vector<std::byte>(payload.begin(), payload.end());
         } else if (type == proto::MsgType::JoinDenied) {
             if (const auto denied = reader.get<proto::JoinDenied>()) {
                 denied_ = true;
@@ -245,6 +254,7 @@ private:
     std::vector<RosterRow> roster_;
     std::unordered_map<std::uint32_t, std::string> names_;
     std::optional<std::vector<std::byte>> latest_snapshot_;
+    std::uint32_t ack_tick_ = 0; // newest applied snapshot tick (0 = none)
     bool leveling_ = false;
     std::array<proto::LevelUpChoice, proto::level_up_choices> choices_{};
 };

@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 7;
+inline constexpr std::uint16_t protocol_version = 8;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -41,8 +41,9 @@ enum class MsgType : std::uint8_t {
     Roster = 7,        // S2C: the list of players (reliable)
     State = 8,         // S2C: lobby vs playing (reliable)
     LevelUp = 9,       // S2C: 3 upgrade choices to pick from (reliable)
-    Snapshot = 10,     // S2C: world state (unreliable)
+    Snapshot = 10,     // S2C: full world state (unreliable)
     JoinDenied = 11,   // S2C: plugin-set hash mismatch; peer is then kicked (reliable)
+    SnapshotDelta = 12, // S2C: world state as a delta vs an acked full/delta (unreliable)
 };
 
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };
@@ -84,6 +85,12 @@ public:
 
     // Size the buffer once up front (snapshots know their entry count).
     void reserve(std::size_t bytes) { buffer_.reserve(bytes); }
+
+    // Append a raw byte run (opaque blobs the snapshot codec shuttles around).
+    void put_bytes(std::span<const std::byte> bytes)
+    {
+        buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
+    }
 
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return buffer_; }
 
@@ -134,6 +141,10 @@ struct Input
     float aim_x, aim_y; // normalized aim direction
     std::uint8_t firing; // 1 while the trigger is held
     std::uint8_t dash;   // 1 = dash requested this packet (edge, not held)
+    // Snapshot ack: server_tick of the newest snapshot this client fully
+    // applied (0 = none yet). The server deltas subsequent snapshots against
+    // it — piggybacked here because Input already flows every frame.
+    std::uint32_t ack_tick;
 };
 
 struct SelectUpgrade
