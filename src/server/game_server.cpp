@@ -38,7 +38,9 @@ namespace {
 // Spawn / wave tuning.
 constexpr float wave_duration = 15.0f;   // seconds per wave
 constexpr float spawn_distance = 600.0f; // ring radius around a player
-constexpr std::size_t max_enemies = 500;
+// Measured via /stress (2026-07): 600 enemies = 1.8 ms avg / <7 ms max tick
+// (clean); 750 grazes the 8.33 ms budget on spike ticks; 1000 busts it.
+constexpr std::size_t max_enemies = 600;
 
 float random_angle()
 {

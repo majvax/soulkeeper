@@ -187,6 +187,11 @@ function world:wave() end
 ---@param value integer
 function world:add_xp(value) end
 
+---Jump the wave counter (debug/testing — e.g. core's /wave command). The
+---spawner's per-wave weights refresh on the next spawn tick.
+---@param wave integer
+function world:set_wave(wave) end
+
 ---End the run (the GAME decides when — e.g. everyone downed, or a win rule).
 ---The engine freezes the sim, broadcasts the game-over screen with final
 ---stats, and waits for the host to return everyone to the lobby.

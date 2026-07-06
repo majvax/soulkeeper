@@ -136,7 +136,8 @@ end)
   `entity, d², px, py` (all nil on no match). `without` excludes owners of a component (e.g.
   `Downed` players). **Use this, never a Lua loop, to pick a target inside a per-entity system** —
   it's one engine call instead of an iterator per entity.
-- `world:wave()`, `world:add_xp(n)`.
+- `world:wave()`, `world:add_xp(n)`, `world:set_wave(n)` (debug: jump the wave counter — core's
+  `/wave` command).
 - `world:end_game(won)` — end the run. THE GAME owns the rule (core's death system: every player
   downed at once = `end_game(false)`; surviving to `WIN_WAVE` = `end_game(true)`); the engine
   freezes the sim, broadcasts the game-over screen (won/lost + final wave/level), and the host
@@ -320,9 +321,9 @@ end)
 
 ## 7. Performance model
 
-The sim ticks at 120 Hz with up to ~500 enemies — Lua 5.4 handles the core pipeline comfortably,
+The sim ticks at 120 Hz with up to ~600 enemies — Lua 5.4 handles the core pipeline comfortably,
 but the cost that matters is **Lua↔engine boundary crossings** (every `e:get`, every iterator),
-not Lua itself. The discipline that keeps 500 enemies under ~1 ms/tick:
+not Lua itself. The discipline that keeps 600 enemies under ~2 ms/tick:
 
 - **One query call beats a Lua loop.** `world:closest` picks a target in one crossing; never scan
   candidates from Lua inside a per-entity system (one nested `world:each` per enemy per tick was

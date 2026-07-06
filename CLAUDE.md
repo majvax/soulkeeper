@@ -72,7 +72,7 @@ modding.md         # the full modding guide (API reference, performance model, i
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
   slotted into named phases between the kernel systems. Snapshots stream at 60 Hz carrying
   `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
-  (int16 half-px offsets from a player-centroid origin in the header — 14 B/entity, cap 500
+  (int16 half-px offsets from a player-centroid origin in the header — 14 B/entity, cap 600
   enemies), followed by a small **PlayerAim trailer** (≤4 × 13 B: authoritative aim dir +
   firing bit + dash state per player, so the client drives sprite facing/shoot-pose from the
   SIM's aim — a server-side override like autofire shows correctly — not the local mouse).

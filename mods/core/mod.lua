@@ -34,6 +34,21 @@ function main()
         local h = player:get(Hearts)
         if h then h.current = h.max end
     end)
+    mod:command("wave", "/wave <n>  -- jump to wave n", function(_, n)
+        world:set_wave(math.floor(tonumber(n) or 1))
+    end)
+    mod:command("stress", "/stress <count>  -- spawn a horde around you (perf testing)",
+        function(player, count)
+            local n = math.floor(tonumber(count) or 100)
+            local pp = player:get(Position)
+            local kinds = { "core:bandit", "core:scout", "core:brute" }
+            for i = 1, n do
+                local a = math.random() * 2 * math.pi
+                local r = 400 + math.random() * 400
+                spawn_enemy(pp.x + math.cos(a) * r, pp.y + math.sin(a) * r,
+                            kinds[(i % #kinds) + 1])
+            end
+        end)
 
     -- HUD: the local player's stats, drawn by Lua in its own top-left panel.
     -- view:get reads our networked script comps (Weapon/Crit) AND our kernel

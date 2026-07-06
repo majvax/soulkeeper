@@ -421,6 +421,14 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                         [&](core::Entity, const GameStats& stats) { wave = stats.wave; });
                                       return wave;
                                   },
+                                  // Jump the wave counter (debug/testing — e.g. the /wave
+                                  // command). The spawner's per-wave weight cache refreshes
+                                  // itself on the mismatch.
+                                  "set_wave", [reg](ScriptWorld&, int wave) {
+                                      reg->view<GameStats>().each([&](core::Entity, GameStats& stats) {
+                                          stats.wave = static_cast<std::uint16_t>(std::max(1, wave));
+                                      });
+                                  },
                                   "add_xp", [reg](ScriptWorld&, int value) {
                                       reg->view<GameStats>().each([&](core::Entity, GameStats& stats) {
                                           stats.xp += static_cast<std::uint32_t>(std::max(0, value));
