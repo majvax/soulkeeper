@@ -25,3 +25,10 @@ struct RunEnd
 {
     std::uint8_t won = 0;
 };
+
+// While ANY entity carries this tag, the wave timer and natural spawning are
+// frozen (boss arenas: mods put it ON the boss, so the hold dies with it).
+// Prelude handle so Lua can set it; never networked.
+struct WaveHold
+{
+};

@@ -48,8 +48,9 @@ return function(mod)
         damage = 1,
         timer = 1.0, -- brief grace period after spawning
     })
-    C.AutoTarget = mod:component("autotarget", { enabled = 1 })
-    C.Boss = mod:component("boss", { enabled = 1 })
+    -- Pure TAGS: zero-field components used only for membership (has/each).
+    C.AutoTarget = mod:component("autotarget", {})
+    C.Boss = mod:component("boss", {})
 
     -- Boss special: every `cooldown` s, a radial ring of `bullets` hostile
     -- projectiles. Presence also marks the entity for guaranteed death drops.

@@ -36,7 +36,7 @@ std::uint32_t xp_needed_for(std::uint16_t level)
 namespace {
 
 // Spawn / wave tuning.
-constexpr float wave_duration = 15.0f;   // seconds per wave
+constexpr float wave_duration = 25.0f;   // seconds per wave
 constexpr float spawn_distance = 600.0f; // ring radius around a player
 // Measured via /stress (2026-07): 600 enemies = 1.8 ms avg / <7 ms max tick
 // (clean); 750 grazes the 8.33 ms budget on spike ticks; 1000 busts it.
@@ -167,6 +167,13 @@ void GameServer::record_tick_time(double ms)
 void GameServer::spawn_enemies(float dt)
 {
     core::Registry& registry = world_.registry();
+
+    // Boss arena: while any WaveHold entity lives (mods tag the boss itself),
+    // the wave clock and natural spawning are frozen — the milestone doesn't
+    // end until the players end it.
+    bool held = false;
+    registry.view<WaveHold>().each([&](core::Entity, const WaveHold&) { held = true; });
+    if (held) { return; }
 
     // Advance the wave clock.
     std::uint16_t wave = 1;

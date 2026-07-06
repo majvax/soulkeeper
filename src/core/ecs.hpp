@@ -198,6 +198,7 @@ public:
             return row(e);
         }
         emplace_slot(e);
+        if (stride_ == 0) { return &tag_row_; } // tag: membership only (see row())
         const std::size_t base = fields_.size();
         fields_.resize(base + stride_, 0.0);
         return &fields_[base];
@@ -218,8 +219,13 @@ public:
         fields_.resize(fields_.size() - stride_);
     }
 
-    // Pointer to the entity's `stride` doubles, or nullptr if absent.
+    // Pointer to the entity's `stride` doubles, or nullptr if absent. A
+    // stride-0 pool (a Lua TAG component: `mod:component("x", {})`) has no
+    // field storage — indexing the empty vector would be UB — so membership is
+    // signalled with a shared dummy row that callers must never write through
+    // (there are no fields to write).
     [[nodiscard]] double* row(Entity e) noexcept {
+        if (stride_ == 0) { return contains(e) ? &tag_row_ : nullptr; }
         return contains(e) ? &fields_[static_cast<std::size_t>(slot_of(e)) * stride_] : nullptr;
     }
 
@@ -228,6 +234,7 @@ public:
 private:
     std::vector<double> fields_;
     std::uint32_t stride_;
+    inline static double tag_row_ = 0.0; // shared "present" marker for stride-0 pools
 };
 
 // ---------------------------------------------------------------------------

@@ -149,14 +149,24 @@ return function(mod, C)
     -- Wave milestones: every 10th wave THE boss, every other 5th a mini-boss,
     -- dropped on the spawn ring around a live player. Runs in the SIM VM only
     -- (on_wave_start is server-emitted); no spawn if everyone's downed.
+    -- A boss wave is an ARENA: the trash horde despawns (no drops) and the
+    -- boss carries the kernel WaveHold tag — the wave clock and spawning stay
+    -- frozen until it dies (the hold dies with the entity). Minibosses don't.
     mod:subscribe("on_wave_start", function(wave)
         if wave % 5 ~= 0 then return end
-        local id = (wave % 10 == 0) and "core:boss" or "core:miniboss"
+        local is_boss = wave % 10 == 0
+        local id = is_boss and "core:boss" or "core:miniboss"
         for p in world:each(Player, Position) do
             if not p:has(Downed) then
                 local pp = p:get(Position)
                 local a = math.random() * 2 * math.pi
-                spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, id)
+                local spawned = spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, id)
+                if is_boss and spawned then
+                    spawned:set(WaveHold, {})
+                    for e in world:each(Enemy) do
+                        if not e:has(C.Nova) then e:destroy() end -- clear the arena
+                    end
+                end
                 return
             end
         end

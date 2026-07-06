@@ -105,6 +105,8 @@ Enemy = nil  -- membership-only tag (no fields)
 Player = nil -- membership-only tag (no fields)
 ---@type ScaleFields
 Scale = nil
+---@type Component
+WaveHold = nil -- membership-only tag: freezes the wave clock + spawning while any entity carries it (put it ON a boss)
 
 ---Render.kind values for Lua-spawned drawables.
 ---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }

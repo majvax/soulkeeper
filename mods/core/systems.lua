@@ -237,9 +237,9 @@ return function(mod, C)
     -- 30 Hz: a 33 ms corpse/respawn latency is invisible. Staggered half an
     -- interval off targeting so the two enemy-wide walks hit different ticks.
     -- This system also owns the RUN-END rules: every player downed at once =
-    -- defeat; surviving to WIN_WAVE = victory (world:end_game -> the engine
-    -- freezes the sim and shows the game-over screen).
-    local WIN_WAVE = 20 -- ~5 min at 15 s waves
+    -- defeat; KILLING a boss at/after WIN_WAVE = victory (bosses hold the wave
+    -- clock, so the wave can't pass the milestone without the kill).
+    local WIN_WAVE = 20
 
     mod:system("death", { phase = "death", rate = 30, stagger = 0.5 }, function(dt)
         for e in world:each(Enemy, Health, Position) do
@@ -256,7 +256,8 @@ return function(mod, C)
                     heart:set(C.Heal, {})
                 end
                 -- A nova-bearer (the boss) always pays out: two hearts + a
-                -- spray of bonus orbs around the corpse.
+                -- spray of bonus orbs around the corpse — and killing one
+                -- at/after WIN_WAVE wins the run.
                 if e:has(C.Nova) then
                     for i = 1, 2 do
                         local heart = spawn_entity(ep.x - 20 * i, ep.y + 10)
@@ -269,6 +270,7 @@ return function(mod, C)
                         bonus:get(Render).kind = KIND.orb
                         bonus:set(C.Xp, { value = 5 })
                     end
+                    if world:wave() >= WIN_WAVE then world:end_game(true) end
                 end
                 e:destroy()
             end
@@ -297,8 +299,6 @@ return function(mod, C)
 
         if players > 0 and alive == 0 then
             world:end_game(false) -- everyone down at once: defeat
-        elseif world:wave() >= WIN_WAVE then
-            world:end_game(true)
         end
     end)
 

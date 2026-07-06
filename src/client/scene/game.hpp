@@ -615,6 +615,42 @@ private:
                         my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
             if (overlays) { label(ox + p.x, oy + p.y, engine_->session().name()); }
         }
+
+        // Teammates off-screen: an edge arrow pointing at each remote player,
+        // with their name — red when they're down (the "go revive" pointer).
+        if (overlays && has_player_) {
+            registry_.view<Position, PrevPosition, Remote>().each(
+              [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
+                  if (rem.kind != static_cast<std::uint8_t>(proto::EntityKind::Player)) { return; }
+                  const float sx = ox + prev.x + ((p.x - prev.x) * t);
+                  const float sy = oy + prev.y + ((p.y - prev.y) * t);
+                  constexpr float margin = 34.0f;
+                  if (sx >= margin && sx <= ww - margin && sy >= margin && sy <= wh - margin) {
+                      return; // on screen: the sprite itself is the cue
+                  }
+                  const float ax = std::clamp(sx, margin, ww - margin);
+                  const float ay = std::clamp(sy, margin, wh - margin);
+                  // Unit direction from the arrow anchor toward the teammate.
+                  float dx = sx - ax;
+                  float dy = sy - ay;
+                  const float len = std::sqrt((dx * dx) + (dy * dy));
+                  if (len < 1.0f) { return; }
+                  dx /= len;
+                  dy /= len;
+                  const bool down = rem.health == 0;
+                  const ImU32 col = down ? IM_COL32(240, 80, 80, 230) : IM_COL32(120, 220, 130, 230);
+                  ImDrawList* fg = ImGui::GetForegroundDrawList();
+                  const ImVec2 tip(ax + (dx * 13.0f), ay + (dy * 13.0f));
+                  const ImVec2 left(ax - (dy * 8.0f), ay + (dx * 8.0f));
+                  const ImVec2 right(ax + (dy * 8.0f), ay - (dx * 8.0f));
+                  fg->AddTriangleFilled(tip, left, right, col);
+                  const std::string name = engine_->session().name_of(rem.net_id);
+                  const ImVec2 sz = ImGui::CalcTextSize(name.c_str());
+                  fg->AddText(ImVec2(std::clamp(ax - (sz.x * 0.5f), 4.0f, ww - sz.x - 4.0f),
+                                     std::clamp(ay - (dy * 16.0f) - (sz.y * 0.5f), 4.0f, wh - sz.y - 4.0f)),
+                              col, name.c_str());
+              });
+        }
     }
 
     void draw_background(SDL_Renderer* r, float cam_x, float cam_y, float ww, float wh, float ox, float oy)
