@@ -9,8 +9,8 @@
 #include <vector>
 
 // Developer console. It only exists on the stack while open: GameScene pushes it
-// on TAB, and it pops itself on TAB (only while the input line is empty — with
-// text typed, TAB autocompletes instead). Local commands (help/clear/quit) run
+// on TAB; it pops itself on ESC (always) or TAB (only while the input line is
+// empty — with text typed, TAB autocompletes). Local commands (help/clear/quit) run
 // on the client; /pause and /resume go to the server as engine commands; every
 // other /name is a MOD command (mod:command) sent as a LuaCommand line and run
 // server-side, host-only. The render VM registered the same commands from the
@@ -23,9 +23,13 @@ public:
 
     auto handle_event(const SDL_Event& event) -> Propagation override
     {
-        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_TAB
-            && input_buffer_[0] == '\0') {
-            engine_->scenes().pop(); // close: pop ourselves (TAB completes otherwise)
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+            // ESC always closes; TAB only while the input is empty (with text
+            // typed it autocompletes instead).
+            if (event.key.key == SDLK_ESCAPE
+                || (event.key.key == SDLK_TAB && input_buffer_[0] == '\0')) {
+                engine_->scenes().pop(); // close: pop ourselves
+            }
         }
         return Stop;
     }
