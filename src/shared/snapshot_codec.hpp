@@ -33,6 +33,7 @@ struct EntityRec
     std::int32_t qx, qy; // absolute half-px (origin-independent)
     std::uint16_t move_speed;
     std::uint8_t kind, health, variant, scale_q;
+    std::uint8_t fx; // Render.fx anim state (rides the Meta delta flag)
     std::uint32_t script_off;
     std::uint16_t script_len;
 };
@@ -61,7 +62,7 @@ inline constexpr std::uint8_t New = 1u << 0;    // full entry fields + script bl
 inline constexpr std::uint8_t Pos8 = 1u << 1;   // int8 dqx, dqy (half-px vs baseline)
 inline constexpr std::uint8_t Pos16 = 1u << 2;  // int16 vs origin (Pos8 overflow)
 inline constexpr std::uint8_t Health = 1u << 3; // uint8
-inline constexpr std::uint8_t Meta = 1u << 4;   // uint8 kind, uint8 variant, uint16 move_speed
+inline constexpr std::uint8_t Meta = 1u << 4;   // uint8 kind, variant, fx + uint16 move_speed
 inline constexpr std::uint8_t Scale = 1u << 5;  // uint8 scale_q
 inline constexpr std::uint8_t Script = 1u << 6; // script-component blob re-sent
 } // namespace delta

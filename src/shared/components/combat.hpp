@@ -36,10 +36,12 @@ struct EnemyTag
 
 // How the client draws this entity: kind = proto::EntityKind, variant = a
 // per-kind byte (enemies: archetype wire id; bullets: 1 hostile / 2 crit).
-// Stamped by the kernel factories; Lua mutates `variant` freely.
+// Stamped by the kernel factories; Lua mutates `variant` freely. `fx` is the
+// Lua-driven animation state (0 = auto Idle/Move; 1 = attacking — the client
+// plays the sprite pack's ATK/Attack clip once per 0->1 transition).
 struct Render
 {
-    std::uint8_t kind = 0, variant = 0;
+    std::uint8_t kind = 0, variant = 0, fx = 0;
 };
 
 // On-screen size multiplier, shipped in snapshots (like Render, the engine

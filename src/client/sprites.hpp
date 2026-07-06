@@ -46,6 +46,19 @@ struct SpritePack
         return nullptr;
     }
 
+    // The pack's attack clip, by pure asset discovery: exact "ATK"/"Attack"
+    // first, else the first clip whose name contains "ATK" (FrogBoss ships
+    // "Jump_ATK", archers "ATK_Full", ...). nullptr = pack has no attack art.
+    [[nodiscard]] const AnimClip* attack() const
+    {
+        if (const AnimClip* c = clip("ATK")) { return c; }
+        if (const AnimClip* c = clip("Attack")) { return c; }
+        for (const auto& [stem, c] : clips) {
+            if (stem.find("ATK") != std::string::npos) { return &c; }
+        }
+        return nullptr;
+    }
+
     // Directional lookup: "<base>_<Dir8>". Packs may ship only 6 directions
     // (no pure Left/Right — e.g. idle/dash/death sets); those borrow the
     // Down-diagonal, then Down, before giving up. nullptr means the pack is

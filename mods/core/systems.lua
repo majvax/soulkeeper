@@ -325,8 +325,13 @@ return function(mod, C)
                         })
                         b:get(Render).variant = 1 -- hostile: red
                         r.timer = r.cooldown
+                        r.anim = 0.5 -- play the archer's attack clip (Render.fx)
+                        e:get(Render).fx = 1
                     end
                 end
+            elseif r.anim > 0 then
+                r.anim = r.anim - dt
+                if r.anim <= 0 then e:get(Render).fx = 0 end
             end
         end
     end)
@@ -349,6 +354,11 @@ return function(mod, C)
                     b:get(Render).variant = 1 -- hostile: red
                 end
                 nova.timer = nova.cooldown
+                nova.anim = 0.9 -- play the boss's attack clip (Render.fx)
+                e:get(Render).fx = 1
+            elseif nova.anim > 0 then
+                nova.anim = nova.anim - dt
+                if nova.anim <= 0 then e:get(Render).fx = 0 end
             end
         end
     end)

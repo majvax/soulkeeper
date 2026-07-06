@@ -47,6 +47,7 @@ return function(mod)
         bullet_speed = 260,
         damage = 1,
         timer = 1.0, -- brief grace period after spawning
+        anim = 0,    -- attack-clip window left (drives Render.fx)
     })
     -- Pure TAGS: zero-field components used only for membership (has/each).
     C.AutoTarget = mod:component("autotarget", {})
@@ -60,6 +61,7 @@ return function(mod)
         bullets = 16,
         bullet_speed = 210,
         damage = 1,
+        anim = 0,    -- attack-clip window left (drives Render.fx)
     })
     return C
 end

@@ -643,9 +643,11 @@ void GameServer::stream_snapshots()
         // (stamped by factories, variant mutated freely by Lua).
         std::uint8_t kind = static_cast<std::uint8_t>(proto::EntityKind::Mover);
         std::uint8_t variant = 0;
+        std::uint8_t fx = 0;
         if (const Render* render = registry.try_get<Render>(entity)) {
             kind = render->kind;
             variant = render->variant;
+            fx = render->fx;
         }
 
         std::uint8_t health = 255;
@@ -694,7 +696,7 @@ void GameServer::stream_snapshots()
                                    .qy = proto::to_half_px(pos.y),
                                    .move_speed = move_speed,
                                    .kind = kind, .health = health, .variant = variant,
-                                   .scale_q = scale_q,
+                                   .scale_q = scale_q, .fx = fx,
                                    .script_off = static_cast<std::uint32_t>(blob_start),
                                    .script_len = static_cast<std::uint16_t>(blob.bytes().size() - blob_start) });
     });

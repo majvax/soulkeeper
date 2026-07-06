@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 10;
+inline constexpr std::uint16_t protocol_version = 11;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -224,7 +224,7 @@ struct SnapshotHeader
     float origin_x, origin_y;  // quantization origin (near the players)
 };
 
-struct SnapshotEntry // 14 bytes packed
+struct SnapshotEntry // 15 bytes packed
 {
     std::uint32_t id;         // server entity id == the network id
     std::int16_t qx, qy;      // quantize_pos(pos, header origin)
@@ -233,6 +233,7 @@ struct SnapshotEntry // 14 bytes packed
     std::uint8_t health;      // players: current hearts; others: 0..255 fraction of max health
     std::uint8_t variant;     // enemies: archetype wire id; players: max hearts; 0 otherwise
     std::uint8_t scale_q;     // kernel Scale x32 (1.0 -> 32, max ~8x); 0 = no Scale = 1.0
+    std::uint8_t fx;          // Render.fx: Lua-driven anim state (1 = attacking)
 };
 
 // Trailer after the entry array: the authoritative aim + trigger of each player,

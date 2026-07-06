@@ -48,6 +48,8 @@ struct Remote
     bool firing = false;  // authoritative trigger (players) — Shoot vs Move/Idle
     float death_start = -1.0f; // anim clock when a player went down (-1 = alive)
     float flash_until = -1.0f; // anim clock deadline for the red hit-flash
+    std::uint8_t fx = 0;       // Render.fx anim state off the wire (1 = attacking)
+    float fx_start = -1.0f;    // anim clock at the 0->1 transition (attack plays once)
 };
 
 // A short client-only burst effect where an entity died/was picked up (the
@@ -385,6 +387,8 @@ private:
                 if (rec.health < rem.health) { rem.flash_until = anim_time_ + 0.12f; } // hit!
                 rem.health = rec.health;
                 rem.scale = proto::dequantize_scale(rec.scale_q);
+                if (rec.fx != 0 && rem.fx == 0) { rem.fx_start = anim_time_; } // attack begins
+                rem.fx = rec.fx;
                 if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                     // Downed players stay in the snapshot with 0 hearts.
                     if (rec.health == 0 && rem.death_start < 0.0f) { rem.death_start = anim_time_; }
@@ -754,6 +758,17 @@ private:
         if (def != nullptr) {
             if (!def->sprite.empty()) {
                 if (const client::SpritePack* pack = packs_.get(def->sprite)) {
+                    // Attacking (Render.fx, Lua-driven): play the pack's attack
+                    // clip ONCE from the transition — discovered from the
+                    // assets, no per-archetype wiring.
+                    if (rem.fx == 1 && rem.fx_start >= 0.0f) {
+                        if (const client::AnimClip* atk = pack->attack()) {
+                            client::draw_clip(r, *atk, cx, cy, sprite_size * scale,
+                                              anim_time_ - rem.fx_start, face < 0, tint, 18.0f,
+                                              /*once=*/true);
+                            return;
+                        }
+                    }
                     if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
                         client::draw_clip(r, *clip, cx, cy, sprite_size * scale,
                                           anim_time_ + phase_offset(rem.net_id), face < 0, tint);

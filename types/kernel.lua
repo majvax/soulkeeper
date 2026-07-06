@@ -50,6 +50,7 @@
 ---@class RenderFields
 ---@field kind integer     # proto::EntityKind (see the KIND table)
 ---@field variant integer  # per-kind byte (enemy archetype / bullet tint)
+---@field fx integer       # anim state: 0 = auto Idle/Move, 1 = attacking (the client plays the sprite pack's ATK/Attack clip once per 0->1 transition)
 
 ---@class DownedFields
 ---@field respawn_wave integer

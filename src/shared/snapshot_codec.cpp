@@ -67,7 +67,8 @@ void put_full_entry(const SnapshotState& state, const EntityRec& rec, std::int32
                            .kind = rec.kind,
                            .health = rec.health,
                            .variant = rec.variant,
-                           .scale_q = rec.scale_q });
+                           .scale_q = rec.scale_q,
+                           .fx = rec.fx });
     out.put_bytes(state.script_of(rec));
 }
 
@@ -135,7 +136,7 @@ void encode_delta(const SnapshotState& state, const SnapshotState& baseline, Byt
         }
         if (cur.health != base.health) { flags |= delta::Health; }
         if (cur.kind != base.kind || cur.variant != base.variant
-            || cur.move_speed != base.move_speed) {
+            || cur.move_speed != base.move_speed || cur.fx != base.fx) {
             flags |= delta::Meta;
         }
         if (cur.scale_q != base.scale_q) { flags |= delta::Scale; }
@@ -155,6 +156,7 @@ void encode_delta(const SnapshotState& state, const SnapshotState& baseline, Byt
         if ((flags & delta::Meta) != 0) {
             changes.put(cur.kind);
             changes.put(cur.variant);
+            changes.put(cur.fx);
             changes.put(cur.move_speed);
         }
         if ((flags & delta::Scale) != 0) { changes.put(cur.scale_q); }
@@ -210,6 +212,7 @@ std::optional<SnapshotState> decode_full(std::span<const std::byte> payload,
                        .health = entry->health,
                        .variant = entry->variant,
                        .scale_q = entry->scale_q,
+                       .fx = entry->fx,
                        .script_off = 0,
                        .script_len = 0 };
         if (!read_blob(payload, pos, state, rec, field_counts)) { return std::nullopt; }
@@ -275,6 +278,7 @@ std::optional<SnapshotState> decode_delta(std::span<const std::byte> payload,
                            .health = entry->health,
                            .variant = entry->variant,
                            .scale_q = entry->scale_q,
+                           .fx = entry->fx,
                            .script_off = 0,
                            .script_len = 0 };
             if (!read_blob(payload, pos, state, rec, field_counts)) { return std::nullopt; }
@@ -317,7 +321,7 @@ std::optional<SnapshotState> decode_delta(std::span<const std::byte> payload,
         }
         if (ok && (*flags & delta::Health) != 0) { ok = take(rec.health); }
         if (ok && (*flags & delta::Meta) != 0) {
-            ok = take(rec.kind) && take(rec.variant) && take(rec.move_speed);
+            ok = take(rec.kind) && take(rec.variant) && take(rec.fx) && take(rec.move_speed);
         }
         if (ok && (*flags & delta::Scale) != 0) { ok = take(rec.scale_q); }
         if (!ok) { return std::nullopt; }
