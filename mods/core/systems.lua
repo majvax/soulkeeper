@@ -388,6 +388,29 @@ return function(mod, C)
         end
     end)
 
+    -- Boss arena confinement: while a nova-bearer lives, players can't leave
+    -- its radius — no hit-and-run. The client predicts the same clamp (via the
+    -- archetype's `arena` opt) so the wall doesn't rubber-band. 60 Hz keeps
+    -- the overshoot under ~4 px at run speed.
+    mod:system("arena", { phase = "update", rate = 60, stagger = 0.25 }, function(dt)
+        for e in world:each(C.Nova, Position) do
+            local arena = e:get(C.Nova).arena
+            if arena > 0 then
+                local bp = e:get(Position)
+                for p in world:each(Player, Position) do
+                    local pp = p:get(Position)
+                    local dx, dy = pp.x - bp.x, pp.y - bp.y
+                    local d2 = dx * dx + dy * dy
+                    if d2 > arena * arena then
+                        local d = math.sqrt(d2)
+                        pp.x = bp.x + dx / d * arena
+                        pp.y = bp.y + dy / d * arena
+                    end
+                end
+            end
+        end
+    end)
+
     -- Damage aura (Onion): hurt enemies inside any player's aura.
     -- 20 Hz: damage scales by the accumulated dt, so DPS is unchanged.
     mod:system("aura_sys", { phase = "update", rate = 20, stagger = 0.5 }, function(dt)

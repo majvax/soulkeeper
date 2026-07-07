@@ -367,6 +367,7 @@ function HudContext:pie(radius, fraction, r, g, b, a) end
 ---@field scale? number    # on-screen size factor (default 1.0)
 ---@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
 ---@field sprite? string   # an animation-pack FOLDER of <Clip>_<N>x1.png strips (the engine slices frames, plays Idle/Move, flips for facing) or a static .png path (default: the shared enemy sprite)
+---@field arena? number    # boss confinement radius (default 0 = none): while this enemy lives the client locks the camera on it, clamps local prediction inside the radius and draws the wall ring — pair it with a SIM-side clamp (core: C.Nova.arena)
 ---@field on_spawn? fun(e: Entity) # escape hatch for dynamic per-spawn logic (prefer :component())
 
 --=============================================================================

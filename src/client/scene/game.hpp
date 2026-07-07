@@ -253,6 +253,17 @@ private:
             Position& pos = registry_.get<Position>(player_);
             pos.x += vel.dx * dt;
             pos.y += vel.dy * dt;
+            // Boss arena: clamp the prediction like the server clamps the sim
+            // (core's arena system) — otherwise the wall would rubber-band.
+            if (const ArenaBoss arena = arena_boss(1.0f); arena.active) {
+                const float dx = pos.x - arena.x;
+                const float dy = pos.y - arena.y;
+                const float d = std::sqrt((dx * dx) + (dy * dy));
+                if (d > arena.radius && d > 0.0f) {
+                    pos.x = arena.x + (dx / d * arena.radius);
+                    pos.y = arena.y + (dy / d * arena.radius);
+                }
+            }
             my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
 
@@ -458,9 +469,16 @@ private:
 
     void render_game(SDL_Renderer* r)
     {
+        const float cam_t =
+          std::min(time_since_snapshot_ * static_cast<float>(proto::snapshot_hz), 1.0f);
+        const ArenaBoss arena = arena_boss(cam_t);
+
         float cam_x = 0.0f;
         float cam_y = 0.0f;
-        if (has_player_) {
+        if (arena.active) { // boss arena: the camera locks onto the boss
+            cam_x = arena.x;
+            cam_y = arena.y;
+        } else if (has_player_) {
             const Position& me = registry_.get<Position>(player_);
             cam_x = me.x;
             cam_y = me.y;
@@ -492,6 +510,15 @@ private:
             ImGui::GetForegroundDrawList()->AddText(
               font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.22f),
               IM_COL32(255, 225, 140, static_cast<int>(alpha * 255.0f)), banner);
+        }
+
+        // Arena boundary: a subtle double ring around the boss so the wall
+        // players are clamped to actually reads on screen.
+        if (arena.active && engine_->scenes().is_top(this)) {
+            ImDrawList* fx = ImGui::GetBackgroundDrawList();
+            const ImVec2 at(arena.x + ox, arena.y + oy);
+            fx->AddCircle(at, arena.radius, IM_COL32(255, 200, 90, 170), 96, 3.0f);
+            fx->AddCircle(at, arena.radius + 6.0f, IM_COL32(255, 200, 90, 60), 96, 8.0f);
         }
 
         // Death poofs + dash trail: short-lived world-space rings (ImGui bg
@@ -705,13 +732,58 @@ private:
     // Move while moving, Idle while still — whichever the pack actually has.
     static const client::AnimClip* pick_clip(const client::SpritePack& pack, bool moving)
     {
-        const client::AnimClip* clip = pack.clip(moving ? "Move" : "Idle");
-        if (clip == nullptr) { clip = pack.clip(moving ? "Idle" : "Move"); }
+        // pack.move() falls back through Move -> Move_Full -> *Move* — packs
+        // with only phase clips (FrogBoss) still get a walk cycle.
+        const client::AnimClip* clip = moving ? pack.move() : pack.clip("Idle");
+        if (clip == nullptr) { clip = moving ? pack.clip("Idle") : pack.move(); }
         return clip;
+    }
+
+    // Draw an enemy clip at the pack's shared pixel density, bottom-anchored:
+    // a canvas taller than the pack's ref_h (FrogBoss jumps carry the leap's
+    // air space) extends UPWARD from the same ground line instead of squashing
+    // and displacing the body (the old center-scale "teleport").
+    static void draw_pack_clip(SDL_Renderer* r, const client::SpritePack& pack,
+                               const client::AnimClip& clip, float cx, float cy, float base_h,
+                               float time, bool flip, SDL_Color tint, float fps = 12.0f,
+                               bool once = false)
+    {
+        const float ref = pack.ref_h > 0.0f ? pack.ref_h : clip.frame_h;
+        const float h = base_h * (clip.frame_h / ref);
+        const float bottom = cy + (base_h * 0.5f);
+        client::draw_clip(r, clip, cx, bottom - (h * 0.5f), h, time, flip, tint, fps, once);
     }
 
     // Desynchronize identical archetypes so a wave doesn't animate in lockstep.
     static float phase_offset(std::uint32_t net_id) { return static_cast<float>(net_id % 16U) * 0.37f; }
+
+    // The live arena boss (an enemy whose def sets `arena > 0`), if any: the
+    // camera locks onto it, local prediction is clamped to its radius and the
+    // boundary ring is drawn. `t` interpolates PrevPosition->Position (pass 1
+    // for the current server position).
+    struct ArenaBoss
+    {
+        bool active = false;
+        float x = 0.0f, y = 0.0f, radius = 0.0f;
+    };
+    [[nodiscard]] ArenaBoss arena_boss(float t) const
+    {
+        ArenaBoss out;
+        for (const auto& [net_id, entity] : remotes_) {
+            const Remote& rem = registry_.get<Remote>(entity);
+            if (rem.kind != static_cast<std::uint8_t>(proto::EntityKind::Enemy)) { continue; }
+            const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant);
+            if (def == nullptr || def->arena <= 0.0f) { continue; }
+            const Position& pos = registry_.get<Position>(entity);
+            const PrevPosition& prev = registry_.get<PrevPosition>(entity);
+            out = { .active = true,
+                    .x = prev.x + ((pos.x - prev.x) * t),
+                    .y = prev.y + ((pos.y - prev.y) * t),
+                    .radius = def->arena };
+            return out;
+        }
+        return out;
+    }
 
     // Archetypes are Lua-defined (mod:enemy): scale/tint/sprite come from the
     // render VM's enemy registry, keyed by the snapshot variant (wire id). A
@@ -760,18 +832,19 @@ private:
                 if (const client::SpritePack* pack = packs_.get(def->sprite)) {
                     // Attacking (Render.fx, Lua-driven): play the pack's attack
                     // clip ONCE from the transition — discovered from the
-                    // assets, no per-archetype wiring.
+                    // assets, no per-archetype wiring. 24 fps: 22 frames fit
+                    // the nova's 0.9 s window without freezing on the end.
                     if (rem.fx == 1 && rem.fx_start >= 0.0f) {
                         if (const client::AnimClip* atk = pack->attack()) {
-                            client::draw_clip(r, *atk, cx, cy, sprite_size * scale,
-                                              anim_time_ - rem.fx_start, face < 0, tint, 18.0f,
-                                              /*once=*/true);
+                            draw_pack_clip(r, *pack, *atk, cx, cy, sprite_size * scale,
+                                           anim_time_ - rem.fx_start, face < 0, tint, 24.0f,
+                                           /*once=*/true);
                             return;
                         }
                     }
                     if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
-                        client::draw_clip(r, *clip, cx, cy, sprite_size * scale,
-                                          anim_time_ + phase_offset(rem.net_id), face < 0, tint);
+                        draw_pack_clip(r, *pack, *clip, cx, cy, sprite_size * scale,
+                                       anim_time_ + phase_offset(rem.net_id), face < 0, tint);
                         return;
                     }
                 }

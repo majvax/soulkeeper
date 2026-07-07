@@ -253,6 +253,7 @@ struct ModHandle
                 }
             }
             d.sprite = opts->get_or<std::string>("sprite", "");
+            d.arena = opts->get_or("arena", 0.0f);
             d.on_spawn = opts->get_or<sol::protected_function>("on_spawn", {});
         }
         std::string id = d.id;

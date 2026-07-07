@@ -138,6 +138,7 @@ return function(mod, C)
         sprite = "assets/sprite/FrogBoss",
         scale = 3.4,
         tint = { 255, 215, 120 },            -- gold: unmistakably THE boss
+        arena = 320,                         -- client camera lock + wall (= C.Nova.arena)
     })
         :component(Health, health(1200))     -- a proper health bar to chew through
         :component(Speed, speed(60))         -- walks, never runs
@@ -159,13 +160,30 @@ return function(mod, C)
         for p in world:each(Player, Position) do
             if not p:has(Downed) then
                 local pp = p:get(Position)
-                local a = math.random() * 2 * math.pi
-                local spawned = spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, id)
-                if is_boss and spawned then
-                    spawned:set(WaveHold, {})
-                    for e in world:each(Enemy) do
-                        if not e:has(C.Nova) then e:destroy() end -- clear the arena
+                if is_boss then
+                    -- ARENA entrance: gather the whole team on the anchor
+                    -- player (small ring so they don't stack), spawn the boss
+                    -- CLOSE (inside its own confinement radius), clear the
+                    -- trash, and freeze the wave clock via WaveHold on the
+                    -- boss itself. No escape, no hit-and-run.
+                    local i = 0
+                    for other in world:each(Player, Position) do
+                        local op = other:get(Position)
+                        op.x = pp.x + math.cos(i * 2.1) * 40
+                        op.y = pp.y + math.sin(i * 2.1) * 40
+                        i = i + 1
                     end
+                    local a = math.random() * 2 * math.pi
+                    local boss = spawn_enemy(pp.x + math.cos(a) * 220, pp.y + math.sin(a) * 220, id)
+                    if boss then
+                        boss:set(WaveHold, {})
+                        for e in world:each(Enemy) do
+                            if not e:has(C.Nova) then e:destroy() end -- clear the arena
+                        end
+                    end
+                else
+                    local a = math.random() * 2 * math.pi
+                    spawn_enemy(pp.x + math.cos(a) * 600, pp.y + math.sin(a) * 600, id)
                 end
                 return
             end

@@ -70,6 +70,7 @@ return function(mod)
         bullet_speed = 210,
         damage = 1,
         anim = 0,    -- attack-clip window left (drives Render.fx)
+        arena = 320, -- confinement radius (keep = the archetype's `arena` opt)
     })
     return C
 end

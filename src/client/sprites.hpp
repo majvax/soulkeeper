@@ -31,6 +31,11 @@ struct AnimClip
 struct SpritePack
 {
     std::vector<std::pair<std::string, AnimClip>> clips;
+    // The pack's "standing" canvas height (Idle's frame_h, else the smallest):
+    // clips with TALLER canvases (FrogBoss jumps carry air space above the
+    // body) draw at target_h * frame_h / ref_h, bottom-anchored, so the body
+    // keeps one pixel density and its feet stay planted across clips.
+    float ref_h = 0.0f;
 
     [[nodiscard]] const AnimClip* clip(std::string_view name) const
     {
@@ -55,6 +60,18 @@ struct SpritePack
         if (const AnimClip* c = clip("Attack")) { return c; }
         for (const auto& [stem, c] : clips) {
             if (stem.find("ATK") != std::string::npos) { return &c; }
+        }
+        return nullptr;
+    }
+
+    // The pack's walk clip: plain "Move", else "Move_Full" (the full cycle in
+    // multi-phase packs like FrogBoss), else anything containing "Move".
+    [[nodiscard]] const AnimClip* move() const
+    {
+        if (const AnimClip* c = clip("Move")) { return c; }
+        if (const AnimClip* c = clip("Move_Full")) { return c; }
+        for (const auto& [stem, c] : clips) {
+            if (stem.find("Move") != std::string::npos) { return &c; }
         }
         return nullptr;
     }
@@ -127,7 +144,18 @@ public:
               clip_name, AnimClip{ .tex = tex, .frames = frames,
                                    .frame_w = w / static_cast<float>(frames), .frame_h = h });
         }
-        if (pack->clips.empty()) { pack = nullptr; }
+        if (pack->clips.empty()) {
+            pack = nullptr;
+        } else {
+            // Reference canvas height for mixed-canvas packs (see ref_h).
+            if (const AnimClip* idle = pack->clip("Idle")) {
+                pack->ref_h = idle->frame_h;
+            } else {
+                float min_h = pack->clips.front().second.frame_h;
+                for (const auto& [_, c] : pack->clips) { min_h = std::min(min_h, c.frame_h); }
+                pack->ref_h = min_h;
+            }
+        }
         return cache_.emplace(dir, std::move(pack)).first->second.get();
     }
 
