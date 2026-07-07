@@ -1,15 +1,14 @@
 #pragma once
 #include "client/engine.hpp"
 #include "client/scene.hpp"
-#include <imgui.h>
+#include <string>
 
 // Modal end-of-run screen: VICTORY or GAME OVER + final stats over the frozen
-// world (the server keeps streaming it, paused). Returns Stop everywhere so the
-// GameScene below can't be controlled. The host returns everyone to the lobby
-// (Command::BackToLobby -> server reset); when the Lobby state arrives, THIS
-// scene rebuilds the pre-game stack (GameScene::update is blocked below us, so
-// the transition has to live here) — the next run then flows through the normal
-// Lobby -> Playing path with a fresh GameScene.
+// world (the server keeps streaming it, paused). Drawn with the widget kit.
+// Returns Stop everywhere so the GameScene below can't be controlled. The host
+// returns everyone to the lobby (Command::BackToLobby -> server reset); when
+// the Lobby state arrives, THIS scene rebuilds the pre-game stack
+// (GameScene::update is blocked below us, so the transition has to live here).
 class GameOverScene final : public client::Scene
 {
 public:
@@ -42,40 +41,55 @@ public:
         const SDL_FRect full{ .x = 0, .y = 0, .w = w, .h = h };
         SDL_RenderFillRect(r, &full);
 
+        client::Gui& ui = engine_->gui();
         const client::Session& session = engine_->session();
         const proto::GameOverMsg& stats = session.game_over_stats();
         const bool won = stats.won != 0;
+        const float s = ui.scale();
 
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        const char* title = won ? "VICTORY" : "GAME OVER";
-        const ImU32 title_col = won ? IM_COL32(255, 215, 80, 255) : IM_COL32(230, 70, 70, 255);
-        constexpr float title_px = 48.0f;
-        ImFont* font = ImGui::GetFont();
-        const ImVec2 title_size = font->CalcTextSizeA(title_px, FLT_MAX, 0.0f, title);
-        draw->AddText(font, title_px, ImVec2((w - title_size.x) * 0.5f, (h * 0.5f) - 160.0f),
-                      title_col, title);
+        const float pw = 180.0f * s;
+        const float ph = 110.0f * s;
+        const float px = (w - pw) * 0.5f;
+        const float py = (h - ph) * 0.5f;
 
-        ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::Begin("##game_over", nullptr,
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
-                       | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar);
-        ImGui::Text("%s", won ? "The Soulkeeper prevails." : "The horde has won.");
-        ImGui::Separator();
-        ImGui::Text("Reached wave %u at team level %u", static_cast<unsigned>(stats.final_wave),
-                    static_cast<unsigned>(stats.final_level));
-        ImGui::Spacing();
-        ImGui::TextUnformatted("Party:");
+        ui.text_centered(w * 0.5f, py - (30.0f * s), won ? "VICTORY" : "GAME OVER",
+                         won ? client::colors::accent : client::colors::danger, 20.0f * s);
+        ui.panel(px, py, pw, ph);
+
+        const float inner_x = px + (14.0f * s);
+        float y = py + (12.0f * s);
+        ui.text(inner_x, y, won ? "THE SOULKEEPER PREVAILS." : "THE HORDE HAS WON.",
+                client::colors::text);
+        y += ui.line_h();
+        ui.text(inner_x, y,
+                "WAVE " + std::to_string(stats.final_wave) + "  LEVEL "
+                  + std::to_string(stats.final_level),
+                client::colors::dim);
+        y += ui.line_h() * 1.2f;
+
+        ui.text(inner_x, y, "PARTY", client::colors::dim);
+        y += ui.line_h() * 0.9f;
         for (const client::RosterRow& row : session.roster()) {
-            ImGui::BulletText("%s%s%s", row.name.c_str(), row.is_host ? "  [host]" : "",
-                              row.connected ? "" : "  (disconnected)");
+            std::string line = row.name;
+            if (row.is_host) { line += " [HOST]"; }
+            if (!row.connected) { line += " (LOST)"; }
+            ui.text(inner_x + (6.0f * s), y, line,
+                    row.connected ? client::colors::text : client::colors::dim);
+            y += ui.line_h() * 0.9f;
         }
-        ImGui::Separator();
+
+        const float by = py + ph - ui.button_h() - (10.0f * s);
         if (session.is_host()) {
-            if (ImGui::Button("Return to lobby (ENTER)", ImVec2(220, 0))) { back_to_lobby(); }
+            const float bw = 130.0f * s;
+            if (ui.button("RETURN TO LOBBY", px + ((pw - bw) * 0.5f), by, bw, ui.button_h())) {
+                back_to_lobby();
+            }
+            ui.text_centered(w * 0.5f, py + ph + (8.0f * s), "OR PRESS ENTER",
+                             client::colors::dim, 6.0f * s);
         } else {
-            ImGui::TextDisabled("waiting for the host to return to the lobby...");
+            ui.text_centered(w * 0.5f, py + ph + (8.0f * s), "WAITING FOR THE HOST...",
+                             client::colors::dim, 6.0f * s);
         }
-        ImGui::End();
         return Stop;
     }
 

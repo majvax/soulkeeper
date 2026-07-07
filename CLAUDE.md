@@ -54,6 +54,12 @@ src/
     scene.hpp      #   Scene base (handle_event/update/render -> Propagation Continue/Stop) + SceneManager (DEFERRED push/pop/clear + apply_pending)
     session.hpp    #   client net control-plane: connect/reconnect, drains net, roster/state/id, latest snapshot, send_*
     ui.hpp / renderer.hpp   # ImGuiLayer RAII; Textures cache (stb_image, image-or-rect fallback)
+    gui.hpp/.cpp            # the game's OWN widget kit (immediate-mode): 9-sliced pixel-art
+                            #   panels/buttons/inputs/hearts from assets/ui/*.png (BlackAndWhite
+                            #   pack) + Press Start 2P text baked via stb_truetype (assets/font/).
+                            #   USER-FACING scenes (connect/lobby/level-up/game-over/banners) draw
+                            #   with this; ImGui is DEV-ONLY now (console, mod HUD, debug). Engine
+                            #   owns it (engine->gui()); widgets read events the Engine forwards.
     audio.hpp/.cpp          # Audio mixer on raw SDL3 streams (device mixes bound streams): 16-voice
                             #   SFX pool (pitch jitter, 40ms same-name throttle, play_at falloff) +
                             #   looping music stream w/ cross-fade; clips = assets/sound/<name>.wav|.ogg
@@ -158,7 +164,9 @@ mods rebind any sound via `mod:sound` and fire their own with `ctx:play/play_at`
   can still pin Debug (check `grep CMAKE_BUILD_TYPE build/CMakeCache.txt`).
 - Run: `./bin/server` then `./bin/client [host] [name]`; host presses **ENTER** in the lobby. Client
   is **fullscreen** and loads assets by **relative path** → run from the repo root. Assets:
-  `assets/sprite/{player,enemy}.png`, `assets/background.png`, optional `assets/ui/card_*.png`.
+  `assets/sprite/{player,enemy}.png`, `assets/background.png`, optional `assets/ui/card_*.png`;
+  widget-kit sprites in `assets/ui/` (panel/button/pill/hearts, 9-slice metrics hardcoded in
+  gui.cpp) + `assets/font/PressStart2P.ttf` (OFL); `assets/sound/` (canonical names, modding.md).
   **Animation packs**: `assets/sprite/<Pack>/` folders of `<Clip>_<N>x1.png` horizontal strips
   (enemy packs have Idle+Move, all face RIGHT + flip). A **directional player pack** names clips
   `<State>_<Dir8>` (states Idle/Move/Shoot/MoveShoot/Dash/Death; 8 compass dirs, pure Left/Right

@@ -35,6 +35,7 @@ std::expected<Engine, EngineError> Engine::create(const EngineConfig& config)
 void Engine::on_event(const SDL_Event& event)
 {
     ui_layer_.process_event(event);
+    gui_.handle_event(event); // records mouse/typing; widgets consume at render
     const bool unconsumed = scenes_.handle_event(event);
     if (event.type == SDL_EVENT_QUIT) { quit(); }
     // Global exit key — only when no scene claimed the event (modal scenes
@@ -44,6 +45,7 @@ void Engine::on_event(const SDL_Event& event)
 
 void Engine::render(float alpha)
 {
+    gui_.begin_frame(); // widget kit: consume this frame's click, sample mouse
     ui_layer_.begin_frame();
     scenes_.render(alpha);
     ui_layer_.end_frame(renderer_.get());

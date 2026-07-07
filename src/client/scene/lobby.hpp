@@ -2,10 +2,11 @@
 #include "client/engine.hpp"
 #include "client/scene.hpp"
 #include "client/scene/game.hpp"
-#include <imgui.h>
+#include <string>
 
-// Pre-game lobby: shows the connected players and lets the host start. When the
-// game starts it swaps itself for the GameScene.
+// Pre-game lobby: the connected players and the host's start control, drawn
+// with the widget kit (no ImGui). When the game starts it swaps itself for the
+// GameScene.
 class LobbyScene : public client::Scene
 {
 public:
@@ -15,8 +16,7 @@ public:
     {
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_RETURN
             && engine_->session().is_host() && engine_->session().connected()) {
-            engine_->audio().play("select");
-            engine_->session().send_start();
+            start();
         }
         return Continue;
     }
@@ -37,34 +37,73 @@ public:
         SDL_SetRenderDrawColor(r, 20, 22, 28, 255);
         SDL_RenderClear(r);
 
+        client::Gui& ui = engine_->gui();
         client::Session& session = engine_->session();
-        ImGui::Begin("Lobby");
+        const float s = ui.scale();
+        const float w = static_cast<float>(engine_->width());
+        const float h = static_cast<float>(engine_->height());
+
+        const float pw = 170.0f * s;
+        const float ph = 140.0f * s;
+        const float px = (w - pw) * 0.5f;
+        const float py = (h - ph) * 0.5f;
+
+        ui.text_centered(w * 0.5f, py - (22.0f * s), "LOBBY", client::colors::accent, 12.0f * s);
+        ui.panel(px, py, pw, ph);
+
+        const float inner_x = px + (14.0f * s);
+        float y = py + (12.0f * s);
+
         if (session.join_denied()) {
-            ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "Mod set mismatch — join refused.");
-            ImGui::Text("server mods: %016llx", static_cast<unsigned long long>(session.server_mods_hash()));
-            ImGui::Text("your mods:   %016llx", static_cast<unsigned long long>(session.mods_hash()));
-            ImGui::TextUnformatted("Your mods/ folder must match the server's.");
-            if (ImGui::Button("Back")) { go_back(); }
-            ImGui::End();
-            return Continue;
+            ui.text(inner_x, y, "MOD SET MISMATCH", client::colors::danger);
+            y += ui.line_h();
+            ui.text(inner_x, y, "JOIN REFUSED", client::colors::danger);
+            y += ui.line_h();
+            ui.text(inner_x, y, "YOUR MODS/ MUST MATCH", client::colors::dim);
+            y += ui.line_h();
+            ui.text(inner_x, y, "THE SERVER'S", client::colors::dim);
+        } else if (!session.connected()) {
+            // Retro "connecting" pulse: trailing dots cycle with the caret clock.
+            ui.text(inner_x, y, "CONNECTING...", client::colors::accent);
+        } else {
+            ui.text(inner_x, y, "PLAYERS", client::colors::dim);
+            y += ui.line_h();
+            for (const client::RosterRow& row : session.roster()) {
+                std::string line = row.name;
+                if (row.is_host) { line += " [HOST]"; }
+                if (!row.connected) { line += " (LOST)"; }
+                ui.text(inner_x + (6.0f * s), y, line,
+                        row.connected ? client::colors::text : client::colors::dim);
+                y += ui.line_h() * 0.9f;
+            }
         }
-        if (!session.connected()) {
-            ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "connecting...");
-            if (ImGui::Button("Back")) { go_back(); }
+
+        // Footer: back on the left, start (host) on the right.
+        const float by = py + ph - ui.button_h() - (10.0f * s);
+        if (ui.button("BACK", inner_x, by, 46.0f * s, ui.button_h())) { go_back(); }
+        if (!session.join_denied() && session.connected()) {
+            if (session.is_host()) {
+                if (ui.button("START", px + pw - (60.0f * s) - (14.0f * s), by, 60.0f * s,
+                              ui.button_h())) {
+                    start();
+                }
+                ui.text_centered(w * 0.5f, py + ph + (8.0f * s), "OR PRESS ENTER",
+                                 client::colors::dim, 6.0f * s);
+            } else {
+                ui.text_centered(w * 0.5f, py + ph + (8.0f * s), "WAITING FOR HOST...",
+                                 client::colors::dim, 6.0f * s);
+            }
         }
-        ImGui::Text("Players (%zu):", session.roster().size());
-        ImGui::Separator();
-        for (const client::RosterRow& row : session.roster()) {
-            ImGui::Text("%s%s%s", row.name.c_str(), row.is_host ? "  [host]" : "",
-                        row.connected ? "" : "  (disconnected)");
-        }
-        ImGui::Separator();
-        ImGui::TextUnformatted(session.is_host() ? "Press ENTER to start" : "Waiting for host to start...");
-        ImGui::End();
         return Continue;
     }
 
 private:
+    void start()
+    {
+        engine_->audio().play("select");
+        engine_->session().send_start();
+    }
+
     // Return to the Connect menu: drop the connection and pop ourselves, which
     // reveals the ConnectScene that pushed us (its fields intact underneath).
     void go_back()

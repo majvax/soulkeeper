@@ -15,6 +15,7 @@
 #include "shared/snapshot_codec.hpp"
 #include "shared/system/input.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -598,14 +599,11 @@ private:
         if (anim_time_ < banner_until_ && engine_->scenes().is_top(this)) {
             const float remain = banner_until_ - anim_time_;
             const float alpha = std::clamp(remain, 0.0f, 1.0f); // fade the last second
-            constexpr float banner_px = 56.0f;
-            char banner[32];
-            (void)std::snprintf(banner, sizeof(banner), "WAVE %u", static_cast<unsigned>(wave_));
-            ImFont* font = ImGui::GetFont();
-            const ImVec2 size = font->CalcTextSizeA(banner_px, FLT_MAX, 0.0f, banner);
-            ImGui::GetForegroundDrawList()->AddText(
-              font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.22f),
-              IM_COL32(255, 225, 140, static_cast<int>(alpha * 255.0f)), banner);
+            client::Gui& ui = engine_->gui();
+            ui.text_centered(ww * 0.5f, wh * 0.22f, "WAVE " + std::to_string(wave_),
+                             client::GuiColor{ 255, 225, 140,
+                                               static_cast<std::uint8_t>(alpha * 255.0f) },
+                             16.0f * ui.scale());
         }
 
         // Arena boundary: a double rectangle around the FIXED center so the
@@ -622,12 +620,14 @@ private:
         if (anim_time_ < boss_banner_until_ && engine_->scenes().is_top(this)) {
             const float remain = boss_banner_until_ - anim_time_;
             const float alpha = std::clamp(remain, 0.0f, 1.0f);
-            constexpr float banner_px = 44.0f;
-            ImFont* font = ImGui::GetFont();
-            const ImVec2 size = font->CalcTextSizeA(banner_px, FLT_MAX, 0.0f, boss_banner_.c_str());
-            ImGui::GetForegroundDrawList()->AddText(
-              font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.32f),
-              IM_COL32(255, 205, 110, static_cast<int>(alpha * 255.0f)), boss_banner_.c_str());
+            client::Gui& ui = engine_->gui();
+            std::string shout = boss_banner_;
+            std::transform(shout.begin(), shout.end(), shout.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            ui.text_centered(ww * 0.5f, wh * 0.32f, shout,
+                             client::GuiColor{ 255, 205, 110,
+                                               static_cast<std::uint8_t>(alpha * 255.0f) },
+                             12.0f * ui.scale());
         }
 
         // Death poofs + dash trail: short-lived world-space rings (ImGui bg

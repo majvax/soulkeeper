@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 
 #include "client/audio.hpp"
+#include "client/gui.hpp"
 #include "client/mod/render_bindings.hpp"
 #include "client/scene.hpp"
 #include "client/session.hpp"
@@ -120,6 +121,9 @@ public:
     [[nodiscard]] mod::LuaHost& mods() noexcept { return render_host_; }
     // The mixer. Always valid; silent mode if no audio device (never fatal).
     [[nodiscard]] Audio& audio() noexcept { return *audio_; }
+    // The game's pixel-art widget kit (panels/buttons/text/inputs) — what
+    // user-facing scenes draw with. ImGui remains for dev surfaces only.
+    [[nodiscard]] Gui& gui() noexcept { return gui_; }
 
     void quit() noexcept { running_ = false; }
     [[nodiscard]] bool running() const noexcept { return running_; }
@@ -130,8 +134,13 @@ public:
 private:
     Engine(SDLContext context, WindowPtr window, RendererPtr renderer, const EngineConfig& config)
       : context_{ std::move(context) }, window_{ std::move(window) }, renderer_{ std::move(renderer) },
-        config_{ config }, ui_layer_{ window_.get(), renderer_.get() }
-    {}
+        config_{ config }, ui_textures_{ std::make_unique<Textures>(renderer_.get()) },
+        ui_layer_{ window_.get(), renderer_.get() }
+    {
+        // ui_textures_ is heap-allocated because Engine is MOVED out of
+        // create(): Gui keeps this pointer, and a member address would dangle.
+        gui_.init(renderer_.get(), window_.get(), ui_textures_.get());
+    }
 
     void on_event(const SDL_Event& event);
     void render(float alpha);
@@ -148,6 +157,8 @@ private:
     // unique_ptr: Audio pins raw SDL stream handles, and Engine is moved out of
     // create() — the indirection keeps those handles stable across the move.
     std::unique_ptr<Audio> audio_ = std::make_unique<Audio>();
+    std::unique_ptr<Textures> ui_textures_; // widget-kit sprites (heap: Gui holds the pointer across the move)
+    Gui gui_;                               // the pixel-art widget kit (init'd in the ctor body)
     mod::LuaHost render_host_; // render VM: content metadata + draw hooks
     Session session_;
     SceneManager scenes_;

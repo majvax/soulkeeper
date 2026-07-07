@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <imgui.h>
 #include <string>
 
 // Modal card scene shown while the team picks an upgrade. Returns Stop from
@@ -49,9 +48,10 @@ public:
         const SDL_FRect full{ .x = 0, .y = 0, .w = w, .h = h };
         SDL_RenderFillRect(r, &full);
 
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        draw->AddText(ImVec2(w * 0.5f - 90.0f, h * 0.5f - 200.0f), IM_COL32(255, 255, 255, 255),
-                      "LEVEL UP - choose an upgrade");
+        client::Gui& ui = engine_->gui();
+        const float us = ui.scale();
+        ui.text_centered(w * 0.5f, (h * 0.5f) - (card_h * 0.5f) - (18.0f * us), "LEVEL UP",
+                         client::colors::accent, 12.0f * us);
 
         const mod::ContentRegistry& registry = engine_->mods().registry();
         const auto& choices = engine_->session().choices();
@@ -94,15 +94,20 @@ public:
                 SDL_RenderRect(r, &border);
             }
 
-            const ImU32 rc = IM_COL32(col.r, col.g, col.b, 255);
-            const std::string num = std::to_string(i + 1);
-            draw->AddText(ImVec2(rect.x + 10.0f, rect.y + 8.0f), IM_COL32(200, 200, 200, 255), num.c_str());
-            const char* label = (def != nullptr) ? def->label.c_str() : "?";
-            draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h * 0.42f), IM_COL32(255, 255, 255, 255), label);
-            const std::string value = (def != nullptr) ? def->value_text[static_cast<std::size_t>(rarity)]
-                                                        : std::string{};
-            draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h * 0.42f + 22.0f), rc, value.c_str());
-            draw->AddText(ImVec2(rect.x + 16.0f, rect.y + rect.h - 24.0f), rc, rarity_name(rarity));
+            const client::GuiColor rcol{ col.r, col.g, col.b, 255 };
+            const float pad = 6.0f * us;
+            const float small = 6.0f * us; // sub-line size (native 8 reads too big on cards)
+            ui.text(rect.x + pad, rect.y + pad, std::to_string(i + 1), client::colors::dim, small);
+            const std::string label = (def != nullptr) ? def->label : "?";
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.52f), label,
+                             client::colors::text, small);
+            const std::string value = (def != nullptr)
+                                        ? def->value_text[static_cast<std::size_t>(rarity)]
+                                        : std::string{};
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.52f) + ui.line_h(),
+                             value, rcol, small);
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + rect.h - (12.0f * us),
+                             rarity_name(rarity), rcol, small);
         }
         return Stop;
     }
