@@ -182,7 +182,8 @@ public:
     GameScene(GameScene&&) = delete;
     GameScene& operator=(const GameScene&) = delete;
     GameScene& operator=(GameScene&&) = delete;
-    ~GameScene() override = default;
+    // Drop the HUD thunk we published (it captures `this`) before we die.
+    ~GameScene() override { engine_->set_hud_render(nullptr); }
 
 private:
     void spawn_local_player(std::uint32_t net_id)
@@ -778,23 +779,38 @@ private:
         }
 
         // Plugin HUD hooks (mod:hud) LAST so the stats panel is topmost — the
-        // world (enemies, orbs) never draws over it. The panel shows the local
-        // player's stats + the team wave/level/XP (fed via hud_ctx_ fields).
-        // Skipped when a modal scene is stacked above (level-up/game-over own
-        // the screen then).
-        if (has_player_ && engine_->scenes().is_top(this)) {
-            set_local(local_dash_); // predicted dash -> render registry for the HUD
-            hud_ctx_.level = static_cast<int>(level_);
-            hud_ctx_.wave = static_cast<int>(wave_);
-            hud_ctx_.xp = static_cast<float>(xp_frac_) / 255.0f;
-            const client::DrawView view{ .scripts = &engine_->mods().scripts(),
-                                         .comps = script_state_for(my_net_id_),
-                                         .reg = &registry_,
-                                         .entity = player_,
-                                         .table = engine_->mods().state().bindings.get() };
-            client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
+        // world (enemies, orbs) never draws over it. When we're top, draw it
+        // now; either way, publish it as a thunk so a scene stacked above us
+        // (the level-up menu) can redraw it ON TOP of its own dim overlay —
+        // the player picks upgrades based on these stats, so they must stay
+        // visible + bright there.
+        if (has_player_) {
+            engine_->set_hud_render([this] { draw_stats_hud(); });
+            if (engine_->scenes().is_top(this)) { draw_stats_hud(); }
+        } else {
+            engine_->set_hud_render(nullptr);
         }
     }
+
+public:
+    // Draw the local player's stats panel (mod:hud hooks) via the widget kit.
+    // Public so the level-up scene can keep it on screen (see set_hud_render).
+    void draw_stats_hud()
+    {
+        if (!has_player_) { return; }
+        set_local(local_dash_); // predicted dash -> render registry for the HUD
+        hud_ctx_.level = static_cast<int>(level_);
+        hud_ctx_.wave = static_cast<int>(wave_);
+        hud_ctx_.xp = static_cast<float>(xp_frac_) / 255.0f;
+        const client::DrawView view{ .scripts = &engine_->mods().scripts(),
+                                     .comps = script_state_for(my_net_id_),
+                                     .reg = &registry_,
+                                     .entity = player_,
+                                     .table = engine_->mods().state().bindings.get() };
+        client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
+    }
+
+private:
 
     void draw_background(SDL_Renderer* r, float cam_x, float cam_y, float ww, float wh, float ox, float oy)
     {

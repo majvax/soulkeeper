@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -125,6 +126,16 @@ public:
     // user-facing scenes draw with. ImGui remains for dev surfaces only.
     [[nodiscard]] Gui& gui() noexcept { return gui_; }
 
+    // The stats-HUD render thunk: GameScene publishes it each frame; a scene
+    // stacked above (the level-up menu) calls render_hud() AFTER its own dim
+    // overlay so the player keeps their stats — bright — while choosing an
+    // upgrade. Cleared when GameScene dies (it captures GameScene's `this`).
+    void set_hud_render(std::function<void()> fn) { hud_render_ = std::move(fn); }
+    void render_hud() const
+    {
+        if (hud_render_) { hud_render_(); }
+    }
+
     void quit() noexcept { running_ = false; }
     [[nodiscard]] bool running() const noexcept { return running_; }
 
@@ -163,6 +174,7 @@ private:
     Session session_;
     SceneManager scenes_;
     ImGuiLayer ui_layer_;
+    std::function<void()> hud_render_; // GameScene's stats-panel draw (see set_hud_render)
     bool running_ = false;
 };
 

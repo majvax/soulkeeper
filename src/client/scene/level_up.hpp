@@ -109,6 +109,10 @@ public:
             ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + rect.h - (12.0f * us),
                              rarity_name(rarity), rcol, small);
         }
+
+        // Keep the stats panel visible + bright OVER our dim overlay — the
+        // upgrade choice depends on it. GameScene (below us) published it.
+        engine_->render_hud();
         return Stop;
     }
 
