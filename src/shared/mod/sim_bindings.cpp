@@ -441,6 +441,31 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                   "end_game", [reg](ScriptWorld&, bool won) {
                                       const core::Entity note = reg->create();
                                       reg->assign(note, RunEnd{ .won = static_cast<std::uint8_t>(won ? 1 : 0) });
+                                  },
+                                  // Content offerable to `player` right now (availability +
+                                  // object-ownership already filtered): the FACTS a Lua
+                                  // level-offer roll works from. Each entry:
+                                  // { id = "core:...", kind = "upgrade"|"object",
+                                  //   tiers = {bool x5} (1=Common .. 5=Legendary) }.
+                                  "offerable", [host_state = &host.state()](ScriptWorld& w, EntityHandle player,
+                                                                            sol::this_state ts) {
+                                      sol::state_view sv(ts);
+                                      sol::table out = sv.create_table();
+                                      int n = 0;
+                                      for (const ContentDef& d : host_state->registry.defs()) {
+                                          if (!run_available(d, player)) { continue; }
+                                          sol::table entry = sv.create_table();
+                                          entry["id"] = d.id;
+                                          entry["kind"] = d.kind == ContentKind::Object ? "object" : "upgrade";
+                                          sol::table tiers = sv.create_table();
+                                          for (std::uint8_t t = 0; t < rarity_count; ++t) {
+                                              tiers[t + 1] = offered_at(d, static_cast<Rarity>(t));
+                                          }
+                                          entry["tiers"] = tiers;
+                                          out[++n] = entry;
+                                      }
+                                      (void)w;
+                                      return out;
                                   });
     lua["world"] = ScriptWorld{ .reg = &world_reg, .table = table, .lua = lua };
 
@@ -558,6 +583,41 @@ bool run_available(const ContentDef& def, EntityHandle handle)
         return false;
     }
     return res.get<bool>();
+}
+
+std::vector<proto::LevelUpChoice> run_level_offer(LuaHost& host, core::Registry& reg,
+                                                  core::Entity player, int level)
+{
+    std::vector<proto::LevelUpChoice> out;
+    const sol::protected_function& hook = host.state().level_offer;
+    if (!hook.valid()) { return out; }
+
+    sol::protected_function_result res = hook(EntityHandle{ .reg = &reg, .entity = player }, level);
+    if (!res.valid()) {
+        const sol::error err = res;
+        std::fprintf(stderr, "[mod] level_offer error: %s\n", err.what());
+        return out;
+    }
+    const sol::object value = res;
+    if (!value.is<sol::table>()) {
+        std::fprintf(stderr, "[mod] level_offer must return a table of {id, rarity}\n");
+        return out;
+    }
+    for (const auto& [_, entry_obj] : value.as<sol::table>()) {
+        if (out.size() >= proto::max_level_up_choices) { break; }
+        if (!entry_obj.is<sol::table>()) { continue; }
+        const sol::table entry = entry_obj.as<sol::table>();
+        const std::string id = entry.get_or<std::string>("id", "");
+        const int rarity = entry.get_or("rarity", 0);
+        const ContentDef* def = host.registry().by_id(id);
+        if (def == nullptr || rarity < 0 || rarity >= static_cast<int>(rarity_count)) {
+            std::fprintf(stderr, "[mod] level_offer: skipping invalid entry '%s' rarity %d\n",
+                         id.c_str(), rarity);
+            continue;
+        }
+        out.push_back({ .id = def->wire_id, .rarity = static_cast<std::uint8_t>(rarity) });
+    }
+    return out;
 }
 
 void run_apply(const ContentDef& def, EntityHandle handle, Rarity rarity)

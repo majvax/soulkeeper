@@ -65,7 +65,7 @@ private:
     void check_level_up();
     void check_run_end(); // RunEnd mailbox -> freeze + GameOver broadcast
     void reset_run();     // host BackToLobby -> wipe the run, back to Lobby
-    void start_level_up_for(std::uint64_t token); // roll fresh cards, store, send
+    void start_level_up_for(std::uint64_t token); // roll fresh cards (Lua hook first), store, send
     void send_level_up(std::uint64_t token);      // (re)send the already-stored offer
 
     // Sim-event emission (mod hooks). on_enemy_death is detected by diffing the
@@ -82,7 +82,9 @@ private:
         std::uint32_t xp;
     };
     std::vector<EnemyDeathSnap> pre_step_enemies_;
-    [[nodiscard]] std::array<proto::LevelUpChoice, proto::level_up_choices> roll_upgrades(core::Entity player);
+    // Engine fallback roll (fixed 3 cards) — used when no mod:level_offer hook
+    // is registered or the hook returned nothing usable.
+    [[nodiscard]] std::vector<proto::LevelUpChoice> roll_upgrades(core::Entity player);
 
     net::Server server_;
     // lua_host_ MUST be declared before world_: the World's Lua-defined systems
@@ -127,9 +129,9 @@ private:
     // Keyed by session TOKEN (stable across reconnects), NOT peer_id (which
     // changes on every reconnect) — otherwise a reconnecting player is orphaned
     // in pending_ and the level-up never completes (world freezes).
-    std::unordered_set<std::uint64_t> pending_;                                             // tokens still choosing
-    std::unordered_map<std::uint64_t, std::array<proto::LevelUpChoice, proto::level_up_choices>> offered_; // token -> cards
-    std::unordered_set<std::uint64_t> chosen_;                                              // tokens that already picked this level
+    std::unordered_set<std::uint64_t> pending_;                                  // tokens still choosing
+    std::unordered_map<std::uint64_t, std::vector<proto::LevelUpChoice>> offered_; // token -> cards (2..5)
+    std::unordered_set<std::uint64_t> chosen_;                                   // tokens that already picked this level
     std::mt19937 rng_{ std::random_device{}() };
 };
 

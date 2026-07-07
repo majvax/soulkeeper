@@ -267,6 +267,15 @@ struct ModHandle
     // World draw hook: fn(ctx, view) per player entity per frame (render VM).
     void draw(sol::protected_function fn) { state->draw_hooks.push_back(std::move(fn)); }
 
+    // The level-up offer roll: fn(player, level) -> { {id, rarity}, ... }.
+    void level_offer(sol::protected_function fn)
+    {
+        if (state->level_offer.valid()) {
+            std::fprintf(stderr, "[mod] '%s': level_offer replaces a previous hook\n", ns.c_str());
+        }
+        state->level_offer = std::move(fn);
+    }
+
     // Register a console command: `/name args...` typed in the client console
     // runs fn on the SERVER (host-only) with the invoking player's handle +
     // the whitespace-split args (numeric tokens arrive as numbers). `usage`
@@ -349,6 +358,7 @@ void LuaHost::install_registration_api()
       "player_sprite", &ModHandle::player_sprite,
       "hud", &ModHandle::hud,
       "draw", &ModHandle::draw,
+      "level_offer", &ModHandle::level_offer,
       "command", &ModHandle::command,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);

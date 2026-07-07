@@ -51,7 +51,11 @@ enum class MsgType : std::uint8_t {
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };
 enum class GameState : std::uint8_t { Lobby = 0, Playing = 1 };
 
-inline constexpr std::uint8_t level_up_choices = 3;
+// Card counts: the LevelUp message is `u8 count` + count entries. The GAME
+// (mod:level_offer) decides the count per player; these are the engine's
+// fallback and hard cap (the client lays out at most max_level_up_choices).
+inline constexpr std::uint8_t level_up_choices = 3;     // C++ fallback roll
+inline constexpr std::uint8_t max_level_up_choices = 5; // wire + layout cap
 
 // Console commands sent to the server (payload of a MsgType::Command packet).
 // BackToLobby: host-only, accepted only on the game-over screen — full run reset.

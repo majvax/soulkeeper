@@ -108,9 +108,9 @@ public:
     [[nodiscard]] bool join_denied() const noexcept { return denied_; }
     [[nodiscard]] std::uint64_t mods_hash() const noexcept { return mods_hash_; }
     [[nodiscard]] std::uint64_t server_mods_hash() const noexcept { return server_mods_hash_; }
-    [[nodiscard]] const std::array<proto::LevelUpChoice, proto::level_up_choices>& choices() const noexcept
+    [[nodiscard]] const std::vector<proto::LevelUpChoice>& choices() const noexcept
     {
-        return choices_;
+        return choices_; // 1..max_level_up_choices cards; the GAME picks the count
     }
 
     [[nodiscard]] std::string name_of(std::uint32_t net_id) const
@@ -228,10 +228,13 @@ private:
         } else if (type == proto::MsgType::Roster) {
             read_roster(reader);
         } else if (type == proto::MsgType::LevelUp) {
-            for (auto& choice : choices_) {
-                if (const auto c = reader.get<proto::LevelUpChoice>()) { choice = *c; }
+            choices_.clear();
+            const auto count = reader.get<std::uint8_t>();
+            const std::uint8_t n = count ? std::min<std::uint8_t>(*count, proto::max_level_up_choices) : 0;
+            for (std::uint8_t i = 0; i < n; ++i) {
+                if (const auto c = reader.get<proto::LevelUpChoice>()) { choices_.push_back(*c); }
             }
-            leveling_ = true;
+            leveling_ = !choices_.empty();
         } else if (type == proto::MsgType::Snapshot || type == proto::MsgType::SnapshotDelta) {
             // Keep the whole packet (tag included) for GameScene to decode.
             latest_snapshot_ = std::vector<std::byte>(payload.begin(), payload.end());
@@ -282,7 +285,7 @@ private:
     bool leveling_ = false;
     bool game_over_ = false;         // run ended; cleared when Lobby state arrives
     proto::GameOverMsg go_stats_{}; // valid while game_over_
-    std::array<proto::LevelUpChoice, proto::level_up_choices> choices_{};
+    std::vector<proto::LevelUpChoice> choices_;
 };
 
 } // namespace client

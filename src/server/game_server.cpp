@@ -779,7 +779,15 @@ void GameServer::check_level_up()
 
 void GameServer::start_level_up_for(std::uint64_t token)
 {
-    offered_[token] = roll_upgrades(sessions_[token].entity);
+    // The GAME rolls the offer (mod:level_offer — count and picks are mod
+    // policy, e.g. Crystal Ball's +1 card); the engine's fixed 3-card roll is
+    // the fallback. Rolled ONCE per (player, level): reconnects re-SEND the
+    // stored offer (send_level_up), they never re-roll.
+    const core::Entity player = sessions_[token].entity;
+    std::vector<proto::LevelUpChoice> offer =
+      mod::run_level_offer(lua_host_, world_.registry(), player, static_cast<int>(level_));
+    if (offer.empty()) { offer = roll_upgrades(player); }
+    offered_[token] = std::move(offer);
     send_level_up(token);
 }
 
@@ -791,11 +799,12 @@ void GameServer::send_level_up(std::uint64_t token)
     if (it == offered_.end()) { return; }
     proto::ByteWriter writer;
     writer.put(proto::MsgType::LevelUp);
+    writer.put(static_cast<std::uint8_t>(it->second.size()));
     for (const proto::LevelUpChoice& choice : it->second) { writer.put(choice); }
     server_.send(sessions_[token].peer_id, writer.bytes(), true);
 }
 
-std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgrades(core::Entity player)
+std::vector<proto::LevelUpChoice> GameServer::roll_upgrades(core::Entity player)
 {
     const mod::ContentRegistry& registry = lua_host_.registry();
     const mod::EntityHandle handle{ .reg = &world_.registry(), .entity = player };
@@ -816,7 +825,7 @@ std::array<proto::LevelUpChoice, proto::level_up_choices> GameServer::roll_upgra
     // tier (stat upgrades with a nonzero amount, objects with that declared
     // rarity). No candidates -> fall back a tier (L->E->R->U->C). This is what
     // keeps legendaries actually rare — objects no longer force gold cards.
-    std::array<proto::LevelUpChoice, proto::level_up_choices> out{};
+    std::vector<proto::LevelUpChoice> out(proto::level_up_choices);
     for (std::size_t k = 0; k < proto::level_up_choices; ++k) {
         proto::LevelUpChoice choice{}; // pool exhausted -> pad with content 0 at Common
         std::discrete_distribution<std::size_t> tier_dist{ rarity_weights.begin(), rarity_weights.end() };
@@ -845,12 +854,11 @@ void GameServer::on_select(std::uint32_t peer_id, proto::ByteReader& reader)
 {
     const auto select = reader.get<proto::SelectUpgrade>();
     const auto peer_it = peer_token_.find(peer_id);
-    if (!select || !leveling_ || peer_it == peer_token_.end() || select->index >= proto::level_up_choices) {
-        return;
-    }
+    if (!select || !leveling_ || peer_it == peer_token_.end()) { return; }
     const std::uint64_t token = peer_it->second;
     const auto offer_it = offered_.find(token);
     if (offer_it == offered_.end()) { return; } // already chose, or wasn't offered
+    if (select->index >= offer_it->second.size()) { return; } // offers vary in count now
 
     const proto::LevelUpChoice& chosen = offer_it->second[select->index];
     if (const mod::ContentDef* d = lua_host_.registry().by_wire(chosen.id)) {

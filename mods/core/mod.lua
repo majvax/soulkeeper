@@ -13,6 +13,7 @@ function main()
     include("upgrades.lua")(mod, C)
     include("objects.lua")(mod, C)
     include("enemies.lua")(mod, C)
+    include("levelup.lua")(mod, C) -- the level-up offer roll (mod:level_offer)
 
     -- The player's look: an animation pack (a folder of <Clip>_<N>x1.png
     -- strips). The engine handles frames, Idle/Move switching and facing.

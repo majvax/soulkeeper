@@ -122,21 +122,24 @@ guide), `mods/core/` (Soulkeeper's entire gameplay), `types/kernel.lua` (engine 
 - Every Lua callback is a protected call — a broken mod logs and is skipped, never crashes.
 
 ## Gameplay implemented
-Lobby + host-start + reconnect · waves (15s) with Lua-defined archetypes
+Lobby + host-start + reconnect · waves (25s) with Lua-defined archetypes
 **Bandit/Scout/Mushroom/Brute/Slinger/Slasher/Vampire** (per-wave spawn weights, each with its own
 **animated sprite pack** — `mods/core/enemies.lua`; Slinger + Vampire stand off and fire
-**hostile projectiles** via Lua `core:ranged` systems; the player is the animated Knight via
-`mod:player_sprite`) · manual-aim projectiles · **XP orbs → shared team level pool → synchronized level-up
-card scene** with **5 rarity tiers** (grey/green/blue/purple/gold; rarity-first roll, per-tier
-amounts, objects declare their tier) — all content in `mods/core/` Lua (13 stat upgrades incl.
-crit/dash lines + **Onion**/**Frost Belt**/**Shockwave Dash** objects) · **heart life** (3 hearts,
-1 s i-frames, rare heart drops heal; Vitality raises the cap only) · enemies **scale per wave**
-(Lua stats fn) · **dash on LSHIFT** (predicted client-side; Shockwave object makes it damage) ·
-**crit** (chance/multiplier; crit bullets render orange) · co-op **downed → respawn a few waves
-later** · **game-over/win** (Lua rule via `world:end_game`: all downed = defeat, wave 20 = win;
-frozen-world overlay with final stats, host returns everyone to the lobby for a fresh run) ·
-TAB console: `/pause` `/resume` + **mod commands** (`mod:command`, host-only server-side callbacks
-— core ships `/givexp <n>` and `/heal`) with TAB-completion, live suggestions and input history.
+**hostile projectiles** via Lua `core:ranged` systems, playing their packs' **attack clips** via
+Lua-driven `Render.fx`; the player is the animated Knight via `mod:player_sprite`) · manual-aim
+projectiles · **mini-boss @5 / BOSS @10 waves** (Frog King: nova bullet rings, arena lock via the
+`WaveHold` kernel tag ON the boss — wave clock frozen + trash cleared until it dies; killing a
+boss at wave ≥ 20 = **win**) · **XP orbs → shared team level pool → synchronized level-up card
+scene**: the offer is rolled IN LUA (`mod:level_offer` + `world:offerable`; core's `levelup.lua`
+does the rarity-first roll, **Crystal Ball** object = +1 card) with **5 rarity tiers**
+(grey/green/blue/purple/gold) — all content in `mods/core/` Lua (13 stat upgrades +
+**Onion**/**Frost Belt**/**Shockwave Dash**/**Auto Target**/**Crystal Ball** objects) ·
+**heart life** (3 hearts, 1 s i-frames, rare heart drops heal) · enemies **scale per wave** ·
+**dash on LSHIFT** (predicted; Shockwave makes it damage) · **crit** · co-op **downed → proximity
+revive** (3 s arc drawn via `mod:draw`+`ctx:arc`, boss kills revive everyone; red edge arrows
+point at downed teammates) · **game-over** (all downed = defeat; frozen-world overlay, host
+returns everyone to the lobby) · TAB console: `/pause` `/resume` + **mod commands**
+(`mod:command` — `/givexp` `/heal` `/wave` `/stress`) with TAB-completion + history.
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.

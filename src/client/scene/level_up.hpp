@@ -20,10 +20,14 @@ public:
 
     auto handle_event(const SDL_Event& event) -> Propagation override
     {
+        const std::size_t count = engine_->session().choices().size();
         if (event.type == SDL_EVENT_KEY_DOWN) {
-            if (event.key.key == SDLK_1) { pick(0); }
-            if (event.key.key == SDLK_2) { pick(1); }
-            if (event.key.key == SDLK_3) { pick(2); }
+            // Keys 1..N pick the Nth card (the GAME decides how many, <= 5).
+            for (std::size_t i = 0; i < count && i < proto::max_level_up_choices; ++i) {
+                if (event.key.key == SDLK_1 + static_cast<SDL_Keycode>(i)) {
+                    pick(static_cast<std::uint8_t>(i));
+                }
+            }
         }
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
             const int card = card_at(event.button.x, event.button.y);
@@ -52,7 +56,7 @@ public:
         const mod::ContentRegistry& registry = engine_->mods().registry();
         const auto& choices = engine_->session().choices();
         for (std::size_t i = 0; i < choices.size(); ++i) {
-            const SDL_FRect rect = card_rect(i, w, h);
+            const SDL_FRect rect = card_rect(i, choices.size(), w, h);
             const auto rarity = static_cast<mod::Rarity>(choices[i].rarity);
             const mod::ContentDef* def = registry.by_wire(choices[i].id);
             const SDL_Color col = rarity_color(rarity);
@@ -120,9 +124,10 @@ private:
         engine_->scenes().pop(); // close ourselves
     }
 
-    static SDL_FRect card_rect(std::size_t index, float w, float h)
+    static SDL_FRect card_rect(std::size_t index, std::size_t count, float w, float h)
     {
-        const float total = (3.0f * card_w) + (2.0f * card_gap);
+        const auto n = static_cast<float>(std::max<std::size_t>(count, 1));
+        const float total = (n * card_w) + ((n - 1.0f) * card_gap);
         const float x = ((w - total) * 0.5f) + (static_cast<float>(index) * (card_w + card_gap));
         return { .x = x, .y = (h - card_h) * 0.5f, .w = card_w, .h = card_h };
     }
@@ -131,8 +136,9 @@ private:
     {
         const float w = static_cast<float>(engine_->width());
         const float h = static_cast<float>(engine_->height());
-        for (std::size_t i = 0; i < 3; ++i) {
-            const SDL_FRect rc = card_rect(i, w, h);
+        const std::size_t count = engine_->session().choices().size();
+        for (std::size_t i = 0; i < count; ++i) {
+            const SDL_FRect rc = card_rect(i, count, w, h);
             if (mx >= rc.x && mx <= rc.x + rc.w && my >= rc.y && my <= rc.y + rc.h) {
                 return static_cast<int>(i);
             }

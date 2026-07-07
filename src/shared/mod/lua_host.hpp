@@ -63,6 +63,12 @@ struct ModState
     // (revive arcs, auras) without owning an Object.
     std::vector<sol::protected_function> draw_hooks;
 
+    // Level-up offer hook (mod:level_offer). Sim-VM only: fn(player, level)
+    // returns the card list `{ { id = "core:...", rarity = 0..4 }, ... }` —
+    // THE GAME rolls the offer; the engine only validates, stores (reconnects
+    // re-send, never re-roll) and ships it. One hook; last registration wins.
+    sol::protected_function level_offer;
+
     // Console commands (mod:command). Registered in BOTH VMs from the same
     // mod.lua: the SIM VM runs fn (server side, host-typed `/name args...`);
     // the render VM only reads name+usage for console autocompletion/help.

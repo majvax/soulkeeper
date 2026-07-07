@@ -138,6 +138,9 @@ end)
   it's one engine call instead of an iterator per entity.
 - `world:wave()`, `world:add_xp(n)`, `world:set_wave(n)` (debug: jump the wave counter — core's
   `/wave` command).
+- `world:offerable(player)` — content this player can get right now (availability + object
+  ownership filtered): `{ {id, kind, tiers = {bool×5}}, ... }`. The facts a `mod:level_offer`
+  roll works from.
 - `world:end_game(won)` — end the run. THE GAME owns the rule (core's death system: every player
   downed at once = `end_game(false)`; surviving to `WIN_WAVE` = `end_game(true)`); the engine
   freezes the sim, broadcasts the game-over screen (won/lost + final wave/level), and the host
@@ -284,6 +287,22 @@ mod:command("givexp", "/givexp <amount>  -- add team XP", function(player, amoun
     world:add_xp(math.floor(tonumber(amount) or 0))
 end)
 ```
+
+### World draw hooks (`mod:draw`)
+
+`mod:draw(function(ctx, view) … end)` runs once per PLAYER entity per frame on the client — like
+an Object's `draw`, but without owning an Object. `view` carries that player's screen x/y and
+networked script components. core uses it for the revive arc:
+`ctx:arc(x, y, radius, fraction, r, g, b, a, thickness)` draws a partial progress ring.
+
+### The level-up offer (`mod:level_offer`)
+
+The card roll is GAME policy: `mod:level_offer(function(player, level) … end)` returns up to 5
+entries of `{ id = "core:damage", rarity = 0..4 }`. Called ONCE per (player, level) — reconnects
+re-send the stored offer, never re-roll. Return nil/{} to fall back to the engine's fixed 3-card
+roll. Work from `world:offerable(player)`; core's `levelup.lua` implements the rarity-first roll
+(weights are mod-owned balance now) and reads `C.Insight` for bonus cards — the Crystal Ball
+object grants +1 choice per level-up, entirely in Lua.
 
 ### HUD hooks (`mod:hud`)
 

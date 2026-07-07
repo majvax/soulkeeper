@@ -45,4 +45,19 @@ return function(mod, C)
             rarity = "legendary",
             value_text = function() return "auto-targets enemies" end,
         })
+
+    -- +1 card on every future level-up (levelup.lua reads C.Insight).
+    mod:object("crystal_ball", "Crystal Ball",
+        function(e)
+            if e:has(C.Insight) then
+                local i = e:get(C.Insight)
+                i.extra = math.floor(i.extra + 1)
+            else
+                e:set(C.Insight, { extra = 1 })
+            end
+        end,
+        {
+            rarity = "epic",
+            value_text = function() return "+1 level-up choice" end,
+        })
 end

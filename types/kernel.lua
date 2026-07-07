@@ -195,6 +195,13 @@ function world:add_xp(value) end
 ---@param wave integer
 function world:set_wave(wave) end
 
+---Content offerable to `player` right now (availability predicates and
+---object ownership already filtered) — the FACTS a mod:level_offer roll works
+---from. Sim VM only.
+---@param player Entity
+---@return { id: string, kind: "upgrade"|"object", tiers: boolean[] }[] # tiers[1..5] = Common..Legendary
+function world:offerable(player) end
+
 ---End the run (the GAME decides when — e.g. everyone downed, or a win rule).
 ---The engine freezes the sim, broadcasts the game-over screen with final
 ---stats, and waits for the host to return everyone to the lobby.
@@ -447,6 +454,15 @@ function Mod:hud(fn) end
 ---without owning an Object. Render-VM only (not part of the plugin hash).
 ---@param fn fun(ctx: DrawContext, view: DrawView)
 function Mod:draw(fn) end
+
+---Own the level-up offer: fn(player, level) returns the card list — up to 5
+---entries of `{ id = "core:damage", rarity = 0..4 }` (0 = Common). Called
+---ONCE per (player, level) on the server; reconnects re-send the stored offer
+---without re-rolling. Return nil/{} (or error) to fall back to the engine's
+---fixed 3-card roll. Work from `world:offerable(player)`. One hook game-wide;
+---the last registration wins. Sim VM only.
+---@param fn fun(player: Entity, level: integer): { id: string, rarity: integer }[]|nil
+function Mod:level_offer(fn) end
 
 ---Register a console command: `/name args...` typed in the client's TAB
 ---console runs fn on the SERVER (host-only, sim VM) with the invoking player

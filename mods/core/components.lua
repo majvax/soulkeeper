@@ -57,6 +57,10 @@ return function(mod)
     -- draw the progress arc over the body (core's mod:draw hook).
     C.Revive = mod:component("revive", { progress = 0 }, { networked = true })
 
+    -- Extra level-up cards for this player (levelup.lua reads it; the
+    -- Crystal Ball object grants +1).
+    C.Insight = mod:component("insight", { extra = 0 })
+
     -- Boss special: every `cooldown` s, a radial ring of `bullets` hostile
     -- projectiles. Presence also marks the entity for guaranteed death drops.
     C.Nova = mod:component("nova", {
