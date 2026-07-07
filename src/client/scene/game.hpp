@@ -409,8 +409,13 @@ private:
                 remotes_[rec.id] = e;
                 // A projectile's first sighting is its muzzle flash — the only
                 // "shot fired" signal the client gets (player and enemy alike).
+                // The bullet's variant byte picks a per-archetype sound when one
+                // is bound ("shoot_<variant>": core ships shoot_1 for hostile
+                // arrows; mods bind theirs via mod:sound), else the base "shoot".
                 if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
-                    audio.play_at("shoot", ex, ey, lis_x, lis_y);
+                    const std::string variant_shot = "shoot_" + std::to_string(rec.variant);
+                    audio.play_at(audio.has(variant_shot) ? variant_shot : "shoot",
+                                  ex, ey, lis_x, lis_y);
                 }
                 // Boss arena entrance: an arena archetype's FIRST sighting is
                 // its spawn = the arena's fixed center (the wall + name banner

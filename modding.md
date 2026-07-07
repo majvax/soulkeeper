@@ -295,6 +295,18 @@ revive defeat win` (one-shots) and `music_lobby music_game music_boss` (looping 
 engine cross-fades lobby ↔ game ↔ boss-arena automatically). Missing files are silent, never
 fatal. Local volume: console `/volume`, `/sfx`, `/music <0..1>`.
 
+**Per-projectile shots.** When a projectile appears, the engine first tries
+`shoot_<variant>` — the bullet's `Render.variant` byte, the same one that picks its color —
+and falls back to `shoot`. So an arrow-firing archetype gets its own sound with just:
+
+```lua
+b:get(Render).variant = 3                       -- in your shooting system
+mod:sound("shoot_3", "mods/mymod/sfx/bow.wav")  -- at load
+```
+
+Core ships `shoot` (player firearm; crits are variant 2 and fall back to it) and `shoot_1`
+(hostile bullets — the ranged enemies' arrow whoosh).
+
 ### Console commands (`mod:command`)
 
 `mod:command(name, usage, fn)` registers a `/name` command for the client's TAB console. The

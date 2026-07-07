@@ -73,7 +73,7 @@ bool Audio::load_ogg(const std::string& path, Clip& out)
     return true;
 }
 
-Audio::Clip* Audio::clip(const std::string& name)
+Audio::Clip* Audio::clip(const std::string& name, bool quiet)
 {
     if (const auto it = clips_.find(name); it != clips_.end()) { return &it->second; }
 
@@ -85,7 +85,9 @@ Audio::Clip* Audio::clip(const std::string& name)
     } else {
         loaded = load_wav("assets/sound/" + name + ".wav", c)
                  || load_ogg("assets/sound/" + name + ".ogg", c);
-        if (!loaded) { std::fprintf(stderr, "[audio] no assets/sound/%s.{wav,ogg} — silent\n", name.c_str()); }
+        if (!loaded && !quiet) {
+            std::fprintf(stderr, "[audio] no assets/sound/%s.{wav,ogg} — silent\n", name.c_str());
+        }
     }
     return &clips_.emplace(name, std::move(c)).first->second;
 }

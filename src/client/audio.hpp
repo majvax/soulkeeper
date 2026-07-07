@@ -61,6 +61,14 @@ public:
     // mod:sound verb. Must land before the name's first play (clips cache).
     void set_override(const std::string& name, std::string path) { overrides_[name] = std::move(path); }
 
+    // True if `name` resolves to a playable sound (override or assets file).
+    // Quiet — for OPTIONAL names (per-variant "shoot_<N>") where absence is the
+    // normal case and means "use the fallback", not a broken asset.
+    [[nodiscard]] bool has(const std::string& name)
+    {
+        return device_ != 0 && !clip(name, /*quiet=*/true)->pcm.empty();
+    }
+
     [[nodiscard]] bool ok() const noexcept { return device_ != 0; }
 
 private:
@@ -72,7 +80,7 @@ private:
         SDL_AudioSpec spec{};
     };
 
-    Clip* clip(const std::string& name); // lazy load + cache
+    Clip* clip(const std::string& name, bool quiet = false); // lazy load + cache
     [[nodiscard]] bool load_wav(const std::string& path, Clip& out);
     [[nodiscard]] bool load_ogg(const std::string& path, Clip& out);
     void start_track(const std::string& name);

@@ -470,6 +470,10 @@ function Mod:player_sprite(path) end
 ---overrides the built-in sound — the engine's canonical names are: shoot, hit,
 ---hurt, death, dash, pickup, heart, levelup, select, click, wave, boss,
 ---downed, revive, defeat, win, music_lobby, music_game, music_boss.
+---Projectiles: the engine plays `shoot_<variant>` (the bullet's Render.variant
+---byte) when bound, else `shoot` — give an archetype its own fire sound by
+---setting a variant in your shooting system and binding "shoot_<N>" here
+---(core ships shoot_1 for hostile arrows).
 ---Render-VM metadata only (not part of the plugin hash); last call wins.
 ---@param name string # e.g. "my_zap" or "shoot"
 ---@param path string # e.g. "mods/mymod/sfx/zap.wav"
