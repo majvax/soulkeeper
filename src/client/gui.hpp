@@ -59,11 +59,15 @@ public:
     bool button(std::string_view label, float x, float y, float w, float h, bool enabled = true);
 
     // Bitmap text. `px` is the on-screen glyph size — multiples of scale()
-    // stay pixel-crisp (the font's native size is 8).
+    // stay pixel-crisp (the font's native size is 8). Default (px <= 0) is
+    // body size: 6 * scale().
     void text(float x, float y, std::string_view s, GuiColor c = colors::text, float px = 0.0f);
     void text_centered(float cx, float y, std::string_view s, GuiColor c = colors::text,
                        float px = 0.0f);
     [[nodiscard]] float text_width(std::string_view s, float px = 0.0f) const;
+    // Largest glyph size <= `px` (stepping by scale()) at which `s` fits in
+    // max_w — how widgets keep labels inside their box. Floors at 8px.
+    [[nodiscard]] float fit_px(std::string_view s, float max_w, float px) const;
 
     // Single-line text field; true when ENTER is pressed while focused.
     // `numeric` filters input to digits. Click inside to focus.
@@ -76,10 +80,17 @@ public:
 
     // UI pixel scale for layout math (3 at 1080p; >= 2 always).
     [[nodiscard]] float scale() const noexcept { return scale_; }
-    // Default line height / widget sizes at the current scale.
-    [[nodiscard]] float line_h() const noexcept { return 8.0f * scale_ * 1.5f; }
-    [[nodiscard]] float button_h() const noexcept { return 26.0f * scale_ * 0.75f; }
-    [[nodiscard]] float input_h() const noexcept { return 16.0f * scale_; }
+    // Body text size — the default for text()/inputs/HUD. Deliberately small
+    // (widgets auto-fit to it): a scale-multiple stays chunky-but-crisp.
+    [[nodiscard]] float body_px() const noexcept { return 5.0f * scale_; }
+    // Default line height / widget sizes, all derived from the body size so a
+    // scale change moves everything together.
+    [[nodiscard]] float line_h() const noexcept { return body_px() * 1.6f; }
+    [[nodiscard]] float button_h() const noexcept { return body_px() + (10.0f * scale_); }
+    [[nodiscard]] float input_h() const noexcept { return body_px() + (8.0f * scale_); }
+    // The content inset of a panel() — how far in from its edge a mod HUD (or
+    // any caller) must place items to clear the 9-slice frame + rivets.
+    [[nodiscard]] float panel_pad() const noexcept { return 8.0f * scale_; }
 
 private:
     struct Glyph // baked quad in the font atlas (stbtt_bakedchar mirror)
@@ -92,6 +103,10 @@ private:
     void bake_font();
     void draw_9slice(const std::string& sprite, float x, float y, float w, float h, float border,
                      float src_w, float src_h, std::uint8_t brightness);
+    // Destination 9-slice border for a widget of (w,h): border*scale, but capped
+    // so two corners never overlap on a small widget (which squished the art +
+    // pushed content onto the frame). This is THE robustness knob.
+    [[nodiscard]] float slice_inset(float border, float w, float h) const;
     [[nodiscard]] std::uint32_t hash_id(std::string_view id) const;
     [[nodiscard]] bool mouse_in(float x, float y, float w, float h) const;
 

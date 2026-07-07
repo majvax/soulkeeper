@@ -13,9 +13,11 @@
 namespace client {
 
 namespace {
-// Native pixel metrics of the pack sprites (see assets/ui/).
-constexpr float BTN_W = 90.0f, BTN_H = 26.0f, BTN_BORDER = 8.0f;
-constexpr float PANEL_W = 176.0f, PANEL_H = 62.0f, PANEL_BORDER = 12.0f;
+// Native pixel metrics of the pack sprites (see assets/ui/). BORDER = the
+// 9-slice edge = corner-round radius + bevel (MEASURED from the art, not
+// guessed — an over-large border squished small widgets and overran text).
+constexpr float BTN_W = 90.0f, BTN_H = 26.0f, BTN_BORDER = 6.0f;
+constexpr float PANEL_W = 176.0f, PANEL_H = 62.0f, PANEL_BORDER = 10.0f;
 constexpr float PILL_W = 48.0f, PILL_H = 16.0f, PILL_BORDER = 7.0f;
 constexpr float HEART_W = 18.0f, HEART_H = 15.0f;
 constexpr float FONT_PX = 8.0f;  // Press Start 2P native size
@@ -140,9 +142,18 @@ bool Gui::mouse_in(float x, float y, float w, float h) const
     return mouse_x_ >= x && mouse_x_ < x + w && mouse_y_ >= y && mouse_y_ < y + h;
 }
 
+float Gui::slice_inset(float border, float w, float h) const
+{
+    // Cap the destination border so opposite corners can't overlap (which
+    // squished small widgets and left content sitting on the frame). Leave a
+    // 1px seam so the stretched middle row is always drawn.
+    return std::max(1.0f, std::min(border * scale_, (0.5f * std::min(w, h)) - 1.0f));
+}
+
 // Draw a pack sprite 9-sliced into (x,y,w,h). border/src_* are the sprite's
-// NATIVE pixel metrics; corners render at border*scale_ so outlines/rivets
-// keep the global pixel size. Missing texture -> flat dark rect fallback.
+// NATIVE pixel metrics; corners render at slice_inset() (border*scale, capped)
+// so outlines/rivets keep the pixel size without overlapping on small widgets.
+// Missing texture -> flat dark rect fallback.
 void Gui::draw_9slice(const std::string& sprite, float x, float y, float w, float h, float border,
                       float src_w, float src_h, std::uint8_t brightness)
 {
@@ -155,8 +166,8 @@ void Gui::draw_9slice(const std::string& sprite, float x, float y, float w, floa
         return;
     }
     SDL_SetTextureColorMod(tex, brightness, brightness, brightness);
-    const float b = border;               // source border
-    const float d = border * scale_;      // destination border
+    const float b = border;                     // source border
+    const float d = slice_inset(border, w, h);  // destination border (capped)
     const float sx[4] = { 0, b, src_w - b, src_w };
     const float sy[4] = { 0, b, src_h - b, src_h };
     const float dx[4] = { x, x + d, x + w - d, x + w };
@@ -181,7 +192,7 @@ void Gui::panel(float x, float y, float w, float h)
 float Gui::text_width(std::string_view s, float px) const
 {
     if (font_failed_) { return 0.0f; }
-    const float k = (px <= 0.0f ? FONT_PX * scale_ : px) / FONT_PX;
+    const float k = (px <= 0.0f ? body_px() : px) / FONT_PX;
     float w = 0.0f;
     for (const char c : s) {
         const int idx = c - 32;
@@ -190,10 +201,20 @@ float Gui::text_width(std::string_view s, float px) const
     return w;
 }
 
+float Gui::fit_px(std::string_view s, float max_w, float px) const
+{
+    if (font_failed_ || s.empty() || max_w <= 0.0f) { return px; }
+    float size = px;
+    // Step down by one UI pixel until it fits; never below native (crisp 1x).
+    // If it still overflows at native, the caller's clip/centering handles it.
+    while (size > FONT_PX && text_width(s, size) > max_w) { size -= scale_; }
+    return std::max(FONT_PX, size);
+}
+
 void Gui::text(float x, float y, std::string_view s, GuiColor c, float px)
 {
     if (font_failed_ || font_tex_ == nullptr) { return; }
-    const float size = px <= 0.0f ? FONT_PX * scale_ : px;
+    const float size = px <= 0.0f ? body_px() : px;
     const float k = size / FONT_PX;
     SDL_SetTextureColorMod(font_tex_, c.r, c.g, c.b);
     SDL_SetTextureAlphaMod(font_tex_, c.a);
@@ -227,10 +248,20 @@ bool Gui::button(std::string_view label, float x, float y, float w, float h, boo
     draw_9slice("assets/ui/button.png", x, y + off, w, h, BTN_BORDER, BTN_W, BTN_H,
                 enabled ? (hot ? 255 : 210) : 120);
 
-    const std::string shown = hot ? "> " + std::string(label) : std::string(label);
+    // Label auto-fits the interior, ALWAYS reserving a gutter for the hover
+    // marker on each side — so hovering never resizes or shifts the text (the
+    // old '> ' prefix did both, overflowing the box).
+    const float inset = slice_inset(BTN_BORDER, w, h);
+    const float gutter = body_px(); // one glyph's worth, at body size
+    const float avail = std::max(1.0f, w - (2.0f * inset) - (2.0f * gutter));
+    const float tp = fit_px(label, avail, body_px());
+    const float lw = text_width(label, tp);
+    const float lx = x + ((w - lw) * 0.5f);
+    const float ty = y + off + ((h - tp) * 0.5f);
     const GuiColor col = !enabled ? colors::dim : (hot ? colors::accent : colors::text);
-    text(x + ((w - text_width(shown)) * 0.5f), y + off + ((h - (FONT_PX * scale_)) * 0.5f), shown,
-         col);
+    // Hover marker sits in the reserved gutter with a small gap before the label.
+    if (hot) { text(lx - text_width(">", tp) - (0.4f * tp), ty, ">", colors::accent, tp); }
+    text(lx, ty, label, col, tp);
 
     // Click = the release landed inside AND the press started inside.
     return enabled && click_ && mouse_in(x, y, w, h) && press_inside;
@@ -274,13 +305,14 @@ bool Gui::input(std::string_view id, std::string& buf, float x, float y, float w
 
     draw_9slice("assets/ui/pill_dark.png", x, y, w, h, PILL_BORDER, PILL_W, PILL_H,
                 focused ? 255 : 200);
-    const float pad = 6.0f * scale_ * 0.75f;
+    // Text starts clear of the pill's rounded end (= its 9-slice inset).
+    const float pad = slice_inset(PILL_BORDER, w, h);
+    const float tp = body_px();
     std::string shown = buf;
     if (focused && std::fmod(caret_timer_, 1.0f) < 0.6f) { shown += '_'; }
     // Clip from the left so the caret end stays visible in narrow fields.
-    while (!shown.empty() && text_width(shown) > w - (pad * 2.0f)) { shown.erase(0, 1); }
-    text(x + pad, y + ((h - (FONT_PX * scale_)) * 0.5f), shown,
-         focused ? colors::text : colors::dim);
+    while (!shown.empty() && text_width(shown, tp) > w - (pad * 2.0f)) { shown.erase(0, 1); }
+    text(x + pad, y + ((h - tp) * 0.5f), shown, focused ? colors::text : colors::dim, tp);
 
     const bool submitted = focused && submit_;
     if (submitted) { submit_ = false; }

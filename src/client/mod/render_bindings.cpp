@@ -65,17 +65,18 @@ void DrawContext::text(float x, float y, const std::string& s, int r, int g, int
 
 float HudContext::text_px() const
 {
-    return gui != nullptr ? std::max(8.0f, 4.0f * gui->scale()) : 12.0f;
+    return gui != nullptr ? gui->body_px() : 12.0f;
 }
 
 // Layout: items flow top-to-bottom; same_line() chains the next item onto the
 // current row. Returns the item's content-relative position.
 std::pair<float, float> HudContext::place(float w, float h)
 {
+    const float s = gui != nullptr ? gui->scale() : 3.0f;
     float x = 0.0f;
     float y = cursor_y_;
     if (same_line_) {
-        x = row_end_x_ + (6.0f);
+        x = row_end_x_ + (4.0f * s); // gap between same-line items
         y = row_y_;
         same_line_ = false;
     } else {
@@ -84,7 +85,7 @@ std::pair<float, float> HudContext::place(float w, float h)
     }
     row_end_x_ = x + w;
     row_h_ = std::max(row_h_, h);
-    cursor_y_ = row_y_ + row_h_ + 4.0f;
+    cursor_y_ = row_y_ + row_h_ + (3.0f * s); // row gap
     max_w_ = std::max(max_w_, row_end_x_);
     return { x, y };
 }
@@ -116,8 +117,8 @@ void HudContext::end_panel()
     }
     open_ = false;
     const float s = gui->scale();
-    const float pad = 5.0f * s;
-    gui->panel(panel_x_, panel_y_, max_w_ + (pad * 2.0f), cursor_y_ - 4.0f + (pad * 2.0f));
+    const float pad = gui->panel_pad(); // clear the 9-slice frame + rivets
+    gui->panel(panel_x_, panel_y_, max_w_ + (pad * 2.0f), (cursor_y_ - (3.0f * s)) + (pad * 2.0f));
     const float ox = panel_x_ + pad;
     const float oy = panel_y_ + pad;
 
