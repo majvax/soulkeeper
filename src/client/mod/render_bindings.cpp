@@ -2,9 +2,11 @@
 #include "client/mod/render_bindings.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <numbers>
+#include <utility>
 
 #include <imgui.h>
 
@@ -61,50 +63,158 @@ void DrawContext::text(float x, float y, const std::string& s, int r, int g, int
     ImGui::GetBackgroundDrawList()->AddText(ImVec2(x, y), IM_COL32(r, g, b, a), s.c_str());
 }
 
-void HudContext::begin_panel(const std::string& title, sol::optional<float> x, sol::optional<float> y)
+float HudContext::text_px() const
 {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float px = x.value_or(vp->WorkPos.x + 12.0f);
-    const float py = y.value_or(vp->WorkPos.y + 12.0f);
-    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-                                       | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
-                                       | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
-                                       | ImGuiWindowFlags_NoSavedSettings;
-    ImGui::Begin(title.c_str(), nullptr, flags); // Begin/End must balance regardless of return
-    ++open_;
+    return gui != nullptr ? std::max(8.0f, 4.0f * gui->scale()) : 12.0f;
 }
 
+// Layout: items flow top-to-bottom; same_line() chains the next item onto the
+// current row. Returns the item's content-relative position.
+std::pair<float, float> HudContext::place(float w, float h)
+{
+    float x = 0.0f;
+    float y = cursor_y_;
+    if (same_line_) {
+        x = row_end_x_ + (6.0f);
+        y = row_y_;
+        same_line_ = false;
+    } else {
+        row_y_ = y;
+        row_h_ = 0.0f;
+    }
+    row_end_x_ = x + w;
+    row_h_ = std::max(row_h_, h);
+    cursor_y_ = row_y_ + row_h_ + 4.0f;
+    max_w_ = std::max(max_w_, row_end_x_);
+    return { x, y };
+}
+
+void HudContext::begin_panel(const std::string& /*title*/, sol::optional<float> x,
+                             sol::optional<float> y)
+{
+    const float s = gui != nullptr ? gui->scale() : 3.0f;
+    if (open_) { end_panel(); } // a hook forgot end_panel between two begins
+    open_ = true;
+    panel_x_ = x.value_or(4.0f * s);
+    panel_y_ = y.value_or(4.0f * s);
+    items_.clear();
+    cursor_y_ = 0.0f;
+    row_end_x_ = 0.0f;
+    row_y_ = 0.0f;
+    row_h_ = 0.0f;
+    max_w_ = 0.0f;
+    same_line_ = false;
+}
+
+// Draw everything: the auto-sized 9-slice panel first, then the buffered items
+// offset by the content origin.
 void HudContext::end_panel()
 {
-    if (open_ > 0) {
-        ImGui::End();
-        --open_;
+    if (!open_ || gui == nullptr || renderer == nullptr) {
+        open_ = false;
+        return;
+    }
+    open_ = false;
+    const float s = gui->scale();
+    const float pad = 5.0f * s;
+    gui->panel(panel_x_, panel_y_, max_w_ + (pad * 2.0f), cursor_y_ - 4.0f + (pad * 2.0f));
+    const float ox = panel_x_ + pad;
+    const float oy = panel_y_ + pad;
+
+    for (const Item& it : items_) {
+        const float x = ox + it.x;
+        const float y = oy + it.y;
+        switch (it.kind) {
+        case Item::Kind::Text: gui->text(x, y, it.str, it.col, text_px()); break;
+        case Item::Kind::Separator: {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 45);
+            const SDL_FRect line{ .x = ox, .y = y, .w = max_w_, .h = 1.0f };
+            SDL_RenderFillRect(renderer, &line);
+            break;
+        }
+        case Item::Kind::Image: {
+            SDL_Texture* tex = (textures != nullptr) ? textures->get(it.str) : nullptr;
+            if (tex != nullptr) {
+                SDL_SetTextureColorMod(tex, it.col.r, it.col.g, it.col.b);
+                SDL_SetTextureAlphaMod(tex, it.col.a);
+                const SDL_FRect dst{ .x = x, .y = y, .w = it.size, .h = it.size };
+                SDL_RenderTexture(renderer, tex, nullptr, &dst);
+                SDL_SetTextureColorMod(tex, 255, 255, 255); // shared cache — restore
+                SDL_SetTextureAlphaMod(tex, 255);
+            }
+            break;
+        }
+        case Item::Kind::Pie: {
+            // Triangle-fan wedge + faint full ring, clockwise from the top.
+            const float r = it.size;
+            const SDL_FPoint c{ .x = x + r, .y = y + r };
+            const SDL_FColor col{ .r = static_cast<float>(it.col.r) / 255.0f,
+                                  .g = static_cast<float>(it.col.g) / 255.0f,
+                                  .b = static_cast<float>(it.col.b) / 255.0f,
+                                  .a = static_cast<float>(it.col.a) / 255.0f };
+            constexpr int segs = 24;
+            constexpr float tau = 2.0f * std::numbers::pi_v<float>;
+            const float frac = std::clamp(it.frac, 0.0f, 1.0f);
+            std::vector<SDL_Vertex> verts;
+            const int used = static_cast<int>(frac * segs);
+            for (int i = 0; i < used; ++i) {
+                const float a0 = -(tau / 4.0f) + (static_cast<float>(i) / segs * tau);
+                const float a1 = -(tau / 4.0f) + (static_cast<float>(i + 1) / segs * tau);
+                verts.push_back({ .position = c, .color = col, .tex_coord = {} });
+                verts.push_back({ .position = { .x = c.x + (std::cos(a0) * r),
+                                                .y = c.y + (std::sin(a0) * r) },
+                                  .color = col, .tex_coord = {} });
+                verts.push_back({ .position = { .x = c.x + (std::cos(a1) * r),
+                                                .y = c.y + (std::sin(a1) * r) },
+                                  .color = col, .tex_coord = {} });
+            }
+            if (!verts.empty()) {
+                SDL_RenderGeometry(renderer, nullptr, verts.data(),
+                                   static_cast<int>(verts.size()), nullptr, 0);
+            }
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 40); // the faint ring
+            SDL_FPoint ring[segs + 1];
+            for (int i = 0; i <= segs; ++i) {
+                const float a = static_cast<float>(i) / segs * tau;
+                ring[i] = { .x = c.x + (std::cos(a) * r), .y = c.y + (std::sin(a) * r) };
+            }
+            SDL_RenderLines(renderer, ring, segs + 1);
+            break;
+        }
+        }
     }
 }
 
-// Close any window a hook opened but didn't (e.g. it errored mid-draw, which the
-// protected call swallowed) — an unbalanced ImGui Begin corrupts state + crashes.
+// Flush a panel a hook opened but didn't close (it errored mid-draw, which the
+// protected call swallowed) — the buffered items still land on screen.
 void HudContext::close_dangling()
 {
-    while (open_ > 0) {
-        ImGui::End();
-        --open_;
-    }
+    if (open_) { end_panel(); }
 }
 
-void HudContext::text(const std::string& s) { ImGui::TextUnformatted(s.c_str()); }
+void HudContext::text(const std::string& s) { text_colored(220, 220, 220, s); }
 
 void HudContext::text_colored(int r, int g, int b, const std::string& s)
 {
-    ImGui::TextColored(ImVec4(static_cast<float>(r) / 255.0f, static_cast<float>(g) / 255.0f,
-                              static_cast<float>(b) / 255.0f, 1.0f),
-                       "%s", s.c_str());
+    if (!open_ || gui == nullptr) { return; }
+    const auto [x, y] = place(gui->text_width(s, text_px()), text_px());
+    items_.push_back({ .kind = Item::Kind::Text, .x = x, .y = y, .size = 0.0f, .frac = 0.0f,
+                       .col = { static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g),
+                                static_cast<std::uint8_t>(b), 255 },
+                       .str = s });
 }
 
-void HudContext::separator() { ImGui::Separator(); }
+void HudContext::separator()
+{
+    if (!open_) { return; }
+    const auto [x, y] = place(0.0f, 5.0f); // full width resolved at end_panel
+    items_.push_back({ .kind = Item::Kind::Separator, .x = x, .y = y + 2.0f, .size = 0.0f,
+                       .frac = 0.0f, .col = {}, .str = {} });
+}
 
-void HudContext::same_line() { ImGui::SameLine(); }
+void HudContext::same_line() { same_line_ = true; }
 
 void HudContext::image(const std::string& path, float size)
 {
@@ -113,35 +223,22 @@ void HudContext::image(const std::string& path, float size)
 
 void HudContext::image_tinted(const std::string& path, float size, int r, int g, int b, int a)
 {
-    SDL_Texture* tex = (textures != nullptr) ? textures->get(path) : nullptr;
-    const ImVec4 tint(static_cast<float>(r) / 255.0f, static_cast<float>(g) / 255.0f,
-                      static_cast<float>(b) / 255.0f, static_cast<float>(a) / 255.0f);
-    if (tex != nullptr) {
-        ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(size, size), ImVec2(0, 0),
-                     ImVec2(1, 1), tint, ImVec4(0, 0, 0, 0));
-    } else {
-        ImGui::Dummy(ImVec2(size, size)); // keep layout stable if the icon is missing
-    }
+    if (!open_) { return; }
+    const auto [x, y] = place(size, size);
+    items_.push_back({ .kind = Item::Kind::Image, .x = x, .y = y, .size = size, .frac = 0.0f,
+                       .col = { static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g),
+                                static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(a) },
+                       .str = path });
 }
 
 void HudContext::pie(float radius, float fraction, int r, int g, int b, int a)
 {
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const ImVec2 center(p.x + radius, p.y + radius);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 col = IM_COL32(r, g, b, a);
-    dl->AddCircle(center, radius, IM_COL32(255, 255, 255, 40), 0, 2.0f); // faint ring
-    fraction = std::clamp(fraction, 0.0f, 1.0f);
-    if (fraction >= 1.0f) {
-        dl->AddCircleFilled(center, radius, col);
-    } else if (fraction > 0.0f) {
-        constexpr float pi = 3.14159265358979f;
-        const float a0 = -pi * 0.5f; // start at the top
-        dl->PathLineTo(center);
-        dl->PathArcTo(center, radius, a0, a0 + (fraction * 2.0f * pi));
-        dl->PathFillConvex(col);
-    }
-    ImGui::Dummy(ImVec2(radius * 2.0f, radius * 2.0f)); // reserve + advance the cursor
+    if (!open_) { return; }
+    const auto [x, y] = place(radius * 2.0f, radius * 2.0f);
+    items_.push_back({ .kind = Item::Kind::Pie, .x = x, .y = y, .size = radius, .frac = fraction,
+                       .col = { static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g),
+                                static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(a) },
+                       .str = {} });
 }
 
 sol::object DrawView::get(const mod::ComponentRef& ref, sol::this_state ts) const

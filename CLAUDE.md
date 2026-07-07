@@ -57,9 +57,11 @@ src/
     gui.hpp/.cpp            # the game's OWN widget kit (immediate-mode): 9-sliced pixel-art
                             #   panels/buttons/inputs/hearts from assets/ui/*.png (BlackAndWhite
                             #   pack) + Press Start 2P text baked via stb_truetype (assets/font/).
-                            #   USER-FACING scenes (connect/lobby/level-up/game-over/banners) draw
-                            #   with this; ImGui is DEV-ONLY now (console, mod HUD, debug). Engine
-                            #   owns it (engine->gui()); widgets read events the Engine forwards.
+                            #   USER-FACING UI draws with this: connect/lobby/level-up/game-over,
+                            #   banners, AND mod HUD panels (HudContext buffers items, then draws
+                            #   an auto-sized kit panel). ImGui is DEV-ONLY now (console, debug
+                            #   drawlist overlays). Engine owns it (engine->gui()); ALL widget
+                            #   input is event-driven (Engine forwards events; no GetMouseState).
     audio.hpp/.cpp          # Audio mixer on raw SDL3 streams (device mixes bound streams): 16-voice
                             #   SFX pool (pitch jitter, 40ms same-name throttle, play_at falloff) +
                             #   looping music stream w/ cross-fade; clips = assets/sound/<name>.wav|.ogg

@@ -76,13 +76,24 @@ void Gui::bake_font()
 
 void Gui::handle_event(const SDL_Event& event)
 {
+    // Mouse position comes from EVENTS, not SDL_GetMouseState — the whole
+    // client is event-driven (see GameScene's held-key set), and events are
+    // also what synthetic-input tests can inject.
+    if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        mouse_x_ = event.motion.x;
+        mouse_y_ = event.motion.y;
+    }
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
         mouse_down_ = true;
+        mouse_x_ = event.button.x;
+        mouse_y_ = event.button.y;
         press_x_ = event.button.x;
         press_y_ = event.button.y;
     }
     if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
         mouse_down_ = false;
+        mouse_x_ = event.button.x;
+        mouse_y_ = event.button.y;
         click_pending_ = true;
     }
     if (focus_id_ != 0) {
@@ -97,7 +108,6 @@ void Gui::handle_event(const SDL_Event& event)
 
 void Gui::begin_frame()
 {
-    SDL_GetMouseState(&mouse_x_, &mouse_y_);
     click_ = click_pending_;
     click_pending_ = false;
 
@@ -246,8 +256,11 @@ bool Gui::input(std::string_view id, std::string& buf, float x, float y, float w
         }
     }
     const bool focused = focus_id_ == my_id;
-
     if (focused) {
+        focus_seen_ = true; // keep begin_frame's focus GC from reclaiming us
+        // ImGui's SDL3 backend stops SDL text input when IT doesn't want IME
+        // (imgui_impl_sdl3 UpdateIme) — re-assert ours every frame we're focused.
+        if (!SDL_TextInputActive(window_)) { SDL_StartTextInput(window_); }
         for (const char c : typed_) {
             if (numeric && (c < '0' || c > '9')) { continue; }
             if (c >= 32 && buf.size() < 64) { buf.push_back(c); }

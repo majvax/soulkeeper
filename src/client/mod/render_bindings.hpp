@@ -12,6 +12,7 @@
 #include <SDL3/SDL.h>
 
 #include "client/audio.hpp"
+#include "client/gui.hpp"
 #include "client/renderer.hpp"
 #include "core/ecs.hpp"
 #include "shared/mod/bindings_table.hpp"
@@ -94,15 +95,18 @@ struct DrawContext
     }
 };
 
-// Handed to a HUD hook (mod:hud): the mod opens its OWN borderless panel with
-// begin_panel/end_panel, then draws text / cached icons / cooldown circles into
-// it. Thin wrappers over ImGui. `end` is a Lua keyword, hence `end_panel`.
+// Handed to a HUD hook (mod:hud): the mod opens its OWN panel with
+// begin_panel/end_panel, then draws text / cached icons / cooldown discs into
+// it. Rendered with the game's widget kit (client/gui.hpp) — items are
+// BUFFERED between begin/end so the 9-sliced panel can auto-size to its
+// content before anything draws. `end` is a Lua keyword, hence `end_panel`.
 struct HudContext
 {
     Textures* textures = nullptr; // cached icon lookups for image()
+    Gui* gui = nullptr;           // panel + bitmap text
+    SDL_Renderer* renderer = nullptr;
 
-    // Own window: fixed, borderless, non-movable, auto-sized. Default position is
-    // the top-left of the viewport work area; pass x/y to override.
+    // Auto-sized panel. Default position is the top-left; pass x/y to override.
     void begin_panel(const std::string& title, sol::optional<float> x, sol::optional<float> y);
     void end_panel();
 
@@ -118,11 +122,33 @@ struct HudContext
     // cursor by 2*radius so same_line() lays several in a row.
     void pie(float radius, float fraction, int r, int g, int b, int a);
 
-    // Balance any window a hook left open (Begin without End) — called after each
-    // hook so one misbehaving mod can't corrupt ImGui state for the next.
+    // Flush a panel a hook left open (errored before end_panel) — called after
+    // each hook so one misbehaving mod can't scramble layout for the next.
     void close_dangling();
 
-    int open_ = 0; // Begin/End depth for this frame's hook
+private:
+    struct Item // one buffered draw at a content-relative position
+    {
+        enum class Kind : std::uint8_t { Text, Image, Pie, Separator };
+        Kind kind;
+        float x, y, size, frac;
+        GuiColor col;
+        std::string str; // text or texture path
+    };
+    // Place an item of (w,h) at the cursor (honoring same_line), record its
+    // content-relative position, and advance the layout.
+    std::pair<float, float> place(float w, float h);
+    [[nodiscard]] float text_px() const; // HUD line size at the current UI scale
+
+    std::vector<Item> items_;
+    bool open_ = false;
+    float panel_x_ = 0.0f, panel_y_ = 0.0f;
+    float cursor_y_ = 0.0f;   // next row's top
+    float row_end_x_ = 0.0f;  // last item's right edge (same_line anchor)
+    float row_y_ = 0.0f;      // last item's top
+    float row_h_ = 0.0f;      // tallest item on the current row
+    float max_w_ = 0.0f;
+    bool same_line_ = false;
 };
 
 // Register the DrawContext + DrawView + HudContext usertypes into the render VM.

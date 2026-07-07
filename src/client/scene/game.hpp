@@ -87,6 +87,8 @@ public:
         // frame for all plugin draw hooks (no per-call allocation).
         ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(draw_ctx_));
         hud_ctx_.textures = &textures_; // cached icons for plugin HUD hooks
+        hud_ctx_.gui = &engine->gui();  // HUD panels render through the widget kit
+        hud_ctx_.renderer = engine->renderer();
         hud_ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(hud_ctx_));
     }
 
