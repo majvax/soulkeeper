@@ -59,6 +59,12 @@ void Engine::run()
     install_render_bindings(render_host_);
     render_host_.load_dir("mods");
 
+    // Mod sound bindings (mod:sound) land in the mixer before anything plays;
+    // in-order application = last declaration wins, like player_sprite.
+    for (const auto& [name, path] : render_host_.state().sounds) {
+        audio_->set_override(name, path);
+    }
+
     session_.set_mods_hash(render_host_.plugin_hash()); // sent in Join; must match the server
     scenes_.push<ConnectScene>(this); // entry menu; connect happens on Join, the rest self-drive
     scenes_.apply_pending();
@@ -78,6 +84,7 @@ void Engine::run()
         scenes_.apply_pending(); // transitions requested from handle_event (e.g. TAB)
 
         session_.poll(static_cast<float>(frame_seconds));
+        audio_->update(static_cast<float>(frame_seconds)); // music fade + loop refill
 
         while (timestep.consume()) { scenes_.update(timestep.dt()); }
         scenes_.apply_pending(); // transitions requested from update (level-up, lobby->game)

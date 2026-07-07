@@ -54,10 +54,15 @@ src/
     scene.hpp      #   Scene base (handle_event/update/render -> Propagation Continue/Stop) + SceneManager (DEFERRED push/pop/clear + apply_pending)
     session.hpp    #   client net control-plane: connect/reconnect, drains net, roster/state/id, latest snapshot, send_*
     ui.hpp / renderer.hpp   # ImGuiLayer RAII; Textures cache (stb_image, image-or-rect fallback)
+    audio.hpp/.cpp          # Audio mixer on raw SDL3 streams (device mixes bound streams): 16-voice
+                            #   SFX pool (pitch jitter, 40ms same-name throttle, play_at falloff) +
+                            #   looping music stream w/ cross-fade; clips = assets/sound/<name>.wav|.ogg
+                            #   (OGG via stb_vorbis — impl TU stb_vorbis_impl.cpp); NO device = silent,
+                            #   never fatal. Canonical names in modding.md; mod:sound rebinds them.
     sprites.hpp             # SpritePacks: auto-discovers <Clip>_<N>x1.png strip folders; draw_clip
                             #   (frame slicing, Idle/Move OR 8-way <State>_<Dir8> directional packs,
                             #   right-facing flip, play-once) — Lua only names the folder
-    mod/render_bindings.*   # render VM bindings: draw ctx (texture/rect/circle/text) + player view
+    mod/render_bindings.*   # render VM bindings: draw ctx (texture/rect/circle/text/play) + player view
     scene/{lobby,game,console,level_up}.hpp
   client.cpp       # ~15-line bootstrap: argv host/name -> Engine::create -> run()
 mods/core/         # ALL built-in content as a Lua plugin (upgrades, objects, components, systems)
@@ -139,7 +144,10 @@ does the rarity-first roll, **Crystal Ball** object = +1 card) with **5 rarity t
 revive** (3 s arc drawn via `mod:draw`+`ctx:arc`, boss kills revive everyone; red edge arrows
 point at downed teammates) · **game-over** (all downed = defeat; frozen-world overlay, host
 returns everyone to the lobby) · TAB console: `/pause` `/resume` + **mod commands**
-(`mod:command` — `/givexp` `/heal` `/wave` `/stress`) with TAB-completion + history.
+(`mod:command` — `/givexp` `/heal` `/wave` `/stress`) with TAB-completion + history ·
+**audio**: full SFX set + lobby/game/boss music (auto cross-fade; `assets/sound/` canonical
+names, all client-side triggers off snapshot state; local `/volume` `/sfx` `/music` verbs;
+mods rebind any sound via `mod:sound` and fire their own with `ctx:play/play_at`).
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
@@ -164,7 +172,7 @@ returns everyone to the lobby) · TAB console: `/pause` `/resume` + **mod comman
     step it, assert on components).
   - Networked flow → scripted bot using `net`+`protocol`:
     `g++ -std=c++26 -I src -I build/_deps/enet-src/include t.cpp src/shared/net/net.cpp build/_deps/enet-build/libenet.a`.
-  - Client smoke → `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software ./bin/client …`.
+  - Client smoke → `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software SDL_AUDIO_DRIVER=dummy ./bin/client …`.
 - **Kill leftover procs with `pkill -x server` / `pkill -x client`** — `pkill -f bin/server` also
   matches (and kills) the invoking shell.
 

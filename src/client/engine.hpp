@@ -14,6 +14,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "client/audio.hpp"
 #include "client/mod/render_bindings.hpp"
 #include "client/scene.hpp"
 #include "client/session.hpp"
@@ -117,6 +118,8 @@ public:
     // The client's render VM: content metadata (labels/sprites) + draw hooks,
     // shared by the game and level-up scenes.
     [[nodiscard]] mod::LuaHost& mods() noexcept { return render_host_; }
+    // The mixer. Always valid; silent mode if no audio device (never fatal).
+    [[nodiscard]] Audio& audio() noexcept { return *audio_; }
 
     void quit() noexcept { running_ = false; }
     [[nodiscard]] bool running() const noexcept { return running_; }
@@ -142,6 +145,9 @@ private:
     WindowPtr window_;
     RendererPtr renderer_;
     EngineConfig config_;
+    // unique_ptr: Audio pins raw SDL stream handles, and Engine is moved out of
+    // create() — the indirection keeps those handles stable across the move.
+    std::unique_ptr<Audio> audio_ = std::make_unique<Audio>();
     mod::LuaHost render_host_; // render VM: content metadata + draw hooks
     Session session_;
     SceneManager scenes_;

@@ -2,6 +2,7 @@
 #include "client/engine.hpp"
 #include "client/scene.hpp"
 #include <algorithm>
+#include <charconv>
 #include <cstring>
 #include <deque>
 #include <imgui.h>
@@ -19,7 +20,11 @@
 class ConsoleScene final : public client::Scene
 {
 public:
-    explicit ConsoleScene(client::Engine* engine) : Scene(engine) { input_buffer_[0] = '\0'; }
+    explicit ConsoleScene(client::Engine* engine) : Scene(engine)
+    {
+        input_buffer_[0] = '\0';
+        engine_->audio().play("click");
+    }
 
     auto handle_event(const SDL_Event& event) -> Propagation override
     {
@@ -93,7 +98,8 @@ private:
     // Everything completable: local verbs, engine /commands, mod /commands.
     [[nodiscard]] std::vector<std::string> command_names() const
     {
-        std::vector<std::string> names{ "help", "clear", "quit", "/pause", "/resume" };
+        std::vector<std::string> names{ "help",    "clear",   "quit", "/pause",
+                                        "/resume", "/volume", "/sfx", "/music" };
         for (const mod::ModState::ConsoleCommand& cmd : engine_->mods().state().commands) {
             names.push_back("/" + cmd.name);
         }
@@ -111,6 +117,9 @@ private:
         const std::string_view prefix = typed.substr(1);
         if (std::string_view("pause").starts_with(prefix)) { out.emplace_back("/pause  -- freeze the sim (host)"); }
         if (std::string_view("resume").starts_with(prefix)) { out.emplace_back("/resume  -- unfreeze (host)"); }
+        if (std::string_view("volume").starts_with(prefix)) { out.emplace_back("/volume <0..1>  -- master volume (local)"); }
+        if (std::string_view("sfx").starts_with(prefix)) { out.emplace_back("/sfx <0..1>  -- effects volume (local)"); }
+        if (std::string_view("music").starts_with(prefix)) { out.emplace_back("/music <0..1>  -- music volume (local)"); }
         for (const mod::ModState::ConsoleCommand& cmd : engine_->mods().state().commands) {
             if (out.size() >= 6) { break; }
             if (std::string_view(cmd.name).starts_with(prefix)) { out.push_back(cmd.usage); }
@@ -170,6 +179,7 @@ private:
         log_.push_back("> " + command);
         history_.push_back(command);
         history_pos_ = -1;
+        engine_->audio().play("click");
 
         // Match builtins on the first token so stray arguments don't misroute.
         const std::string name = command.substr(0, command.find(' '));
@@ -186,6 +196,24 @@ private:
             engine_->session().send_command(proto::Command::Pause);
         } else if (name == "/resume") {
             engine_->session().send_command(proto::Command::Resume);
+        } else if (name == "/volume" || name == "/sfx" || name == "/music") {
+            // Local audio verbs — never leave the client.
+            const std::size_t sp = command.find(' ');
+            float v = -1.0f;
+            if (sp != std::string::npos) {
+                const std::string arg = command.substr(sp + 1);
+                std::from_chars(arg.data(), arg.data() + arg.size(), v);
+            }
+            client::Audio& audio = engine_->audio();
+            if (v < 0.0f || v > 1.0f) {
+                log_.push_back("usage: " + name + " <0..1>");
+            } else if (name == "/volume") {
+                audio.set_master(v);
+            } else if (name == "/sfx") {
+                audio.set_sfx(v);
+            } else {
+                audio.set_music_volume(v);
+            }
         } else if (command.front() == '/') {
             // A mod command: "/name args..." -> LuaCommand "name args...".
             const std::string line = command.substr(1);

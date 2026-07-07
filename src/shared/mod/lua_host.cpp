@@ -271,6 +271,14 @@ struct ModHandle
     // World draw hook: fn(ctx, view) per player entity per frame (render VM).
     void draw(sol::protected_function fn) { state->draw_hooks.push_back(std::move(fn)); }
 
+    // Bind a sound name to a file (repo-root-relative .wav/.ogg). New names are
+    // playable from render hooks via ctx:play(name); kernel names ("shoot",
+    // "music_game", ...) override the built-in sound. Render-VM metadata only.
+    void sound(const std::string& name, const std::string& path)
+    {
+        state->sounds.emplace_back(name, path);
+    }
+
     // The level-up offer roll: fn(player, level) -> { {id, rarity}, ... }.
     void level_offer(sol::protected_function fn)
     {
@@ -360,6 +368,7 @@ void LuaHost::install_registration_api()
       "object", &ModHandle::object,
       "enemy", &ModHandle::enemy,
       "player_sprite", &ModHandle::player_sprite,
+      "sound", &ModHandle::sound,
       "hud", &ModHandle::hud,
       "draw", &ModHandle::draw,
       "level_offer", &ModHandle::level_offer,

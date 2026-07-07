@@ -81,6 +81,7 @@ public:
     {
         draw_ctx_.renderer = engine->renderer();
         draw_ctx_.textures = &textures_;
+        draw_ctx_.audio = &engine->audio();
         // One persistent Lua object referencing our DrawContext, reused every
         // frame for all plugin draw hooks (no per-call allocation).
         ctx_obj_ = sol::make_object(engine->mods().lua(), std::ref(draw_ctx_));
@@ -136,6 +137,7 @@ public:
         // Open the level-up card scene on the rising edge of a level-up.
         if (session.leveling() && !level_open_) {
             clear_input(); // hand focus to the card scene
+            engine_->audio().play("levelup");
             engine_->scenes().push<LevelUpScene>(engine_);
             level_open_ = true;
         } else if (!session.leveling()) {
@@ -146,10 +148,18 @@ public:
         // back to the lobby — our update is blocked while it's on top).
         if (session.game_over() && !game_over_open_) {
             clear_input();
+            engine_->audio().stop_music(); // the sting owns the soundscape
+            engine_->audio().play(session.game_over_stats().won != 0 ? "win" : "defeat");
             engine_->scenes().push<GameOverScene>(engine_);
             game_over_open_ = true;
         } else if (!session.game_over()) {
             game_over_open_ = false;
+        }
+
+        // Music follows the fight: the boss track while an arena is up. music()
+        // is idempotent + cross-fades, so re-stating the target per frame is free.
+        if (!session.game_over()) {
+            engine_->audio().music(arena_active_ ? "music_boss" : "music_game");
         }
 
         send_and_predict(dt);
@@ -238,6 +248,7 @@ private:
             if (start_dash(local_dash_, moving ? static_cast<float>(mx) : aim_x,
                            moving ? static_cast<float>(my) : aim_y)) {
                 shake_amp_ = std::max(shake_amp_, 3.0f); // dash kick
+                engine_->audio().play("dash");
             }
         }
         input_.dash_queued = false;
@@ -289,7 +300,11 @@ private:
         }
 
         // Death clip: remember when we went down, play once from there.
-        if (downed && my_death_start_ < 0.0f) { my_death_start_ = anim_time_; }
+        if (downed && my_death_start_ < 0.0f) {
+            my_death_start_ = anim_time_;
+            engine_->audio().play("downed");
+        }
+        if (!downed && my_death_start_ >= 0.0f) { engine_->audio().play("revive"); }
         if (!downed) { my_death_start_ = -1.0f; }
     }
 
@@ -338,8 +353,20 @@ private:
         xp_frac_ = state.xp_frac;
         if (state.wave != wave_ && state.wave > 1) { // wave banner (skip the initial wave 1)
             banner_until_ = anim_time_ + 2.5f;
+            engine_->audio().play("wave");
         }
         wave_ = state.wave;
+
+        // Listener for positional SFX = the local player (previous-snapshot pos
+        // is fine: falloff over ~1000 px doesn't care about a 0.5 px step).
+        client::Audio& audio = engine_->audio();
+        float lis_x = 0.0f;
+        float lis_y = 0.0f;
+        if (has_player_) {
+            const Position& me = registry_.get<Position>(player_);
+            lis_x = me.x;
+            lis_y = me.y;
+        }
 
         std::unordered_set<std::uint32_t> seen;
         for (const proto::EntityRec& rec : state.entities) {
@@ -351,7 +378,10 @@ private:
 
             if (has_player_ && rec.id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = ex, .y = ey }; // snap correction
-                if (rec.health < my_health_) { shake_amp_ = 7.0f; }      // ouch: kick the camera
+                if (rec.health < my_health_) {
+                    shake_amp_ = 7.0f; // ouch: kick the camera
+                    audio.play("hurt");
+                }
                 my_health_ = rec.health;      // current hearts
                 my_max_hearts_ = rec.variant; // max hearts
                 my_move_speed_ = rec.move_speed;
@@ -377,6 +407,11 @@ private:
                 registry_.assign(e, Remote{ .kind = rec.kind, .net_id = rec.id, .health = rec.health,
                                             .variant = rec.variant });
                 remotes_[rec.id] = e;
+                // A projectile's first sighting is its muzzle flash — the only
+                // "shot fired" signal the client gets (player and enemy alike).
+                if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
+                    audio.play_at("shoot", ex, ey, lis_x, lis_y);
+                }
                 // Boss arena entrance: an arena archetype's FIRST sighting is
                 // its spawn = the arena's fixed center (the wall + name banner
                 // appear; the camera keeps following the player).
@@ -392,6 +427,7 @@ private:
                         arena_hh_ = def->arena_h;
                         boss_banner_ = def->label;
                         boss_banner_until_ = anim_time_ + 2.5f;
+                        audio.play("boss"); // the sting rides over the music switch
                     }
                 }
             } else {
@@ -417,14 +453,21 @@ private:
                     rem.dir_y = step_y;
                 }
                 pos = { .x = ex, .y = ey };
-                if (rec.health < rem.health) { rem.flash_until = anim_time_ + 0.12f; } // hit!
+                if (rec.health < rem.health) {
+                    rem.flash_until = anim_time_ + 0.12f; // hit!
+                    audio.play_at("hit", ex, ey, lis_x, lis_y);
+                }
                 rem.health = rec.health;
                 rem.scale = proto::dequantize_scale(rec.scale_q);
                 if (rec.fx != 0 && rem.fx == 0) { rem.fx_start = anim_time_; } // attack begins
                 rem.fx = rec.fx;
                 if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                     // Downed players stay in the snapshot with 0 hearts.
-                    if (rec.health == 0 && rem.death_start < 0.0f) { rem.death_start = anim_time_; }
+                    if (rec.health == 0 && rem.death_start < 0.0f) {
+                        rem.death_start = anim_time_;
+                        audio.play("downed"); // a teammate falling matters anywhere on the map
+                    }
+                    if (rec.health != 0 && rem.death_start >= 0.0f) { audio.play("revive"); }
                     if (rec.health != 0) { rem.death_start = -1.0f; }
                 }
             }
@@ -450,6 +493,13 @@ private:
                     poofs_.push_back({ .x = pos.x, .y = pos.y, .t0 = anim_time_,
                                        .radius = pickup ? 10.0f : 20.0f * rem.scale * arch_scale,
                                        .pickup = pickup });
+                    if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
+                        audio.play_at("pickup", pos.x, pos.y, lis_x, lis_y);
+                    } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
+                        audio.play_at("heart", pos.x, pos.y, lis_x, lis_y);
+                    } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
+                        audio.play_at("death", pos.x, pos.y, lis_x, lis_y);
+                    }
                 }
                 if (arena_active_ && it->first == arena_net_id_) {
                     arena_active_ = false; // boss down: drop the wall
@@ -529,6 +579,11 @@ private:
         const float oy = (wh * 0.5f) - cam_y + shake_y;
         draw_ctx_.ox = ox; // keep the plugin draw context's camera current
         draw_ctx_.oy = oy;
+        if (has_player_) { // ctx:play_at attenuates from the local player
+            const Position& me = registry_.get<Position>(player_);
+            draw_ctx_.listener_x = me.x;
+            draw_ctx_.listener_y = me.y;
+        }
 
         draw_background(r, cam_x, cam_y, ww, wh, ox, oy);
 

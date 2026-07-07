@@ -120,6 +120,7 @@ private:
 
     void pick(std::uint8_t index)
     {
+        engine_->audio().play("select");
         engine_->session().send_select(index);
         engine_->scenes().pop(); // close ourselves
     }

@@ -14,7 +14,11 @@ public:
     explicit ConnectScene(client::Engine* engine) : Scene(engine) {}
 
     auto handle_event(const SDL_Event&) -> Propagation override { return Continue; }
-    auto update(float) -> Propagation override { return Continue; }
+    auto update(float) -> Propagation override
+    {
+        engine_->audio().music("music_lobby"); // idempotent (lobby stacks over us)
+        return Continue;
+    }
 
     auto render(float) -> Propagation override
     {

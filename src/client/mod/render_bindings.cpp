@@ -190,6 +190,7 @@ void install_render_bindings(mod::LuaHost& host)
                                   "texture", &DrawContext::texture, "rect", &DrawContext::rect,
                                   "circle_filled", &DrawContext::circle_filled, "circle", &DrawContext::circle,
                                   "arc", &DrawContext::arc,
+                                  "play", &DrawContext::play, "play_at", &DrawContext::play_at,
                                   "camera_lock", &DrawContext::camera_lock,
                                   "camera_release", &DrawContext::camera_release,
                                   "text", &DrawContext::text, "world_to_screen", &DrawContext::world_to_screen);

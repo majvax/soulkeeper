@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "client/audio.hpp"
 #include "client/renderer.hpp"
 #include "core/ecs.hpp"
 #include "shared/mod/bindings_table.hpp"
@@ -47,8 +48,25 @@ struct DrawContext
 {
     SDL_Renderer* renderer = nullptr;
     Textures* textures = nullptr;
+    Audio* audio = nullptr;   // one-shot SFX from hooks (null in scenes w/o audio)
+    float listener_x = 0.0f;  // local player world pos — play_at attenuation
+    float listener_y = 0.0f;
     float ox = 0.0f; // world -> screen offset
     float oy = 0.0f;
+
+    // One-shot SFX by bound name (mod:sound or a kernel name). play_at applies
+    // distance falloff from the local player. Hooks run per frame — the caller
+    // edge-detects; the 40 ms same-name throttle only softens mistakes.
+    void play(const std::string& name, sol::optional<float> volume)
+    {
+        if (audio != nullptr) { audio->play(name, volume.value_or(1.0f)); }
+    }
+    void play_at(const std::string& name, float wx, float wy, sol::optional<float> volume)
+    {
+        if (audio != nullptr) {
+            audio->play_at(name, wx, wy, listener_x, listener_y, volume.value_or(1.0f));
+        }
+    }
 
     // Mod camera control: while locked, the scene camera smooth-pans to and
     // holds the given WORLD point instead of following the player (takes

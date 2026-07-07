@@ -52,6 +52,13 @@ struct ModState
     // metadata — never hashed, never simulated. Last declaration wins.
     std::string player_sprite;
 
+    // Sound bindings declared by mods (mod:sound): name -> file path (repo-root
+    // relative, like sprites). Pure render-VM metadata (the sim is headless);
+    // binding a kernel name ("shoot", "music_game", ...) reskins that sound.
+    // Kept in registration order — the client applies them in order, so the
+    // last declaration wins, matching player_sprite.
+    std::vector<std::pair<std::string, std::string>> sounds;
+
     // HUD panel hooks (mod:hud). Render-VM only: each is called once per frame
     // with (hud_ctx, local-player view) so plugins can print the local player's
     // stats into the HUD. Stored in BOTH VMs but only the client ever calls them.

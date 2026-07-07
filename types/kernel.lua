@@ -285,6 +285,21 @@ function DrawContext:camera_lock(wx, wy) end
 ---Release a camera_lock: the camera pans back to the local player.
 function DrawContext:camera_release() end
 
+---One-shot sound by bound name — a mod:sound id or a kernel name ("shoot",
+---"hit", "levelup", ...). Hooks run every frame: edge-detect before playing
+---(the engine only throttles same-name spam to 40 ms).
+---@param name string
+---@param volume? number # 0..1, default 1
+function DrawContext:play(name, volume) end
+
+---Positional one-shot: volume falls off with distance from the local player
+---(silent past ~1000 px).
+---@param name string
+---@param wx number # world position of the sound
+---@param wy number
+---@param volume? number # 0..1, default 1
+function DrawContext:play_at(name, wx, wy, volume) end
+
 function DrawContext:text(x, y, s, r, g, b, a) end
 
 ---@return number sx, number sy
@@ -449,6 +464,16 @@ function Mod:enemy(name, label, opts) end
 ---Render-VM metadata only (not part of the plugin hash); last call wins.
 ---@param path string  # e.g. "assets/sprite/player"
 function Mod:player_sprite(path) end
+
+---Bind a sound name to a file (.wav or .ogg, repo-root-relative path). A NEW
+---name becomes playable from render hooks via ctx:play(name); a KERNEL name
+---overrides the built-in sound — the engine's canonical names are: shoot, hit,
+---hurt, death, dash, pickup, heart, levelup, select, click, wave, boss,
+---downed, revive, defeat, win, music_lobby, music_game, music_boss.
+---Render-VM metadata only (not part of the plugin hash); last call wins.
+---@param name string # e.g. "my_zap" or "shoot"
+---@param path string # e.g. "mods/mymod/sfx/zap.wav"
+function Mod:sound(name, path) end
 
 ---Register a HUD hook: fn(hud, view) runs once per frame on the client, in the
 ---HUD panel, for the LOCAL player. `view:get(component)` reads that player's

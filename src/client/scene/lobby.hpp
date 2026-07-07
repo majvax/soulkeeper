@@ -15,6 +15,7 @@ public:
     {
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_RETURN
             && engine_->session().is_host() && engine_->session().connected()) {
+            engine_->audio().play("select");
             engine_->session().send_start();
         }
         return Continue;
@@ -22,6 +23,7 @@ public:
 
     auto update(float) -> Propagation override
     {
+        engine_->audio().music("music_lobby"); // idempotent; fades in on entry
         if (engine_->session().game_state() == proto::GameState::Playing) {
             engine_->scenes().clear();
             engine_->scenes().push<GameScene>(engine_);

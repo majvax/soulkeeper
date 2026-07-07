@@ -274,7 +274,26 @@ ctx:text(x, y, str, r, g, b, a)                ctx:world_to_screen(wx, wy) -> sx
 ctx:camera_lock(wx, wy)                        ctx:camera_release()
 -- camera_lock: the scene camera smooth-pans to the WORLD point and holds
 -- (cutscenes/boss intros); release pans back to the local player.
+ctx:play(name, volume?)                        ctx:play_at(name, wx, wy, volume?)
+-- one-shot SFX by bound name (see Sounds below); play_at attenuates with
+-- distance from the local player. Hooks run per frame — edge-detect yourself.
 ```
+
+### Sounds (`mod:sound` + `ctx:play`)
+
+Audio is **render-side only** (the sim runs headless on the server). The engine plays a set of
+**canonical sounds** from `assets/sound/<name>.wav|.ogg`, triggered by what the client already
+observes in snapshots — mods get them for free, and can join in two ways:
+
+- `mod:sound("my_zap", "mods/mymod/sfx/zap.wav")` binds a NEW name, playable from any render hook
+  via `ctx:play("my_zap")` / `ctx:play_at(...)`.
+- Binding a **canonical name** replaces that built-in sound — a full audio reskin is a list of
+  `mod:sound` lines. Last registration wins; not part of the plugin hash.
+
+Canonical names: `shoot hit hurt death dash pickup heart levelup select click wave boss downed
+revive defeat win` (one-shots) and `music_lobby music_game music_boss` (looping tracks — the
+engine cross-fades lobby ↔ game ↔ boss-arena automatically). Missing files are silent, never
+fatal. Local volume: console `/volume`, `/sfx`, `/music <0..1>`.
 
 ### Console commands (`mod:command`)
 
