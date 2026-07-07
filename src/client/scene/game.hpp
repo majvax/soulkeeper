@@ -659,30 +659,13 @@ private:
             }
         }
 
-        // "Net" = debug/team panel only (fps/ms + wave/level/xp). Per-player
-        // stats (hearts/dash/speed/...) are drawn by Lua mod:hud hooks below.
+        // "Net" = dev debug only (fps/ms + your id). Wave/level/XP + per-player
+        // stats now live in the Lua mod:hud stats panel, drawn LAST (topmost).
         ImGui::Begin("Net", nullptr, ImGuiWindowFlags_NoBackground);
         ImGui::Text("you: %s (id %u)", engine_->session().name().c_str(), my_net_id_);
         ImGui::Text("%.1f fps (%.2f ms)", static_cast<double>(ImGui::GetIO().Framerate),
                     1000.0 / std::max(1.0, static_cast<double>(ImGui::GetIO().Framerate)));
-        ImGui::Text("Wave %u   Level %u", static_cast<unsigned>(wave_), static_cast<unsigned>(level_));
-        ImGui::ProgressBar(static_cast<float>(xp_frac_) / 255.0f, ImVec2(160.0f, 0.0f), "XP");
         ImGui::End();
-
-        // Plugin HUD hooks (mod:hud): the local player's own stats/upgrades, in
-        // the mod's OWN panel (begin_panel). Outside the Net window's Begin/End so
-        // the hook opens a top-level window. The view exposes our networked script
-        // comps (Weapon/Crit) AND our kernel stats (Position/Speed/Hearts/Dash),
-        // both resolved via view:get through the shared BindingTable.
-        if (has_player_) {
-            set_local(local_dash_); // predicted dash -> render registry for the HUD
-            const client::DrawView view{ .scripts = &engine_->mods().scripts(),
-                                         .comps = script_state_for(my_net_id_),
-                                         .reg = &registry_,
-                                         .entity = player_,
-                                         .table = engine_->mods().state().bindings.get() };
-            client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
-        }
 
         SDL_Texture* enemy_tex = textures_.get(asset_enemy);
 
@@ -792,6 +775,24 @@ private:
                                      std::clamp(ay - (dy * 16.0f) - (sz.y * 0.5f), 4.0f, wh - sz.y - 4.0f)),
                               col, name.c_str());
               });
+        }
+
+        // Plugin HUD hooks (mod:hud) LAST so the stats panel is topmost — the
+        // world (enemies, orbs) never draws over it. The panel shows the local
+        // player's stats + the team wave/level/XP (fed via hud_ctx_ fields).
+        // Skipped when a modal scene is stacked above (level-up/game-over own
+        // the screen then).
+        if (has_player_ && engine_->scenes().is_top(this)) {
+            set_local(local_dash_); // predicted dash -> render registry for the HUD
+            hud_ctx_.level = static_cast<int>(level_);
+            hud_ctx_.wave = static_cast<int>(wave_);
+            hud_ctx_.xp = static_cast<float>(xp_frac_) / 255.0f;
+            const client::DrawView view{ .scripts = &engine_->mods().scripts(),
+                                         .comps = script_state_for(my_net_id_),
+                                         .reg = &registry_,
+                                         .entity = player_,
+                                         .table = engine_->mods().state().bindings.get() };
+            client::run_hud_hooks(engine_->mods(), hud_ctx_obj_, hud_ctx_, view);
         }
     }
 

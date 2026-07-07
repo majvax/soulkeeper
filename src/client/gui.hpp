@@ -118,6 +118,10 @@ private:
     SDL_Texture* font_tex_ = nullptr;
     std::vector<Glyph> glyphs_; // ASCII 32..126
     bool font_failed_ = false;
+    // Ink box of caps+digits in native (8px) units — where the visible pixels
+    // actually sit within the em cell. Text is centered on THIS, not the full
+    // cell (which includes empty descender space and looked top-biased).
+    float ink_top_ = 0.0f, ink_bot_ = 8.0f; // 8 = font native size
 
     float scale_ = 3.0f;
 

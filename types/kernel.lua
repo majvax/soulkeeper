@@ -309,11 +309,14 @@ function DrawContext:world_to_screen(wx, wy) end
 -- then draws text / cached icons / cooldown circles into it. `end` is a Lua
 -- keyword, so the closer is `end_panel`.
 ---@class HudContext
+---@field level integer  # team level (read-only), for a stats-panel header
+---@field wave integer   # current wave (read-only)
+---@field xp number      # 0..1 progress to the next level (read-only)
 local HudContext = {}
 
----Open the hook's window: fixed, borderless, non-movable, auto-sized. Defaults
+---Open the hook's panel: fixed, borderless, non-movable, auto-sized. Defaults
 ---to the top-left of the screen; pass x/y (pixels) to place it elsewhere.
----@param title string  # window id (not shown; used as the ImGui id)
+---@param title string  # panel id (not shown)
 ---@param x? number
 ---@param y? number
 function HudContext:begin_panel(title, x, y) end
@@ -328,6 +331,14 @@ function HudContext:text(s) end
 ---@param b integer
 ---@param s string
 function HudContext:text_colored(r, g, b, s) end
+
+---Full-content-width progress bar (e.g. the XP bar). `fraction` is 0..1.
+---@param fraction number
+---@param r integer  # 0..255
+---@param g integer
+---@param b integer
+---@param a integer
+function HudContext:bar(fraction, r, g, b, a) end
 
 function HudContext:separator() end
 

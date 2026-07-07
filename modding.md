@@ -341,9 +341,11 @@ object grants +1 choice per level-up, entirely in Lua.
 
 ### HUD hooks (`mod:hud`)
 
-`mod:hud(function(hud, view) … end)` runs once per frame on the client, for the **local** player.
-The hook opens its **own** window with `begin_panel`/`end_panel` (fixed, borderless, non-movable,
-top-left by default — separate from the built-in "Net" debug window). `view:get(H)` reads:
+`mod:hud(function(hud, view) … end)` runs once per frame on the client, for the **local** player,
+and draws **topmost** (over the world — enemies/orbs never cover it). The hook opens its **own**
+panel with `begin_panel`/`end_panel` (a pixel-art panel from the widget kit, auto-sized to its
+content, top-left by default). Team run state is on the context: `hud.level`, `hud.wave`, `hud.xp`
+(0..1) — the XP bar lives in the stats panel now. `view:get(H)` reads:
 - **networked script components** — mark a stats component `{ networked = true }` to show live
   upgrade values (e.g. `core`'s Weapon/Crit); and
 - the local player's **kernel** handles — `Position`, `Speed`, `Hearts`, `Dash`, `Scale` — which
@@ -356,6 +358,7 @@ hud:begin_panel(title, [x], [y])   hud:end_panel()      hud:same_line()
 hud:text(str)                      hud:text_colored(r,g,b, str)     hud:separator()
 hud:image(path, size)              hud:image_tinted(path, size, r,g,b,a)   -- cached textures
 hud:pie(radius, fraction, r,g,b,a) -- cooldown disc: full at fraction>=1, arc while filling
+hud:bar(fraction, r,g,b,a)         -- full-content-width progress bar (e.g. the XP bar)
 ```
 
 ```lua

@@ -74,6 +74,24 @@ void Gui::bake_font()
                  .xoff = b.xoff, .yoff = b.yoff, .xadvance = b.xadvance,
                  .w = static_cast<float>(b.x1 - b.x0), .h = static_cast<float>(b.y1 - b.y0) };
     }
+
+    // Ink box over caps + digits (what UI text mostly is): glyph top = yoff,
+    // bottom = yoff + h, both relative to the baseline. Centering on this box
+    // (not the em cell) puts the visible pixels in the middle of the row —
+    // descenders on the rare lowercase g/y/p just dip slightly below.
+    ink_top_ = 1e9f;
+    ink_bot_ = -1e9f;
+    auto span = [&](char lo, char hi) {
+        for (char c = lo; c <= hi; ++c) {
+            const Glyph& g = glyphs_[static_cast<std::size_t>(c - 32)];
+            if (g.h <= 0.0f) { continue; }
+            ink_top_ = std::min(ink_top_, g.yoff);
+            ink_bot_ = std::max(ink_bot_, g.yoff + g.h);
+        }
+    };
+    span('A', 'Z');
+    span('0', '9');
+    if (ink_top_ > ink_bot_) { ink_top_ = 0.0f, ink_bot_ = FONT_PX; } // guard
 }
 
 void Gui::handle_event(const SDL_Event& event)
@@ -219,7 +237,11 @@ void Gui::text(float x, float y, std::string_view s, GuiColor c, float px)
     SDL_SetTextureColorMod(font_tex_, c.r, c.g, c.b);
     SDL_SetTextureAlphaMod(font_tex_, c.a);
     float pen_x = std::floor(x);
-    const float baseline = std::floor(y) + size; // y = top of the line
+    // `y` is the top of a `size`-tall cell; center the INK box within it, so
+    // caps/digits sit visually centered (the em cell's descender slack below
+    // the baseline no longer pushes text to the top). glyph top = baseline+yoff.
+    const float ink_h = (ink_bot_ - ink_top_) * k;
+    const float baseline = std::floor(y + ((size - ink_h) * 0.5f) - (ink_top_ * k));
     for (const char ch : s) {
         const int idx = ch - 32;
         if (idx < 0 || idx >= 95) { continue; }

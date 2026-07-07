@@ -134,6 +134,20 @@ void HudContext::end_panel()
             SDL_RenderFillRect(renderer, &line);
             break;
         }
+        case Item::Kind::Bar: {
+            // Full-content-width track + a filled portion for `frac`.
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            const SDL_FRect track{ .x = ox, .y = y, .w = max_w_, .h = it.size };
+            SDL_SetRenderDrawColor(renderer, 20, 20, 24, 220);
+            SDL_RenderFillRect(renderer, &track);
+            const SDL_FRect fill{ .x = ox, .y = y, .w = max_w_ * std::clamp(it.frac, 0.0f, 1.0f),
+                                  .h = it.size };
+            SDL_SetRenderDrawColor(renderer, it.col.r, it.col.g, it.col.b, it.col.a);
+            SDL_RenderFillRect(renderer, &fill);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 50); // thin frame
+            SDL_RenderRect(renderer, &track);
+            break;
+        }
         case Item::Kind::Image: {
             SDL_Texture* tex = (textures != nullptr) ? textures->get(it.str) : nullptr;
             if (tex != nullptr) {
@@ -213,6 +227,17 @@ void HudContext::separator()
     const auto [x, y] = place(0.0f, 5.0f); // full width resolved at end_panel
     items_.push_back({ .kind = Item::Kind::Separator, .x = x, .y = y + 2.0f, .size = 0.0f,
                        .frac = 0.0f, .col = {}, .str = {} });
+}
+
+void HudContext::bar(float fraction, int r, int g, int b, int a)
+{
+    if (!open_ || gui == nullptr) { return; }
+    const float bh = gui->body_px() * 0.7f;      // bar height
+    const auto [x, y] = place(0.0f, bh);          // width resolved at end_panel
+    items_.push_back({ .kind = Item::Kind::Bar, .x = x, .y = y, .size = bh, .frac = fraction,
+                       .col = { static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g),
+                                static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(a) },
+                       .str = {} });
 }
 
 void HudContext::same_line() { same_line_ = true; }
@@ -295,8 +320,12 @@ void install_render_bindings(mod::LuaHost& host)
     lua.new_usertype<HudContext>(
       "HudContext", sol::no_constructor, "begin_panel", &HudContext::begin_panel, "end_panel",
       &HudContext::end_panel, "text", &HudContext::text, "text_colored", &HudContext::text_colored,
-      "separator", &HudContext::separator, "same_line", &HudContext::same_line, "image",
-      &HudContext::image, "image_tinted", &HudContext::image_tinted, "pie", &HudContext::pie);
+      "bar", &HudContext::bar, "separator", &HudContext::separator, "same_line",
+      &HudContext::same_line, "image", &HudContext::image, "image_tinted", &HudContext::image_tinted,
+      "pie", &HudContext::pie,
+      // Team run state (read-only), so the stats panel can show the XP bar.
+      "level", sol::readonly(&HudContext::level), "wave", sol::readonly(&HudContext::wave), "xp",
+      sol::readonly(&HudContext::xp));
 }
 
 void run_object_draws(mod::LuaHost& host, const sol::object& ctx_obj, const DrawView& view)

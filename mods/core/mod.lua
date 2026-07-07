@@ -67,6 +67,12 @@ function main()
     mod:hud(function(hud, view)
         hud:begin_panel("Stats")
 
+        -- Team header: wave + level, then the shared XP bar (moved here from
+        -- the old debug window). hud.wave/level/xp are fed by the engine.
+        hud:text_colored(255, 205, 110, string.format("WAVE %d   LEVEL %d", hud.wave, hud.level))
+        hud:bar(hud.xp, 90, 200, 255, 255) -- cyan XP bar, full content width
+        hud:separator()
+
         -- Life: a row of heart icons (dim when empty), cached by the engine.
         local hearts = view:get(Hearts)
         if hearts then

@@ -106,12 +106,20 @@ struct HudContext
     Gui* gui = nullptr;           // panel + bitmap text
     SDL_Renderer* renderer = nullptr;
 
+    // Team run state, mirrored from the snapshot each frame so a HUD hook can
+    // show it (the XP bar lives in the stats panel now, not a debug window).
+    int level = 1;
+    int wave = 1;
+    float xp = 0.0f; // 0..1 progress to the next level
+
     // Auto-sized panel. Default position is the top-left; pass x/y to override.
     void begin_panel(const std::string& title, sol::optional<float> x, sol::optional<float> y);
     void end_panel();
 
     void text(const std::string& s);
     void text_colored(int r, int g, int b, const std::string& s);
+    // Full-content-width progress bar (`fraction` 0..1) — e.g. the XP bar.
+    void bar(float fraction, int r, int g, int b, int a);
     void separator();
     void same_line();
     // Cached texture (path -> Textures cache), drawn size x size at the cursor.
@@ -129,7 +137,7 @@ struct HudContext
 private:
     struct Item // one buffered draw at a content-relative position
     {
-        enum class Kind : std::uint8_t { Text, Image, Pie, Separator };
+        enum class Kind : std::uint8_t { Text, Image, Pie, Separator, Bar };
         Kind kind;
         float x, y, size, frac;
         GuiColor col;
