@@ -253,7 +253,10 @@ struct ModHandle
                 }
             }
             d.sprite = opts->get_or<std::string>("sprite", "");
-            d.arena = opts->get_or("arena", 0.0f);
+            if (const sol::optional<sol::table> arena = (*opts)["arena"]) {
+                d.arena_w = arena->get_or(1, 0.0f); // { half_w, half_h }
+                d.arena_h = arena->get_or(2, 0.0f);
+            }
             d.on_spawn = opts->get_or<sol::protected_function>("on_spawn", {});
         }
         std::string id = d.id;

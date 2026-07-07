@@ -138,7 +138,7 @@ return function(mod, C)
         sprite = "assets/sprite/FrogBoss",
         scale = 3.4,
         tint = { 255, 215, 120 },            -- gold: unmistakably THE boss
-        arena = 320,                         -- client camera lock + wall (= C.Nova.arena)
+        arena = { 560, 300 },                -- fixed rect half-extents (= C.Nova.arena_w/h)
     })
         :component(Health, health(1200))     -- a proper health bar to chew through
         :component(Speed, speed(60))         -- walks, never runs
@@ -161,22 +161,24 @@ return function(mod, C)
             if not p:has(Downed) then
                 local pp = p:get(Position)
                 if is_boss then
-                    -- ARENA entrance: gather the whole team on the anchor
-                    -- player (small ring so they don't stack), spawn the boss
-                    -- CLOSE (inside its own confinement radius), clear the
-                    -- trash, and freeze the wave clock via WaveHold on the
-                    -- boss itself. No escape, no hit-and-run.
+                    -- ARENA entrance: the anchor player's spot becomes the
+                    -- arena's FIXED center — the boss lands exactly there
+                    -- (the client keys the camera/wall off its spawn point),
+                    -- the team is ringed around it, the trash clears and
+                    -- WaveHold freezes the wave clock. No escape.
+                    local cx, cy = pp.x, pp.y -- capture: the loop below moves pp too
                     local i = 0
                     for other in world:each(Player, Position) do
                         local op = other:get(Position)
-                        op.x = pp.x + math.cos(i * 2.1) * 40
-                        op.y = pp.y + math.sin(i * 2.1) * 40
+                        op.x = cx + math.cos(i * 2.1) * 180
+                        op.y = cy + math.sin(i * 2.1) * 180
                         i = i + 1
                     end
-                    local a = math.random() * 2 * math.pi
-                    local boss = spawn_enemy(pp.x + math.cos(a) * 220, pp.y + math.sin(a) * 220, id)
+                    local boss = spawn_enemy(cx, cy, id)
                     if boss then
                         boss:set(WaveHold, {})
+                        local nova = boss:get(C.Nova)
+                        nova.cx, nova.cy = cx, cy -- the rect never moves
                         for e in world:each(Enemy) do
                             if not e:has(C.Nova) then e:destroy() end -- clear the arena
                         end

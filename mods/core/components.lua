@@ -65,12 +65,17 @@ return function(mod)
     -- projectiles. Presence also marks the entity for guaranteed death drops.
     C.Nova = mod:component("nova", {
         cooldown = 3.0,
-        timer = 2.0, -- first ring shortly after the arena entrance
+        timer = 2.0,   -- first ring shortly after the arena entrance
         bullets = 16,
         bullet_speed = 210,
         damage = 1,
-        anim = 0,    -- attack-clip window left (drives Render.fx)
-        arena = 320, -- confinement radius (keep = the archetype's `arena` opt)
+        anim = 0,      -- attack-clip window left (drives Render.fx)
+        -- Fixed arena rect: center = the boss's spawn point (set at spawn by
+        -- enemies.lua), half extents = the archetype's `arena` opt values.
+        cx = 0,
+        cy = 0,
+        arena_w = 560,
+        arena_h = 300,
     })
     return C
 end

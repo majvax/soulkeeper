@@ -244,7 +244,7 @@ mod:enemy("brute", "Brute", { sprite = "assets/sprite/RhinoMonster_01_Regular", 
 | `rarity` (string) | object | sim | `"common"`…`"legendary"` (default `"epic"`) |
 | `weight` (number or `fun(wave)`) | enemy | sim | spawn weight, re-evaluated once per wave |
 | `scale` / `tint` / `sprite` | enemy | render | visuals; `sprite` may be an animation-pack folder |
-| `arena` (number) | enemy | render | boss confinement radius: camera locks on it, prediction clamps, wall ring drawn — pair with a sim clamp (core: `C.Nova.arena`) |
+| `arena` (`{w, h}` half-extents) | enemy | render | boss arena rect around the SPAWN point: camera locks there, prediction clamps, wall drawn — pair with a sim clamp (core: `C.Nova`) |
 | `on_spawn(e)` | enemy | sim | dynamic per-spawn hook |
 
 ## 5. Events

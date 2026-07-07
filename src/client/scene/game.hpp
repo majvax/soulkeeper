@@ -197,13 +197,23 @@ private:
             my = static_cast<std::int8_t>((input_.down ? 1 : 0) - (input_.up ? 1 : 0));
         }
 
-        // Aim = direction from screen center (our player) to the cursor. Aiming
-        // isn't a blocked action (only firing is), so a position query is fine.
+        // Aim = direction from the player's SCREEN position to the cursor —
+        // not from the screen center: the camera can be elsewhere (boss arena
+        // lock), which used to skew every shot. draw_ctx_ holds the previous
+        // frame's camera offset; one frame of lag is irrelevant for an aim
+        // direction. Aiming isn't a blocked action (only firing is).
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
         SDL_GetMouseState(&mouse_x, &mouse_y);
-        float aim_x = mouse_x - (static_cast<float>(engine_->width()) * 0.5f);
-        float aim_y = mouse_y - (static_cast<float>(engine_->height()) * 0.5f);
+        float px_screen = static_cast<float>(engine_->width()) * 0.5f;
+        float py_screen = static_cast<float>(engine_->height()) * 0.5f;
+        if (has_player_) {
+            const Position& me = registry_.get<Position>(player_);
+            px_screen = me.x + draw_ctx_.ox;
+            py_screen = me.y + draw_ctx_.oy;
+        }
+        float aim_x = mouse_x - px_screen;
+        float aim_y = mouse_y - py_screen;
         const float len = std::sqrt((aim_x * aim_x) + (aim_y * aim_y));
         if (len > 0.001f) {
             aim_x /= len;
@@ -255,14 +265,9 @@ private:
             pos.y += vel.dy * dt;
             // Boss arena: clamp the prediction like the server clamps the sim
             // (core's arena system) — otherwise the wall would rubber-band.
-            if (const ArenaBoss arena = arena_boss(1.0f); arena.active) {
-                const float dx = pos.x - arena.x;
-                const float dy = pos.y - arena.y;
-                const float d = std::sqrt((dx * dx) + (dy * dy));
-                if (d > arena.radius && d > 0.0f) {
-                    pos.x = arena.x + (dx / d * arena.radius);
-                    pos.y = arena.y + (dy / d * arena.radius);
-                }
+            if (arena_active_) {
+                pos.x = std::clamp(pos.x, arena_cx_ - arena_hw_, arena_cx_ + arena_hw_);
+                pos.y = std::clamp(pos.y, arena_cy_ - arena_hh_, arena_cy_ + arena_hh_);
             }
             my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
@@ -372,6 +377,24 @@ private:
                 registry_.assign(e, Remote{ .kind = rec.kind, .net_id = rec.id, .health = rec.health,
                                             .variant = rec.variant });
                 remotes_[rec.id] = e;
+                // Boss arena entrance: an arena archetype's FIRST sighting is
+                // its spawn = the arena's fixed center (camera pans there, the
+                // wall + name banner appear).
+                if (!arena_active_
+                    && rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
+                    const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rec.variant);
+                    if (def != nullptr && def->arena_w > 0.0f) {
+                        arena_active_ = true;
+                        arena_net_id_ = rec.id;
+                        arena_cx_ = ex;
+                        arena_cy_ = ey;
+                        arena_hw_ = def->arena_w;
+                        arena_hh_ = def->arena_h;
+                        boss_banner_ = def->label;
+                        boss_banner_until_ = anim_time_ + 2.5f;
+                        start_cam_blend();
+                    }
+                }
             } else {
                 Position& pos = registry_.get<Position>(it->second);
                 registry_.get<PrevPosition>(it->second) = { .x = pos.x, .y = pos.y };
@@ -429,6 +452,10 @@ private:
                                        .radius = pickup ? 10.0f : 20.0f * rem.scale * arch_scale,
                                        .pickup = pickup });
                 }
+                if (arena_active_ && it->first == arena_net_id_) {
+                    arena_active_ = false; // boss down: pan the camera home
+                    start_cam_blend();
+                }
                 registry_.destroy(it->second);
                 it = remotes_.erase(it);
             } else {
@@ -469,20 +496,27 @@ private:
 
     void render_game(SDL_Renderer* r)
     {
-        const float cam_t =
-          std::min(time_since_snapshot_ * static_cast<float>(proto::snapshot_hz), 1.0f);
-        const ArenaBoss arena = arena_boss(cam_t);
-
+        // Camera target: the FIXED arena center during a boss fight, else the
+        // local player. Arena toggles glide there (start_cam_blend) instead of
+        // cutting — the entrance stays readable.
         float cam_x = 0.0f;
         float cam_y = 0.0f;
-        if (arena.active) { // boss arena: the camera locks onto the boss
-            cam_x = arena.x;
-            cam_y = arena.y;
+        if (arena_active_) {
+            cam_x = arena_cx_;
+            cam_y = arena_cy_;
         } else if (has_player_) {
             const Position& me = registry_.get<Position>(player_);
             cam_x = me.x;
             cam_y = me.y;
         }
+        if (anim_time_ < cam_blend_until_) {
+            const float t = 1.0f - ((cam_blend_until_ - anim_time_) / cam_blend_len);
+            const float s = t * t * (3.0f - (2.0f * t)); // smoothstep
+            cam_x = cam_blend_from_x_ + ((cam_x - cam_blend_from_x_) * s);
+            cam_y = cam_blend_from_y_ + ((cam_y - cam_blend_from_y_) * s);
+        }
+        last_cam_x_ = cam_x;
+        last_cam_y_ = cam_y;
         const float ww = static_cast<float>(engine_->width());
         const float wh = static_cast<float>(engine_->height());
         // Camera shake: a decaying two-frequency jitter on the world offset.
@@ -512,13 +546,26 @@ private:
               IM_COL32(255, 225, 140, static_cast<int>(alpha * 255.0f)), banner);
         }
 
-        // Arena boundary: a subtle double ring around the boss so the wall
-        // players are clamped to actually reads on screen.
-        if (arena.active && engine_->scenes().is_top(this)) {
+        // Arena boundary: a double rectangle around the FIXED center so the
+        // wall players are clamped to actually reads on screen. Plus the boss
+        // name banner during the entrance.
+        if (arena_active_ && engine_->scenes().is_top(this)) {
             ImDrawList* fx = ImGui::GetBackgroundDrawList();
-            const ImVec2 at(arena.x + ox, arena.y + oy);
-            fx->AddCircle(at, arena.radius, IM_COL32(255, 200, 90, 170), 96, 3.0f);
-            fx->AddCircle(at, arena.radius + 6.0f, IM_COL32(255, 200, 90, 60), 96, 8.0f);
+            const ImVec2 lo(arena_cx_ - arena_hw_ + ox, arena_cy_ - arena_hh_ + oy);
+            const ImVec2 hi(arena_cx_ + arena_hw_ + ox, arena_cy_ + arena_hh_ + oy);
+            fx->AddRect(lo, hi, IM_COL32(255, 200, 90, 170), 0.0f, 0, 3.0f);
+            fx->AddRect(ImVec2(lo.x - 6.0f, lo.y - 6.0f), ImVec2(hi.x + 6.0f, hi.y + 6.0f),
+                        IM_COL32(255, 200, 90, 60), 0.0f, 0, 8.0f);
+        }
+        if (anim_time_ < boss_banner_until_ && engine_->scenes().is_top(this)) {
+            const float remain = boss_banner_until_ - anim_time_;
+            const float alpha = std::clamp(remain, 0.0f, 1.0f);
+            constexpr float banner_px = 44.0f;
+            ImFont* font = ImGui::GetFont();
+            const ImVec2 size = font->CalcTextSizeA(banner_px, FLT_MAX, 0.0f, boss_banner_.c_str());
+            ImGui::GetForegroundDrawList()->AddText(
+              font, banner_px, ImVec2((ww - size.x) * 0.5f, wh * 0.32f),
+              IM_COL32(255, 205, 110, static_cast<int>(alpha * 255.0f)), boss_banner_.c_str());
         }
 
         // Death poofs + dash trail: short-lived world-space rings (ImGui bg
@@ -757,32 +804,13 @@ private:
     // Desynchronize identical archetypes so a wave doesn't animate in lockstep.
     static float phase_offset(std::uint32_t net_id) { return static_cast<float>(net_id % 16U) * 0.37f; }
 
-    // The live arena boss (an enemy whose def sets `arena > 0`), if any: the
-    // camera locks onto it, local prediction is clamped to its radius and the
-    // boundary ring is drawn. `t` interpolates PrevPosition->Position (pass 1
-    // for the current server position).
-    struct ArenaBoss
+    // Begin a camera pan: capture where the camera IS so render_game can
+    // smoothstep it to the (new) target — used when the boss arena toggles.
+    void start_cam_blend()
     {
-        bool active = false;
-        float x = 0.0f, y = 0.0f, radius = 0.0f;
-    };
-    [[nodiscard]] ArenaBoss arena_boss(float t) const
-    {
-        ArenaBoss out;
-        for (const auto& [net_id, entity] : remotes_) {
-            const Remote& rem = registry_.get<Remote>(entity);
-            if (rem.kind != static_cast<std::uint8_t>(proto::EntityKind::Enemy)) { continue; }
-            const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant);
-            if (def == nullptr || def->arena <= 0.0f) { continue; }
-            const Position& pos = registry_.get<Position>(entity);
-            const PrevPosition& prev = registry_.get<PrevPosition>(entity);
-            out = { .active = true,
-                    .x = prev.x + ((pos.x - prev.x) * t),
-                    .y = prev.y + ((pos.y - prev.y) * t),
-                    .radius = def->arena };
-            return out;
-        }
-        return out;
+        cam_blend_from_x_ = last_cam_x_;
+        cam_blend_from_y_ = last_cam_y_;
+        cam_blend_until_ = anim_time_ + cam_blend_len;
     }
 
     // Archetypes are Lua-defined (mod:enemy): scale/tint/sprite come from the
@@ -1054,6 +1082,18 @@ private:
     float shake_amp_ = 0.0f;     // camera shake amplitude px (decays in update)
     std::vector<Poof> poofs_;    // death/pickup bursts (cap 48)
     std::vector<Poof> trail_;    // dash ghost samples (radius unused)
+    // Boss arena (fixed rect): center = the arena enemy's spawn position (its
+    // first sighting), half extents from its def. Cleared when the boss dies.
+    bool arena_active_ = false;
+    std::uint32_t arena_net_id_ = 0;
+    float arena_cx_ = 0.0f, arena_cy_ = 0.0f, arena_hw_ = 0.0f, arena_hh_ = 0.0f;
+    std::string boss_banner_;          // def label shown at the entrance
+    float boss_banner_until_ = -1.0f;
+    // Camera pan when the arena toggles (smoothstep from the captured start).
+    static constexpr float cam_blend_len = 0.9f;
+    float cam_blend_from_x_ = 0.0f, cam_blend_from_y_ = 0.0f;
+    float cam_blend_until_ = -1.0f;
+    float last_cam_x_ = 0.0f, last_cam_y_ = 0.0f;
     float time_since_snapshot_ = 0.0f;
     float anim_time_ = 0.0f;   // drives every animation clip
     float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)

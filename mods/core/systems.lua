@@ -388,24 +388,22 @@ return function(mod, C)
         end
     end)
 
-    -- Boss arena confinement: while a nova-bearer lives, players can't leave
-    -- its radius — no hit-and-run. The client predicts the same clamp (via the
-    -- archetype's `arena` opt) so the wall doesn't rubber-band. 60 Hz keeps
-    -- the overshoot under ~4 px at run speed.
+    -- Boss arena confinement: while a nova-bearer lives, players (and the
+    -- boss itself) can't leave the FIXED rect recorded at its spawn — no
+    -- hit-and-run. The client predicts the same clamp (via the archetype's
+    -- `arena` opt) so the wall doesn't rubber-band. 60 Hz keeps the overshoot
+    -- under ~4 px at run speed.
+    local function rect_clamp(pos, nova)
+        pos.x = math.max(nova.cx - nova.arena_w, math.min(nova.cx + nova.arena_w, pos.x))
+        pos.y = math.max(nova.cy - nova.arena_h, math.min(nova.cy + nova.arena_h, pos.y))
+    end
     mod:system("arena", { phase = "update", rate = 60, stagger = 0.25 }, function(dt)
         for e in world:each(C.Nova, Position) do
-            local arena = e:get(C.Nova).arena
-            if arena > 0 then
-                local bp = e:get(Position)
+            local nova = e:get(C.Nova)
+            if nova.arena_w > 0 then
+                rect_clamp(e:get(Position), nova) -- the boss stays home too
                 for p in world:each(Player, Position) do
-                    local pp = p:get(Position)
-                    local dx, dy = pp.x - bp.x, pp.y - bp.y
-                    local d2 = dx * dx + dy * dy
-                    if d2 > arena * arena then
-                        local d = math.sqrt(d2)
-                        pp.x = bp.x + dx / d * arena
-                        pp.y = bp.y + dy / d * arena
-                    end
+                    rect_clamp(p:get(Position), nova)
                 end
             end
         end
