@@ -277,6 +277,14 @@ function DrawContext:circle(cx, cy, radius, r, g, b, a, thickness) end
 ---For progress cues (revive arcs, cast bars).
 function DrawContext:arc(cx, cy, radius, fraction, r, g, b, a, thickness) end
 
+---Lock the scene camera on a WORLD point: it smooth-pans there (next frame)
+---and holds until camera_release(). For cutscenes/boss intros — the default
+---camera follows the local player.
+function DrawContext:camera_lock(wx, wy) end
+
+---Release a camera_lock: the camera pans back to the local player.
+function DrawContext:camera_release() end
+
 function DrawContext:text(x, y, s, r, g, b, a) end
 
 ---@return number sx, number sy
@@ -367,7 +375,7 @@ function HudContext:pie(radius, fraction, r, g, b, a) end
 ---@field scale? number    # on-screen size factor (default 1.0)
 ---@field tint? integer[]  # { r, g, b } colour mod on the sprite (default white)
 ---@field sprite? string   # an animation-pack FOLDER of <Clip>_<N>x1.png strips (the engine slices frames, plays Idle/Move, flips for facing) or a static .png path (default: the shared enemy sprite)
----@field arena? number[]  # boss arena rect HALF-extents { w, h } (default none): while this enemy lives the client locks the camera on the FIXED point where it spawned, clamps local prediction to the rect and draws the wall — pair it with a SIM-side clamp (core: C.Nova cx/cy/arena_w/arena_h)
+---@field arena? number[]  # boss arena rect HALF-extents { w, h } (default none): while this enemy lives the client clamps local prediction to the FIXED rect around its spawn point and draws the wall — pair it with a SIM-side clamp (core: C.Nova cx/cy/arena_w/arena_h)
 ---@field on_spawn? fun(e: Entity) # escape hatch for dynamic per-spawn logic (prefer :component())
 
 --=============================================================================

@@ -175,11 +175,11 @@ struct EnemyDef
     std::string sprite;
 
     // Arena rect half-extents (0 = none), opt `arena = { w, h }`: while this
-    // enemy lives, the CLIENT locks the camera on the FIXED point where it
-    // spawned (= its position at first sighting; arena bosses spawn at their
-    // arena's center), clamps local prediction to the rect and draws the wall.
-    // The SIM-side confinement is mod logic (core clamps via C.Nova) — these
-    // def fields just let the client know the shape, hash-free.
+    // enemy lives, the CLIENT clamps local prediction to the FIXED rect around
+    // the point where it spawned (= its position at first sighting; arena
+    // bosses spawn at their arena's center) and draws the wall. The SIM-side
+    // confinement is mod logic (core clamps via C.Nova) — these def fields
+    // just let the client know the shape, hash-free.
     float arena_w = 0.0f, arena_h = 0.0f;
 
     sol::protected_function on_spawn; // optional (Entity) [sim] — attach extra components etc.

@@ -50,6 +50,19 @@ struct DrawContext
     float ox = 0.0f; // world -> screen offset
     float oy = 0.0f;
 
+    // Mod camera control: while locked, the scene camera smooth-pans to and
+    // holds the given WORLD point instead of following the player (takes
+    // effect next frame; release() pans back). Call from any render hook.
+    bool cam_locked = false;
+    float cam_x = 0.0f, cam_y = 0.0f;
+    void camera_lock(float wx, float wy)
+    {
+        cam_locked = true;
+        cam_x = wx;
+        cam_y = wy;
+    }
+    void camera_release() { cam_locked = false; }
+
     void texture(const std::string& path, float x, float y, float w, float h);
     void rect(float x, float y, float w, float h, int r, int g, int b, int a);
     void circle_filled(float cx, float cy, float radius, int r, int g, int b, int a);

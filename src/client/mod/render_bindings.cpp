@@ -190,6 +190,8 @@ void install_render_bindings(mod::LuaHost& host)
                                   "texture", &DrawContext::texture, "rect", &DrawContext::rect,
                                   "circle_filled", &DrawContext::circle_filled, "circle", &DrawContext::circle,
                                   "arc", &DrawContext::arc,
+                                  "camera_lock", &DrawContext::camera_lock,
+                                  "camera_release", &DrawContext::camera_release,
                                   "text", &DrawContext::text, "world_to_screen", &DrawContext::world_to_screen);
     lua.new_usertype<HudContext>(
       "HudContext", sol::no_constructor, "begin_panel", &HudContext::begin_panel, "end_panel",

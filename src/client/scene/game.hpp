@@ -378,8 +378,8 @@ private:
                                             .variant = rec.variant });
                 remotes_[rec.id] = e;
                 // Boss arena entrance: an arena archetype's FIRST sighting is
-                // its spawn = the arena's fixed center (camera pans there, the
-                // wall + name banner appear).
+                // its spawn = the arena's fixed center (the wall + name banner
+                // appear; the camera keeps following the player).
                 if (!arena_active_
                     && rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
                     const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rec.variant);
@@ -392,7 +392,6 @@ private:
                         arena_hh_ = def->arena_h;
                         boss_banner_ = def->label;
                         boss_banner_until_ = anim_time_ + 2.5f;
-                        start_cam_blend();
                     }
                 }
             } else {
@@ -453,8 +452,7 @@ private:
                                        .pickup = pickup });
                 }
                 if (arena_active_ && it->first == arena_net_id_) {
-                    arena_active_ = false; // boss down: pan the camera home
-                    start_cam_blend();
+                    arena_active_ = false; // boss down: drop the wall
                 }
                 registry_.destroy(it->second);
                 it = remotes_.erase(it);
@@ -496,18 +494,22 @@ private:
 
     void render_game(SDL_Renderer* r)
     {
-        // Camera target: the FIXED arena center during a boss fight, else the
-        // local player. Arena toggles glide there (start_cam_blend) instead of
-        // cutting — the entrance stays readable.
+        // Camera target: the local player — unless a MOD locked it somewhere
+        // (ctx:camera_lock, e.g. a cutscene or a future boss intro). Lock
+        // changes glide (start_cam_blend) instead of cutting.
         float cam_x = 0.0f;
         float cam_y = 0.0f;
-        if (arena_active_) {
-            cam_x = arena_cx_;
-            cam_y = arena_cy_;
+        if (draw_ctx_.cam_locked) {
+            cam_x = draw_ctx_.cam_x;
+            cam_y = draw_ctx_.cam_y;
         } else if (has_player_) {
             const Position& me = registry_.get<Position>(player_);
             cam_x = me.x;
             cam_y = me.y;
+        }
+        if (draw_ctx_.cam_locked != cam_was_locked_) {
+            cam_was_locked_ = draw_ctx_.cam_locked;
+            start_cam_blend();
         }
         if (anim_time_ < cam_blend_until_) {
             const float t = 1.0f - ((cam_blend_until_ - anim_time_) / cam_blend_len);
@@ -1089,11 +1091,13 @@ private:
     float arena_cx_ = 0.0f, arena_cy_ = 0.0f, arena_hw_ = 0.0f, arena_hh_ = 0.0f;
     std::string boss_banner_;          // def label shown at the entrance
     float boss_banner_until_ = -1.0f;
-    // Camera pan when the arena toggles (smoothstep from the captured start).
+    // Camera pan when a mod locks/releases the camera (ctx:camera_lock):
+    // smoothstep from the captured start instead of cutting.
     static constexpr float cam_blend_len = 0.9f;
     float cam_blend_from_x_ = 0.0f, cam_blend_from_y_ = 0.0f;
     float cam_blend_until_ = -1.0f;
     float last_cam_x_ = 0.0f, last_cam_y_ = 0.0f;
+    bool cam_was_locked_ = false; // edge detector for the pan
     float time_since_snapshot_ = 0.0f;
     float anim_time_ = 0.0f;   // drives every animation clip
     float my_dir_x_ = 1.0f; // local 8-way facing (aim while armed, legs while running)

@@ -244,7 +244,7 @@ mod:enemy("brute", "Brute", { sprite = "assets/sprite/RhinoMonster_01_Regular", 
 | `rarity` (string) | object | sim | `"common"`…`"legendary"` (default `"epic"`) |
 | `weight` (number or `fun(wave)`) | enemy | sim | spawn weight, re-evaluated once per wave |
 | `scale` / `tint` / `sprite` | enemy | render | visuals; `sprite` may be an animation-pack folder |
-| `arena` (`{w, h}` half-extents) | enemy | render | boss arena rect around the SPAWN point: camera locks there, prediction clamps, wall drawn — pair with a sim clamp (core: `C.Nova`) |
+| `arena` (`{w, h}` half-extents) | enemy | render | boss arena rect around the SPAWN point: prediction clamps, wall drawn — pair with a sim clamp (core: `C.Nova`) |
 | `on_spawn(e)` | enemy | sim | dynamic per-spawn hook |
 
 ## 5. Events
@@ -271,6 +271,9 @@ An object's `draw(ctx, view)` runs per frame for each player: `view.x/.y` are sc
 ctx:texture(path, x, y, w, h)                  ctx:rect(x, y, w, h, r, g, b, a)
 ctx:circle_filled(cx, cy, rad, r, g, b, a)     ctx:circle(cx, cy, rad, r, g, b, a, thickness)
 ctx:text(x, y, str, r, g, b, a)                ctx:world_to_screen(wx, wy) -> sx, sy
+ctx:camera_lock(wx, wy)                        ctx:camera_release()
+-- camera_lock: the scene camera smooth-pans to the WORLD point and holds
+-- (cutscenes/boss intros); release pans back to the local player.
 ```
 
 ### Console commands (`mod:command`)
