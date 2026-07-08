@@ -32,7 +32,7 @@ return function(mod, C)
     -- Raises the heart LIMIT only — it never heals (find hearts for that).
     -- Vitality shows on the body: +6% size per heart gained (kernel Scale,
     -- capped so late-game stacks stay reasonable). Hitbox (Radius) unchanged.
-    mod:upgrade("maxhp", "Vitality", { 5, 0, 1, 1, 2 },
+    mod:upgrade("maxhp", "Vitality", { 0, 0, 1, 1, 2 },
         function(e, _, amount)
             local h = e:get(Hearts)
             if h then h.max = math.floor(h.max + amount) end -- kernel int field

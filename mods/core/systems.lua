@@ -288,6 +288,9 @@ return function(mod, C)
                     end
                     if world:wave() >= WIN_WAVE then world:end_game(true) end
                 end
+                if e:has(C.Boss) then
+                    mod:emit("on_boss_kill")
+                end
                 e:destroy()
             end
         end
@@ -350,7 +353,7 @@ return function(mod, C)
                         })
                         b:get(Render).variant = 1 -- hostile: red
                         r.timer = r.cooldown
-                        r.anim = 0.5 -- play the archer's attack clip (Render.fx)
+                        r.anim = 0.5              -- play the archer's attack clip (Render.fx)
                         e:get(Render).fx = 1
                     end
                 end
@@ -374,7 +377,7 @@ return function(mod, C)
                 for i = 1, n do
                     local a = (i / n) * 2 * math.pi
                     local b = spawn_bullet(ep.x, ep.y, math.cos(a) * nova.bullet_speed,
-                                           math.sin(a) * nova.bullet_speed)
+                        math.sin(a) * nova.bullet_speed)
                     b:set(C.Bullet, { damage = nova.damage, hostile = 1, lifetime = 2.2 })
                     b:get(Render).variant = 1 -- hostile: red
                 end
@@ -437,24 +440,33 @@ return function(mod, C)
     end)
 
 
-    mod:system("gather_all", { phase = "pickup", rate = 5 }, function(dt)
-        -- every 50 waves, collect all
-        if world:wave() % 50 == 0 then
-            for p in world:each(Player, Position) do
-                local pp = p:get(Position)
-                for orb in world:nearby(pp.x, pp.y, 1000, C.Xp) do
-                    world:add_xp(math.tointeger(orb:get(C.Xp).value) or 0)
-                    orb:destroy()
-                end
-                local h = p:get(Hearts)
-                if h and h.current < h.max then
-                    for heart in world:nearby(pp.x, pp.y, 1000, C.Heal) do
-                        h.current = math.floor(math.min(h.max, h.current + heart:get(C.Heal).amount))
-                        heart:destroy()
-                        if h.current >= h.max then break end
-                    end
+
+    -- every 50 waves, collect all
+    if world:wave() % 50 == 0 then
+        for p in world:each(Player, Position) do
+            local pp = p:get(Position)
+            for orb in world:nearby(pp.x, pp.y, 1000, C.Xp) do
+                world:add_xp(math.tointeger(orb:get(C.Xp).value) or 0)
+                orb:destroy()
+            end
+            local h = p:get(Hearts)
+            if h and h.current < h.max then
+                for heart in world:nearby(pp.x, pp.y, 1000, C.Heal) do
+                    h.current = math.floor(math.min(h.max, h.current + heart:get(C.Heal).amount))
+                    heart:destroy()
+                    if h.current >= h.max then break end
                 end
             end
+        end
+    end
+
+    mod:subscribe("on_boss_kill", function()
+        for p in world:each(Player, Hearts) do
+            if p:has(Downed) then revive(p) end
+        end
+        for obr in world:each(C.Xp) do
+            world:add_xp(math.tointeger(obr:get(C.Xp).value) or 0)
+            obr:destroy()
         end
     end)
 end
