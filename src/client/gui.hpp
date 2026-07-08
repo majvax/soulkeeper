@@ -55,6 +55,10 @@ public:
     // 9-sliced riveted panel.
     void panel(float x, float y, float w, float h);
 
+    // Fullscreen modal scrim (dims the frozen world beneath a modal scene).
+    // The canonical dim used by the level-up / game-over overlays.
+    void dim_overlay(float alpha = 0.7f);
+
     // Pill button; true on click. Disabled draws dim and never fires.
     bool button(std::string_view label, float x, float y, float w, float h, bool enabled = true);
 
@@ -64,6 +68,11 @@ public:
     void text(float x, float y, std::string_view s, GuiColor c = colors::text, float px = 0.0f);
     void text_centered(float cx, float y, std::string_view s, GuiColor c = colors::text,
                        float px = 0.0f);
+    // Overflow-safe text: truncated with a trailing ".." when it would exceed
+    // max_w, so variable-length strings (player names, stat lines) stay inside
+    // their panel instead of bleeding past the frame.
+    void text_clipped(float x, float y, std::string_view s, float max_w,
+                      GuiColor c = colors::text, float px = 0.0f);
     [[nodiscard]] float text_width(std::string_view s, float px = 0.0f) const;
     // Largest glyph size <= `px` (stepping by scale()) at which `s` fits in
     // max_w — how widgets keep labels inside their box. Floors at 8px.

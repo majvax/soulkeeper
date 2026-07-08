@@ -15,8 +15,23 @@ constexpr std::size_t channel_count = 2;
 
 ENetPacket* make_packet(std::span<const std::byte> data, bool reliable)
 {
-    const enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE : 0;
+    // Unreliable sends (snapshots/input) MUST carry UNRELIABLE_FRAGMENT: without
+    // it ENet silently promotes any packet larger than the MTU (1392 B) to a
+    // RELIABLE fragmented packet, and a big snapshot (60+ entities) then piles
+    // reliable retransmits at 60 Hz until the peer times out and drops. With the
+    // flag an over-MTU snapshot fragments unreliably — a lost fragment just
+    // discards that one snapshot; the next supersedes it. Inert below the MTU.
+    const enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE
+                                       : ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
     return enet_packet_create(data.data(), data.size(), flags);
+}
+
+// Widen the disconnect window so a brief loss burst / stall doesn't drop a
+// marginal connection. (limit, minimum_ms, maximum_ms); 0 keeps ENet's default
+// RTT-based limit. Applied to every peer as it connects.
+void tune_timeout(ENetPeer* peer)
+{
+    enet_peer_timeout(peer, 0, 5000, 15000);
 }
 
 std::vector<std::byte> copy_payload(const ENetPacket* packet)
@@ -73,6 +88,7 @@ std::vector<Event> Server::poll()
         case ENET_EVENT_TYPE_CONNECT: {
             const std::uint32_t id = impl_->next_peer_id++;
             event.peer->data = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
+            tune_timeout(event.peer);
             impl_->peers[id] = event.peer;
             events.push_back({ .type = EventType::Connect, .peer_id = id, .payload = {} });
             break;
@@ -151,6 +167,7 @@ std::optional<Client> Client::connect(const char* host, std::uint16_t port, std:
     // Wait for the connection to be acknowledged.
     ENetEvent event;
     if (enet_host_service(client_host, &event, timeout_ms) > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
+        tune_timeout(peer);
         auto impl = std::make_unique<Impl>();
         impl->host = client_host;
         impl->server = peer;

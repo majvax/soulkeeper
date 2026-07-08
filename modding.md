@@ -344,7 +344,8 @@ object grants +1 choice per level-up, entirely in Lua.
 `mod:hud(function(hud, view) … end)` runs once per frame on the client, for the **local** player,
 and draws **topmost** (over the world — enemies/orbs never cover it). The hook opens its **own**
 panel with `begin_panel`/`end_panel` (a pixel-art panel from the widget kit, auto-sized to its
-content, top-left by default). Team run state is on the context: `hud.level`, `hud.wave`, `hud.xp`
+content, top-left by default). A non-empty `title` draws as an accent heading + divider atop the
+panel (pass `""` for a headless panel). Team run state is on the context: `hud.level`, `hud.wave`, `hud.xp`
 (0..1) — the XP bar lives in the stats panel now. `view:get(H)` reads:
 - **networked script components** — mark a stats component `{ networked = true }` to show live
   upgrade values (e.g. `core`'s Weapon/Crit); and

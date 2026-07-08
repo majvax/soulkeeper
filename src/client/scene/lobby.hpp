@@ -52,7 +52,8 @@ public:
         ui.panel(px, py, pw, ph);
 
         const float inner_x = px + (14.0f * s);
-        float y = py + (12.0f * s);
+        const float inner_w = pw - (28.0f * s);
+        float y = py + (14.0f * s);
 
         if (session.join_denied()) {
             ui.text(inner_x, y, "MOD SET MISMATCH", client::colors::danger);
@@ -72,8 +73,8 @@ public:
                 std::string line = row.name;
                 if (row.is_host) { line += " [HOST]"; }
                 if (!row.connected) { line += " (LOST)"; }
-                ui.text(inner_x + (6.0f * s), y, line,
-                        row.connected ? client::colors::text : client::colors::dim);
+                ui.text_clipped(inner_x + (6.0f * s), y, line, inner_w - (6.0f * s),
+                                row.connected ? client::colors::text : client::colors::dim);
                 y += ui.line_h() * 0.9f;
             }
         }

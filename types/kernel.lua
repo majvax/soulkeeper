@@ -316,7 +316,7 @@ local HudContext = {}
 
 ---Open the hook's panel: fixed, borderless, non-movable, auto-sized. Defaults
 ---to the top-left of the screen; pass x/y (pixels) to place it elsewhere.
----@param title string  # panel id (not shown)
+---@param title string  # non-empty = accent heading + divider atop the panel; "" = no heading
 ---@param x? number
 ---@param y? number
 function HudContext:begin_panel(title, x, y) end

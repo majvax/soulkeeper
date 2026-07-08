@@ -32,16 +32,11 @@ public:
 
     auto render(float) -> Propagation override
     {
-        SDL_Renderer* r = engine_->renderer();
         const float w = static_cast<float>(engine_->width());
         const float h = static_cast<float>(engine_->height());
 
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(r, 0, 0, 0, 200);
-        const SDL_FRect full{ .x = 0, .y = 0, .w = w, .h = h };
-        SDL_RenderFillRect(r, &full);
-
         client::Gui& ui = engine_->gui();
+        ui.dim_overlay(); // scrim over the frozen world beneath us
         const client::Session& session = engine_->session();
         const proto::GameOverMsg& stats = session.game_over_stats();
         const bool won = stats.won != 0;
@@ -57,14 +52,15 @@ public:
         ui.panel(px, py, pw, ph);
 
         const float inner_x = px + (14.0f * s);
-        float y = py + (12.0f * s);
-        ui.text(inner_x, y, won ? "THE SOULKEEPER PREVAILS." : "THE HORDE HAS WON.",
-                client::colors::text);
+        const float inner_w = pw - (28.0f * s);
+        float y = py + (14.0f * s);
+        ui.text_clipped(inner_x, y, won ? "THE SOULKEEPER PREVAILS." : "THE HORDE HAS WON.",
+                        inner_w, client::colors::text);
         y += ui.line_h();
-        ui.text(inner_x, y,
-                "WAVE " + std::to_string(stats.final_wave) + "  LEVEL "
-                  + std::to_string(stats.final_level),
-                client::colors::dim);
+        ui.text_clipped(inner_x, y,
+                        "WAVE " + std::to_string(stats.final_wave) + "  LEVEL "
+                          + std::to_string(stats.final_level),
+                        inner_w, client::colors::dim);
         y += ui.line_h() * 1.2f;
 
         ui.text(inner_x, y, "PARTY", client::colors::dim);
@@ -73,8 +69,8 @@ public:
             std::string line = row.name;
             if (row.is_host) { line += " [HOST]"; }
             if (!row.connected) { line += " (LOST)"; }
-            ui.text(inner_x + (6.0f * s), y, line,
-                    row.connected ? client::colors::text : client::colors::dim);
+            ui.text_clipped(inner_x + (6.0f * s), y, line, inner_w - (6.0f * s),
+                            row.connected ? client::colors::text : client::colors::dim);
             y += ui.line_h() * 0.9f;
         }
 

@@ -90,7 +90,7 @@ std::pair<float, float> HudContext::place(float w, float h)
     return { x, y };
 }
 
-void HudContext::begin_panel(const std::string& /*title*/, sol::optional<float> x,
+void HudContext::begin_panel(const std::string& title, sol::optional<float> x,
                              sol::optional<float> y)
 {
     const float s = gui != nullptr ? gui->scale() : 3.0f;
@@ -105,6 +105,14 @@ void HudContext::begin_panel(const std::string& /*title*/, sol::optional<float> 
     row_h_ = 0.0f;
     max_w_ = 0.0f;
     same_line_ = false;
+
+    // A non-empty title becomes the panel heading (accent) + a divider, so
+    // `hud:begin_panel("Stats")` reads as a titled panel instead of the title
+    // being silently dropped. Buffered like any other item, above the content.
+    if (!title.empty() && gui != nullptr) {
+        text_colored(colors::accent.r, colors::accent.g, colors::accent.b, title);
+        separator();
+    }
 }
 
 // Draw everything: the auto-sized 9-slice panel first, then the buffered items

@@ -166,6 +166,21 @@ public:
         }
 
         send_and_predict(dt);
+        // Ease the local render position toward the (authoritative) predicted
+        // Position so the 60 Hz snapshot snap doesn't jerk the camera/world.
+        if (has_player_ && render_init_) {
+            const Position& p = registry_.get<Position>(player_);
+            const float dx = p.x - render_x_;
+            const float dy = p.y - render_y_;
+            if ((dx * dx) + (dy * dy) > 256.0f * 256.0f) {
+                render_x_ = p.x; // respawn/teleport: cut, don't glide across the map
+                render_y_ = p.y;
+            } else {
+                const float a = 1.0f - std::exp(-14.0f * dt); // ~100 ms settle
+                render_x_ += dx * a;
+                render_y_ += dy * a;
+            }
+        }
         anim_time_ += dt;           // shared clock for all animation clips
         time_since_snapshot_ += dt; // drives remote interpolation (alpha toward the newest snapshot)
         shake_amp_ *= std::exp(-9.0f * dt); // camera shake settles in ~0.3 s
@@ -222,9 +237,11 @@ private:
         float px_screen = static_cast<float>(engine_->width()) * 0.5f;
         float py_screen = static_cast<float>(engine_->height()) * 0.5f;
         if (has_player_) {
-            const Position& me = registry_.get<Position>(player_);
-            px_screen = me.x + draw_ctx_.ox;
-            py_screen = me.y + draw_ctx_.oy;
+            // Aim from the player's on-screen position, which is the SMOOTHED
+            // render position (where the sprite is drawn), not the raw predicted
+            // Position — otherwise aim would jitter with the correction.
+            px_screen = render_x_ + draw_ctx_.ox;
+            py_screen = render_y_ + draw_ctx_.oy;
         }
         float aim_x = mouse_x - px_screen;
         float aim_y = mouse_y - py_screen;
@@ -382,6 +399,7 @@ private:
 
             if (has_player_ && rec.id == my_net_id_) {
                 registry_.get<Position>(player_) = { .x = ex, .y = ey }; // snap correction
+                if (!render_init_) { render_x_ = ex; render_y_ = ey; render_init_ = true; }
                 if (rec.health < my_health_) {
                     shake_amp_ = 7.0f; // ouch: kick the camera
                     audio.play("hurt");
@@ -562,9 +580,10 @@ private:
             cam_x = draw_ctx_.cam_x;
             cam_y = draw_ctx_.cam_y;
         } else if (has_player_) {
-            const Position& me = registry_.get<Position>(player_);
-            cam_x = me.x;
-            cam_y = me.y;
+            // Smoothed local position (not the raw predicted Position) so a
+            // snapshot correction pans the world instead of jerking it.
+            cam_x = render_x_;
+            cam_y = render_y_;
         }
         if (draw_ctx_.cam_locked != cam_was_locked_) {
             cam_was_locked_ = draw_ctx_.cam_locked;
@@ -683,8 +702,7 @@ private:
         // toward the nearest player (archers at standoff).
         player_screen_.clear();
         if (has_player_) {
-            const Position& me = registry_.get<Position>(player_);
-            player_screen_.push_back({ ox + me.x, oy + me.y });
+            player_screen_.push_back({ ox + render_x_, oy + render_y_ });
         }
         registry_.view<Position, PrevPosition, Remote>().each(
           [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
@@ -729,17 +747,20 @@ private:
           });
 
         if (has_player_) {
-            const Position& p = registry_.get<Position>(player_);
-            if (overlays) { draw_object_hooks(ox + p.x, oy + p.y, script_state_for(my_net_id_)); }
+            // Draw at the smoothed render position (matches the camera), not the
+            // raw predicted Position — keeps the local player screen-centered.
+            const float rx = ox + render_x_;
+            const float ry = oy + render_y_;
+            if (overlays) { draw_object_hooks(rx, ry, script_state_for(my_net_id_)); }
             const float dash_frac = local_dash_.burst_remaining > 0.0f
                                       ? 1.0f - (local_dash_.burst_remaining / DASH_DURATION)
                                       : -1.0f;
-            draw_player(r, ox + p.x, oy + p.y,
+            draw_player(r, rx, ry,
                         PlayerAnim{ .dir_x = my_dir_x_, .dir_y = my_dir_y_, .moving = my_moving_,
                                     .firing = auth_firing_, .dash_frac = dash_frac,
                                     .death_start = my_death_start_ },
                         my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
-            if (overlays) { label(ox + p.x, oy + p.y, engine_->session().name()); }
+            if (overlays) { label(rx, ry, engine_->session().name()); }
         }
 
         // Teammates off-screen: an edge arrow pointing at each remote player,
@@ -1145,6 +1166,13 @@ private:
     std::uint8_t my_max_hearts_ = 3;   // max hearts (snapshot variant byte)
     std::uint16_t my_move_speed_ = 0;
     float my_scale_ = 1.0f; // kernel Scale off the wire (Lua-driven, e.g. Vitality)
+    // Local render smoothing: the camera + local sprite track this eased position
+    // instead of the raw predicted Position. A snapshot correction hard-snaps the
+    // authoritative Position (needed for the sim), and since the camera is glued
+    // to the player that snap would jerk the whole world; easing the RENDER pos
+    // pans it smoothly instead. Seeded to the first server position (render_init_).
+    float render_x_ = 0.0f, render_y_ = 0.0f;
+    bool render_init_ = false;
     // Local dash prediction (struct defaults = base constants; server is authoritative).
     Dash local_dash_{};
     // Applied-snapshot ring: the delta baselines we can decode against (the

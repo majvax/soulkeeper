@@ -43,20 +43,38 @@ public:
         const float w = static_cast<float>(engine_->width());
         const float h = static_cast<float>(engine_->height());
 
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(r, 0, 0, 0, 175);
-        const SDL_FRect full{ .x = 0, .y = 0, .w = w, .h = h };
-        SDL_RenderFillRect(r, &full);
-
         client::Gui& ui = engine_->gui();
+        ui.dim_overlay(); // scrim over the frozen world beneath us
+
         const float us = ui.scale();
-        ui.text_centered(w * 0.5f, (h * 0.5f) - (card_h * 0.5f) - (18.0f * us), "LEVEL UP",
+        const auto& choices = engine_->session().choices();
+        const std::size_t count = choices.size();
+        const float ch = card_rect(0, count, w, h).h; // card height for the title offset
+        ui.text_centered(w * 0.5f, (h * 0.5f) - (ch * 0.5f) - (14.0f * us), "LEVEL UP",
                          client::colors::accent, 12.0f * us);
 
         const mod::ContentRegistry& registry = engine_->mods().registry();
-        const auto& choices = engine_->session().choices();
-        for (std::size_t i = 0; i < choices.size(); ++i) {
-            const SDL_FRect rect = card_rect(i, choices.size(), w, h);
+
+        // Uniform text sizes across ALL cards (they're identical in size): shrink
+        // the base size to whatever fits the LONGEST label/value so every card
+        // reads at the same size — otherwise fit_px shrinks only the long ones and
+        // the row looks ragged.
+        const SDL_FRect ref = card_rect(0, count, w, h);
+        const float pad = ref.w * 0.08f;
+        const float inner_w = ref.w - (2.0f * pad);
+        float label_px = ref.h * 0.085f;
+        float value_px = ref.h * 0.075f;
+        const float sub_px = ref.h * 0.06f;
+        for (std::size_t i = 0; i < count; ++i) {
+            const mod::ContentDef* d = registry.by_wire(choices[i].id);
+            if (d == nullptr) { continue; }
+            label_px = std::min(label_px, ui.fit_px(d->label, inner_w, ref.h * 0.085f));
+            const std::string& v = d->value_text[static_cast<std::size_t>(choices[i].rarity)];
+            value_px = std::min(value_px, ui.fit_px(v, inner_w, ref.h * 0.075f));
+        }
+
+        for (std::size_t i = 0; i < count; ++i) {
+            const SDL_FRect rect = card_rect(i, count, w, h);
             const auto rarity = static_cast<mod::Rarity>(choices[i].rarity);
             const mod::ContentDef* def = registry.by_wire(choices[i].id);
             const SDL_Color col = rarity_color(rarity);
@@ -66,14 +84,14 @@ public:
                                    static_cast<Uint8>(col.b / 3), 245);
             SDL_RenderFillRect(r, &rect);
 
-            // Icon: centered near the top, drawn at its natural size (clamped) —
-            // never stretched to fill the card.
+            // Icon: centered in the upper third, its natural size clamped to a
+            // fraction of the card — never stretched to fill.
             if (def != nullptr && !def->sprite.empty()) {
                 if (SDL_Texture* icon = textures_.get(def->sprite)) {
                     float iw = 0.0f;
                     float ih = 0.0f;
                     SDL_GetTextureSize(icon, &iw, &ih);
-                    constexpr float max_icon = 96.0f;
+                    const float max_icon = rect.h * 0.34f; // proportional to the card
                     const float scale = std::min(1.0f, max_icon / std::max({ iw, ih, 1.0f }));
                     iw *= scale;
                     ih *= scale;
@@ -84,9 +102,10 @@ public:
                 }
             }
 
-            // Rarity border.
+            // Rarity border (thickness scales with the UI).
             SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
-            for (int b = 0; b < 3; ++b) {
+            const int thick = std::max(2, static_cast<int>(us));
+            for (int b = 0; b < thick; ++b) {
                 const SDL_FRect border{ .x = rect.x - static_cast<float>(b),
                                         .y = rect.y - static_cast<float>(b),
                                         .w = rect.w + static_cast<float>(2 * b),
@@ -94,20 +113,19 @@ public:
                 SDL_RenderRect(r, &border);
             }
 
+            // Uniform sizes (computed above) so every card matches.
             const client::GuiColor rcol{ col.r, col.g, col.b, 255 };
-            const float pad = 6.0f * us;
-            const float small = 6.0f * us; // sub-line size (native 8 reads too big on cards)
-            ui.text(rect.x + pad, rect.y + pad, std::to_string(i + 1), client::colors::dim, small);
+            ui.text(rect.x + pad, rect.y + pad, std::to_string(i + 1), client::colors::dim, sub_px);
             const std::string label = (def != nullptr) ? def->label : "?";
-            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.52f), label,
-                             client::colors::text, small);
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.54f), label,
+                             client::colors::text, label_px);
             const std::string value = (def != nullptr)
                                         ? def->value_text[static_cast<std::size_t>(rarity)]
                                         : std::string{};
-            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.52f) + ui.line_h(),
-                             value, rcol, small);
-            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + rect.h - (12.0f * us),
-                             rarity_name(rarity), rcol, small);
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.54f) + (label_px * 1.7f),
+                             value, rcol, value_px);
+            ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + rect.h - (sub_px * 1.8f),
+                             rarity_name(rarity), rcol, sub_px);
         }
 
         // Keep the stats panel visible + bright OVER our dim overlay — the
@@ -123,10 +141,6 @@ public:
     ~LevelUpScene() override = default;
 
 private:
-    static constexpr float card_w = 200.0f;
-    static constexpr float card_h = 280.0f;
-    static constexpr float card_gap = 30.0f;
-
     void pick(std::uint8_t index)
     {
         engine_->audio().play("select");
@@ -134,12 +148,22 @@ private:
         engine_->scenes().pop(); // close ourselves
     }
 
+    // Cards are sized as a fraction of the SCREEN, not a multiple of the UI
+    // scale: they're the focal element and must stay big + consistent at every
+    // resolution (a scale-multiple shrank them to ~half size on 720/900p, where
+    // scale() floors at 2). Portrait cards ~half the screen height; the width is
+    // capped so up to 5 cards + gaps always fit, then the height follows the
+    // aspect so the row never overflows.
     static SDL_FRect card_rect(std::size_t index, std::size_t count, float w, float h)
     {
         const auto n = static_cast<float>(std::max<std::size_t>(count, 1));
-        const float total = (n * card_w) + ((n - 1.0f) * card_gap);
-        const float x = ((w - total) * 0.5f) + (static_cast<float>(index) * (card_w + card_gap));
-        return { .x = x, .y = (h - card_h) * 0.5f, .w = card_w, .h = card_h };
+        const float gap = w * 0.02f;
+        float cw = std::min(h * 0.30f, ((w * 0.94f) - ((n - 1.0f) * gap)) / n);
+        const float chh = std::min(h * 0.52f, cw / 0.68f); // portrait aspect, height-capped
+        cw = chh * 0.68f;                                   // re-derive if height clamped
+        const float total = (n * cw) + ((n - 1.0f) * gap);
+        const float x = ((w - total) * 0.5f) + (static_cast<float>(index) * (cw + gap));
+        return { .x = x, .y = (h - chh) * 0.5f, .w = cw, .h = chh };
     }
 
     [[nodiscard]] int card_at(float mx, float my) const

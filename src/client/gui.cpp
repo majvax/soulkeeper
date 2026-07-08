@@ -207,6 +207,18 @@ void Gui::panel(float x, float y, float w, float h)
     draw_9slice("assets/ui/panel.png", x, y, w, h, PANEL_BORDER, PANEL_W, PANEL_H, 255);
 }
 
+void Gui::dim_overlay(float alpha)
+{
+    int w = 0;
+    int h = 0;
+    SDL_GetRenderOutputSize(renderer_, &w, &h);
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0,
+                           static_cast<Uint8>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f));
+    const SDL_FRect full{ .x = 0, .y = 0, .w = static_cast<float>(w), .h = static_cast<float>(h) };
+    SDL_RenderFillRect(renderer_, &full);
+}
+
 float Gui::text_width(std::string_view s, float px) const
 {
     if (font_failed_) { return 0.0f; }
@@ -258,6 +270,19 @@ void Gui::text(float x, float y, std::string_view s, GuiColor c, float px)
 void Gui::text_centered(float cx, float y, std::string_view s, GuiColor c, float px)
 {
     text(cx - (text_width(s, px) * 0.5f), y, s, c, px);
+}
+
+void Gui::text_clipped(float x, float y, std::string_view s, float max_w, GuiColor c, float px)
+{
+    if (max_w <= 0.0f || text_width(s, px) <= max_w) {
+        text(x, y, s, c, px);
+        return;
+    }
+    // Trim trailing chars, reserving room for a ".." ellipsis, until it fits.
+    const float ell = text_width("..", px);
+    std::string cut{ s };
+    while (!cut.empty() && text_width(cut, px) + ell > max_w) { cut.pop_back(); }
+    text(x, y, cut + "..", c, px);
 }
 
 bool Gui::button(std::string_view label, float x, float y, float w, float h, bool enabled)

@@ -332,6 +332,17 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
     send_state(peer_id);
     broadcast_roster();
 
+    // Reconnecting after the run already ended: the world is frozen (paused_,
+    // still nominally Playing), so without the verdict the returning player would
+    // land in a walkable-but-frozen world instead of the game-over screen.
+    // Re-send the cached GameOver so they see the same overlay as everyone else.
+    if (reconnected && run_over_) {
+        proto::ByteWriter over;
+        over.put(proto::MsgType::GameOver);
+        over.put(run_over_msg_);
+        server_.send(peer_id, over.bytes(), true);
+    }
+
     // Reconnecting mid-level-up: restore the menu and re-arm the obligation so
     // the returning player can pick (and the team isn't frozen waiting on them).
     // Re-send the SAME stored cards (no reroll abuse); only roll fresh if they
@@ -524,9 +535,10 @@ void GameServer::check_run_end()
     paused_ = true;
     std::uint16_t wave = 1;
     registry.view<GameStats>().each([&](core::Entity, const GameStats& stats) { wave = stats.wave; });
+    run_over_msg_ = proto::GameOverMsg{ .won = won, .final_wave = wave, .final_level = level_ };
     proto::ByteWriter writer;
     writer.put(proto::MsgType::GameOver);
-    writer.put(proto::GameOverMsg{ .won = won, .final_wave = wave, .final_level = level_ });
+    writer.put(run_over_msg_); // cached so reconnecters get the same verdict
     server_.broadcast(writer.bytes(), true);
     spdlog::info("run over: {} at wave {} (level {})", won != 0 ? "VICTORY" : "defeat", wave, level_);
 }

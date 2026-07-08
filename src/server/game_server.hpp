@@ -98,6 +98,7 @@ private:
     bool have_host_ = false;
     bool paused_ = false;
     bool run_over_ = false; // game-over screen up; waiting for host BackToLobby
+    proto::GameOverMsg run_over_msg_{}; // cached verdict, re-sent to reconnecters
     std::uint32_t tick_ = 0;
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;
