@@ -209,6 +209,68 @@ return function(mod, C)
         end
     end)
 
+    -------------------------------------------------------------------- magnet
+    -- Drops sit where the enemy died (spawn_entity gives no Velocity), so a
+    -- swarm leaves a field of orbs you have to walk over. The magnet sweeps any
+    -- orb/heart within MAGNET_RADIUS toward the nearest player, accelerating as
+    -- it closes, until the 45 px pickup grabs it. 60 Hz so the pulled motion
+    -- stays smooth under 60 Hz snapshots; the loop is cheap (<=4 players x the
+    -- few drops in range). Moves Position directly, like the enemy separation.
+    local MAGNET_RADIUS = 130 -- pull range (pickup collects at 45)
+    local MAGNET_SPEED = 240  -- base px/s; ramps up close to the player
+    local VACUUM_SPEED = 900  -- boss-kill sweep: fast pull from anywhere on the map
+    local vacuuming = false   -- set on boss kill; clears once no XP orbs remain
+
+    local function magnetize(pp, drop_comp, dt)
+        for drop in world:nearby(pp.x, pp.y, MAGNET_RADIUS, drop_comp) do
+            local op = drop:get(Position)
+            local dx, dy = pp.x - op.x, pp.y - op.y
+            local d = math.sqrt(dx * dx + dy * dy)
+            if d > 0.001 then
+                local speed = MAGNET_SPEED * (1.0 + (1.0 - d / MAGNET_RADIUS)) -- snappier up close
+                local step = math.min(d, speed * dt)                           -- never overshoot the player
+                op.x = op.x + dx / d * step
+                op.y = op.y + dy / d * step
+            end
+        end
+    end
+
+    -- Pull one drop toward its nearest LIVE player at `speed`, from any distance
+    -- (the boss-kill vacuum; the normal magnet only reaches MAGNET_RADIUS).
+    local function pull_to(drop, dt, speed)
+        local op = drop:get(Position)
+        local p, _, px, py = nearest_player(op.x, op.y)
+        if not p then return end -- everyone downed: leave it be
+        local dx, dy = px - op.x, py - op.y
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d > 0.001 then
+            local step = math.min(d, speed * dt)
+            op.x = op.x + dx / d * step
+            op.y = op.y + dy / d * step
+        end
+    end
+
+    mod:system("magnet", { phase = "pickup", rate = 60 }, function(dt)
+        -- Boss-kill reward: every XP orb rushes to its nearest player from
+        -- across the whole map, then the pickup grabs it — the XP STREAMS in
+        -- instead of teleporting. Runs until the field is empty so none strand.
+        if vacuuming then
+            local any = false
+            for orb in world:each(C.Xp, Position) do
+                any = true
+                pull_to(orb, dt, VACUUM_SPEED)
+            end
+            vacuuming = any
+        end
+        for p in world:each(Player, Position) do
+            if not p:has(Downed) then -- downed players can't collect (see pickups)
+                local pp = p:get(Position)
+                magnetize(pp, C.Xp, dt)
+                magnetize(pp, C.Heal, dt)
+            end
+        end
+    end)
+
     -------------------------------------------------------------------- pickup
     -- Collect XP orbs into the team pool; hearts only while hurt.
     -- 20 Hz: the 45 px pickup radius dwarfs per-50 ms player movement.
@@ -286,6 +348,9 @@ return function(mod, C)
                     for p in world:each(Player, Hearts) do
                         if p:has(Downed) then revive(p) end
                     end
+                    -- ...and sweeps every XP orb on the map (the bonus spray plus
+                    -- any leftovers) toward the players — the reward streams in.
+                    vacuuming = true
                     if world:wave() >= WIN_WAVE then world:end_game(true) end
                 end
                 if e:has(C.Boss) then
@@ -441,8 +506,14 @@ return function(mod, C)
 
 
 
-    -- every 50 waves, collect all
-    if world:wave() % 50 == 0 then
+    -- Every 50 waves, vacuum all drops into the team. This MUST live inside a
+    -- system: at module scope it ran at LOAD time and indexed the sim-only
+    -- `world` global, which is nil in the client's render VM (crash -> plugin
+    -- hash mismatch -> join denied). rate=2 — it only matters on a wave boundary.
+    -- (Dormant while WIN_WAVE=20 caps a run below 50; raise the cap or lower the
+    -- 50 to actually trigger it.)
+    mod:system("wave_vacuum", { phase = "pickup", rate = 2 }, function()
+        if world:wave() % 50 ~= 0 then return end
         for p in world:each(Player, Position) do
             local pp = p:get(Position)
             for orb in world:nearby(pp.x, pp.y, 1000, C.Xp) do
@@ -458,15 +529,11 @@ return function(mod, C)
                 end
             end
         end
-    end
+    end)
 
     mod:subscribe("on_boss_kill", function()
         for p in world:each(Player, Hearts) do
             if p:has(Downed) then revive(p) end
-        end
-        for obr in world:each(C.Xp) do
-            world:add_xp(math.tointeger(obr:get(C.Xp).value) or 0)
-            obr:destroy()
         end
     end)
 end
