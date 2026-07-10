@@ -51,11 +51,17 @@ This produces two executables in `bin/`:
 ./bin/client     # connect and play
 ```
 
-**Controls (current sandbox):**
+**Controls:**
 
-| Key   | Action          |
-|-------|-----------------|
-| `Esc` | Quit            |
+| Key            | Action                                  |
+|----------------|-----------------------------------------|
+| `Z Q S D`      | Move                                    |
+| Mouse          | Aim                                     |
+| Left click     | Fire (hold)                             |
+| `Left Shift`   | Dash                                    |
+| `Tab`          | Console (`/pause`, `/wave`, `/givexp`…) |
+| `Enter`        | Start the run (host, in the lobby)      |
+| `Esc`          | Quit                                    |
 
 The debug overlay shows live FPS, frame time, and entity count.
 

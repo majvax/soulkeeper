@@ -42,7 +42,7 @@ return function(mod, C)
         { value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png" })
 
     -- AOE Zone grows the damage aura (only offered once you own one).
-    mod:upgrade("aoezone", "AOE Zone", { 15, 25, 40, 60, 90 },
+    mod:upgrade("aoezone", "AOE Zone", { 5, 15, 25, 40, 60 },
         function(e, _, amount)
             local a = e:get(C.Aura)
             if a then
@@ -105,4 +105,74 @@ return function(mod, C)
             end
         end,
         { value_format = "+{} DASH" })
+
+    -- Split Shot: every trigger pull fans an extra bullet. Epic+, capped at 5.
+    mod:upgrade("multishot", "Split Shot", { 0, 0, 0, 1, 2 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.projectiles = math.min(5, math.floor(w.projectiles + amount)) end
+        end,
+        {
+            value_format = "+{} BULLET",
+            available = function(e) return e:get(C.Weapon).projectiles < 5 end,
+        })
+
+    -- Piercing Rounds: bullets punch through extra enemies. Rare+.
+    mod:upgrade("pierce", "Piercing Rounds", { 0, 0, 1, 1, 2 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.pierce = math.floor(w.pierce + amount) end
+        end,
+        { value_format = "+{} PIERCE" })
+
+    -- Ricochet: bullets re-aim at the next enemy after a hit. Epic+.
+    mod:upgrade("ricochet", "Ricochet", { 0, 0, 0, 1, 2 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.bounces = math.floor(w.bounces + amount) end
+        end,
+        { value_format = "+{} BOUNCE" })
+
+    -- Heavy Impact: harder knockback keeps the horde off you.
+    mod:upgrade("knockback", "Heavy Impact", { 4, 7, 11, 16, 24 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.knockback = w.knockback + amount end
+        end,
+        { value_format = "+{} KNOCKBACK" })
+
+    -- Magnet: drops fly to you from farther away.
+    mod:upgrade("magnet", "Magnet", { 20, 35, 55, 80, 120 },
+        function(e, _, amount)
+            if not e:has(C.Magnet) then e:set(C.Magnet, {}) end
+            local m = e:get(C.Magnet)
+            m.radius = m.radius + amount
+        end,
+        { value_format = "+{} PULL" })
+
+    -- Leech: kills roll a chance to restore a heart. Rare+ (hearts are gold).
+    mod:upgrade("leech", "Leech", { 0, 0, 0.02, 0.04, 0.07 },
+        function(e, _, amount)
+            if not e:has(C.Leech) then e:set(C.Leech, {}) end
+            local l = e:get(C.Leech)
+            l.chance = l.chance + amount
+        end,
+        {
+            value_text = function(amount)
+                return "+" .. math.floor(amount * 100 + 0.5) .. "% KILL HEAL"
+            end
+        })
+
+    -- Greed: XP orbs are worth more to YOU (per-player, it's your pickup).
+    mod:upgrade("greed", "Greed", { 0.05, 0.10, 0.15, 0.25, 0.40 },
+        function(e, _, amount)
+            if not e:has(C.Greed) then e:set(C.Greed, {}) end
+            local g = e:get(C.Greed)
+            g.mult = g.mult + amount
+        end,
+        {
+            value_text = function(amount)
+                return "+" .. math.floor(amount * 100 + 0.5) .. "% XP"
+            end
+        })
 end

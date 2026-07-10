@@ -63,6 +63,7 @@ private:
     void spawn_enemies(float dt);
     void refresh_spawn_weights(std::uint16_t wave); // re-evaluate enemy defs' weight(wave)
     void check_level_up();
+    void check_chest();   // ChestOpen mailbox -> one objects-only offer round for everyone
     void check_run_end(); // RunEnd mailbox -> freeze + GameOver broadcast
     void reset_run();     // host BackToLobby -> wipe the run, back to Lobby
     void start_level_up_for(std::uint64_t token); // roll fresh cards (Lua hook first), store, send
@@ -127,6 +128,11 @@ private:
     std::uint16_t level_ = 1;
     std::uint32_t xp_needed_ = 8;
     bool leveling_ = false;
+    // What the CURRENT offer round is (level-up vs boss chest): rolled into
+    // every LevelUp packet so the client can theme the pick scene, and passed
+    // to mod:level_offer as its context ("level"/"chest"). Round-wide, so a
+    // mid-round reconnect re-sends the right flavor.
+    proto::OfferFlavor offer_flavor_ = proto::OfferFlavor::Level;
     // Keyed by session TOKEN (stable across reconnects), NOT peer_id (which
     // changes on every reconnect) — otherwise a reconnecting player is orphaned
     // in pending_ and the level-up never completes (world freezes).

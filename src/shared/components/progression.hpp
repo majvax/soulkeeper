@@ -32,3 +32,11 @@ struct RunEnd
 struct WaveHold
 {
 };
+
+// One-shot sim->server mailbox (RunEnd twin): `world:open_chest()` spawns an
+// entity with this; the server consumes it after the step and runs a CHEST
+// offer round for every player — the level-up machinery with flavor = Chest
+// (the mod rolls it objects-only). Not networked, not a prelude handle.
+struct ChestOpen
+{
+};

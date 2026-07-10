@@ -112,6 +112,8 @@ public:
     {
         return choices_; // 1..max_level_up_choices cards; the GAME picks the count
     }
+    // True while the current offer round is a boss chest (themes the scene).
+    [[nodiscard]] bool offer_is_chest() const noexcept { return offer_is_chest_; }
 
     [[nodiscard]] std::string name_of(std::uint32_t net_id) const
     {
@@ -229,6 +231,8 @@ private:
             read_roster(reader);
         } else if (type == proto::MsgType::LevelUp) {
             choices_.clear();
+            const auto flavor = reader.get<std::uint8_t>(); // level-up vs boss chest
+            offer_is_chest_ = flavor && *flavor == static_cast<std::uint8_t>(proto::OfferFlavor::Chest);
             const auto count = reader.get<std::uint8_t>();
             const std::uint8_t n = count ? std::min<std::uint8_t>(*count, proto::max_level_up_choices) : 0;
             for (std::uint8_t i = 0; i < n; ++i) {
@@ -283,6 +287,7 @@ private:
     std::optional<std::vector<std::byte>> latest_snapshot_;
     std::uint32_t ack_tick_ = 0; // newest applied snapshot tick (0 = none)
     bool leveling_ = false;
+    bool offer_is_chest_ = false; // current offer round's flavor (scene theme)
     bool game_over_ = false;         // run ended; cleared when Lobby state arrives
     proto::GameOverMsg go_stats_{}; // valid while game_over_
     std::vector<proto::LevelUpChoice> choices_;

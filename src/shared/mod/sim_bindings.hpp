@@ -60,11 +60,14 @@ void install_script_systems(LuaHost& host, shared::World& world);
 // -> acquire(entity). Callback errors are logged, never fatal.
 void run_apply(const ContentDef& def, EntityHandle handle, Rarity rarity);
 
-// Roll the level-up offer through the mods' hook (mod:level_offer): validates
+// Roll an offer through the mods' hook (mod:level_offer): validates
 // ids/rarities against the registry and clamps to max_level_up_choices.
+// `context` is forwarded as the hook's 3rd arg: "level" for XP level-ups,
+// "chest" for boss-chest rounds (the mod filters the pool by it).
 // Empty result = no hook, hook error, or nothing valid -> caller falls back
 // to the engine's built-in roll.
 [[nodiscard]] std::vector<proto::LevelUpChoice> run_level_offer(LuaHost& host, core::Registry& reg,
-                                                                core::Entity player, int level);
+                                                                core::Entity player, int level,
+                                                                const char* context = "level");
 
 } // namespace mod

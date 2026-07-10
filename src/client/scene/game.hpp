@@ -486,7 +486,15 @@ private:
                 }
                 rem.health = rec.health;
                 rem.scale = proto::dequantize_scale(rec.scale_q);
-                if (rec.fx != 0 && rem.fx == 0) { rem.fx_start = anim_time_; } // attack begins
+                // Any fx VALUE change restarts the clip clock (telegraph -> charge
+                // must replay from frame 0, not inherit the wind-up's time).
+                if (rec.fx != rem.fx && rec.fx != 0) {
+                    rem.fx_start = anim_time_;
+                    // The arena boss winding up or striking rattles the camera.
+                    if (arena_active_ && rec.id == arena_net_id_) {
+                        shake_amp_ = std::max(shake_amp_, 5.0f);
+                    }
+                }
                 rem.fx = rec.fx;
                 if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
                     // Downed players stay in the snapshot with 0 hearts.
@@ -512,7 +520,8 @@ private:
                     && poofs_.size() < 48) {
                     const Position& pos = registry_.get<Position>(it->second);
                     const bool pickup = rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)
-                                     || rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart);
+                                     || rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)
+                                     || rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Chest);
                     float arch_scale = 1.0f; // size the burst to what vanished (boss >> bandit)
                     if (const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant)) {
                         arch_scale = def->scale;
@@ -522,7 +531,8 @@ private:
                                        .pickup = pickup });
                     if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
                         audio.play_at("pickup", pos.x, pos.y, lis_x, lis_y);
-                    } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
+                    } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)
+                               || rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Chest)) {
                         audio.play_at("heart", pos.x, pos.y, lis_x, lis_y);
                     } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
                         audio.play_at("death", pos.x, pos.y, lis_x, lis_y);
@@ -740,6 +750,8 @@ private:
                   draw_xp_orb(r, x, y);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
                   draw_heart_pickup(r, x, y);
+              } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Chest)) {
+                  draw_chest(r, x, y);
               } else {
                   draw_entity(r, x, y, nullptr, SDL_Color{ 220, 80, 80, 255 });
                   health_bar(r, x, y, rem.health);
@@ -798,6 +810,10 @@ private:
                               col, name.c_str());
               });
         }
+
+        // Boss fight: a big top-center health bar for the arena boss, drawn
+        // after the world so nothing walks over it.
+        if (overlays && arena_active_) { draw_boss_bar(r, ww); }
 
         // Plugin HUD hooks (mod:hud) LAST so the stats panel is topmost — the
         // world (enemies, orbs) never draws over it. When we're top, draw it
@@ -871,6 +887,9 @@ private:
         } else if (variant == 2) {
             SDL_SetRenderDrawColor(r, 255, 170, 60, 255); // crit: bigger + orange
             size = 11.0f;
+        } else if (variant == 3) {
+            SDL_SetRenderDrawColor(r, 220, 50, 90, 255); // heavy hostile (Cyclop)
+            size = 14.0f;
         } else {
             SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
         }
@@ -972,6 +991,24 @@ private:
                             return;
                         }
                     }
+                    // Charging (fx=2): loop the rush cycle for as long as Lua
+                    // holds the state. Telegraph (fx=3): play the wind-up once
+                    // and freeze on the strike pose — the "dodge now" signal.
+                    if (rem.fx == 2 && rem.fx_start >= 0.0f) {
+                        if (const client::AnimClip* run = pack->charge()) {
+                            draw_pack_clip(r, *pack, *run, cx, cy, sprite_size * scale,
+                                           anim_time_ - rem.fx_start, face < 0, tint, 18.0f);
+                            return;
+                        }
+                    }
+                    if (rem.fx == 3 && rem.fx_start >= 0.0f) {
+                        if (const client::AnimClip* pre = pack->prepare()) {
+                            draw_pack_clip(r, *pack, *pre, cx, cy, sprite_size * scale,
+                                           anim_time_ - rem.fx_start, face < 0, tint, 18.0f,
+                                           /*once=*/true);
+                            return;
+                        }
+                    }
                     if (const client::AnimClip* clip = pick_clip(*pack, rem.moving)) {
                         draw_pack_clip(r, *pack, *clip, cx, cy, sprite_size * scale,
                                        anim_time_ + phase_offset(rem.net_id), face < 0, tint);
@@ -1067,6 +1104,31 @@ private:
         SDL_RenderFillRect(r, &rect);
     }
 
+    // Boss chest: a gold pixel box (no art asset yet) with a slow glow pulse —
+    // it has to read as "walk over me" from across the arena.
+    void draw_chest(SDL_Renderer* r, float cx, float cy)
+    {
+        const float pulse = 0.5f + (0.5f * std::sin(anim_time_ * 3.0f));
+        const float w = 26.0f;
+        const float h = 18.0f;
+        // Glow halo (pulsing), then body, lid band and a dark keyhole.
+        SDL_SetRenderDrawColor(r, 255, 205, 110, static_cast<Uint8>(40.0f + (50.0f * pulse)));
+        const SDL_FRect halo{ .x = cx - (w * 0.5f) - 5.0f, .y = cy - (h * 0.5f) - 5.0f,
+                              .w = w + 10.0f, .h = h + 10.0f };
+        SDL_RenderFillRect(r, &halo);
+        SDL_SetRenderDrawColor(r, 172, 108, 48, 255);
+        const SDL_FRect body{ .x = cx - (w * 0.5f), .y = cy - (h * 0.5f), .w = w, .h = h };
+        SDL_RenderFillRect(r, &body);
+        SDL_SetRenderDrawColor(r, 255, 205, 110, 255);
+        const SDL_FRect lid{ .x = body.x, .y = body.y, .w = w, .h = 5.0f };
+        SDL_RenderFillRect(r, &lid);
+        const SDL_FRect band{ .x = cx - 2.0f, .y = body.y, .w = 4.0f, .h = h };
+        SDL_RenderFillRect(r, &band);
+        SDL_SetRenderDrawColor(r, 60, 36, 16, 255);
+        const SDL_FRect keyhole{ .x = cx - 1.5f, .y = cy - 1.0f, .w = 3.0f, .h = 5.0f };
+        SDL_RenderFillRect(r, &keyhole);
+    }
+
     void draw_xp_orb(SDL_Renderer* r, float cx, float cy)
     {
         if (SDL_Texture* coin = textures_.get(asset_coin)) {
@@ -1091,6 +1153,38 @@ private:
     {
         const client::DrawView view{ .x = cx, .y = cy, .scripts = &engine_->mods().scripts(), .comps = comps };
         client::run_object_draws(engine_->mods(), ctx_obj_, view);
+    }
+
+    // Top-center boss health bar while an arena fight is live: name above a
+    // wide red bar (SDL rects like health_bar; the gui text draws after the
+    // world, so both sit on top of it).
+    void draw_boss_bar(SDL_Renderer* r, float ww)
+    {
+        const auto it = remotes_.find(arena_net_id_);
+        if (it == remotes_.end()) { return; }
+        const Remote& rem = registry_.get<Remote>(it->second);
+        const float frac = static_cast<float>(rem.health) / 255.0f;
+        client::Gui& ui = engine_->gui();
+        const float bar_w = std::min(ww * 0.42f, 620.0f);
+        const float bar_h = 6.0f * ui.scale();
+        const float x = (ww - bar_w) * 0.5f;
+        const float name_px = 7.0f * ui.scale();
+        const float y = 16.0f + name_px + 8.0f;
+        std::string shout = boss_banner_;
+        std::transform(shout.begin(), shout.end(), shout.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        ui.text_centered(ww * 0.5f, 16.0f, shout, client::GuiColor{ 255, 205, 110, 255 }, name_px);
+        SDL_SetRenderDrawColor(r, 20, 16, 16, 235);
+        const SDL_FRect back{ .x = x - 3.0f, .y = y - 3.0f, .w = bar_w + 6.0f, .h = bar_h + 6.0f };
+        SDL_RenderFillRect(r, &back);
+        SDL_SetRenderDrawColor(r, 60, 30, 30, 255);
+        const SDL_FRect track{ .x = x, .y = y, .w = bar_w, .h = bar_h };
+        SDL_RenderFillRect(r, &track);
+        SDL_SetRenderDrawColor(r, 210, 55, 55, 255);
+        const SDL_FRect fill{ .x = x, .y = y, .w = bar_w * frac, .h = bar_h };
+        SDL_RenderFillRect(r, &fill);
+        SDL_SetRenderDrawColor(r, 255, 205, 110, 255);
+        SDL_RenderRect(r, &back);
     }
 
     static void health_bar(SDL_Renderer* r, float cx, float cy, std::uint8_t health)

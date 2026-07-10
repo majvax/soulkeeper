@@ -50,8 +50,11 @@ public:
         const auto& choices = engine_->session().choices();
         const std::size_t count = choices.size();
         const float ch = card_rect(0, count, w, h).h; // card height for the title offset
-        ui.text_centered(w * 0.5f, (h * 0.5f) - (ch * 0.5f) - (14.0f * us), "LEVEL UP",
-                         client::colors::accent, 12.0f * us);
+        const bool chest = engine_->session().offer_is_chest();
+        ui.text_centered(w * 0.5f, (h * 0.5f) - (ch * 0.5f) - (14.0f * us),
+                         chest ? "TREASURE" : "LEVEL UP",
+                         chest ? client::GuiColor{ 255, 205, 110, 255 } : client::colors::accent,
+                         12.0f * us);
 
         const mod::ContentRegistry& registry = engine_->mods().registry();
 

@@ -1,0 +1,452 @@
+// Standalone SDL-free sim test: boots the exact server pipeline (kernel world
+// + mods/core Lua) headless, spawns scenarios, steps at 120 Hz and asserts on
+// world state THROUGH the sim VM (import("core") reaches the mod's handles).
+//
+// Build (from the repo root, after a normal cmake build supplied the deps):
+//   g++ -std=c++26 -O1 -I src -I build/_deps/sol2-src/include -I build/_deps/lua-src \
+//       tests/sim_test.cpp src/shared/mod/lua_host.cpp src/shared/mod/registry.cpp \
+//       src/shared/mod/sim_bindings.cpp build/liblua.a -o /tmp/sim_test
+// Run from the repo root (load_dir("mods") is a relative path).
+#include "shared/factory/player.hpp"
+#include "shared/mod/lua_host.hpp"
+#include "shared/mod/sim_bindings.hpp"
+#include "shared/sim/game_world.hpp"
+#include <cstdio>
+
+namespace {
+int failures = 0;
+
+void check(bool ok, const char* what)
+{
+    std::printf("%s  %s\n", ok ? "PASS" : "FAIL", what);
+    if (!ok) { ++failures; }
+}
+} // namespace
+
+int main()
+{
+    // LuaHost must OUTLIVE the World: the script systems registered into the
+    // World's pipeline hold sol references that unref on destruction.
+    mod::LuaHost host;
+    shared::World world = shared::make_game_world();
+    mod::install_sim_bindings(host, world.registry());
+    host.load_dir("mods");
+    mod::install_script_systems(host, world);
+    if (host.enemies().count() == 0) {
+        std::printf("FAIL  mods/core did not load (run from the repo root)\n");
+        return 1;
+    }
+
+    const core::Entity player = create_player(world.registry(), 0, 0);
+    host.events().emit("on_player_spawn",
+                       mod::EntityHandle{ .reg = &world.registry(), .entity = player });
+
+    sol::state& lua = host.lua();
+    const auto step = [&](float seconds) {
+        const int ticks = static_cast<int>(seconds * 120.0f);
+        for (int i = 0; i < ticks; ++i) { world.step(1.0f / 120.0f); }
+    };
+    const auto lua_bool = [&](const char* code) {
+        return lua.script(code).get<bool>();
+    };
+    // Between scenarios: wipe enemies/bullets/drops, refill the player.
+    const auto reset = [&] {
+        lua.script(R"(
+            local C = import("core")
+            for e in world:each(Enemy) do e:destroy() end
+            for e in world:each(C.Bullet) do e:destroy() end
+            for e in world:each(C.Xp) do e:destroy() end
+            for e in world:each(C.Heal) do e:destroy() end
+            for e in world:each(C.Chest) do e:destroy() end
+            for p in world:each(Player, Hearts) do
+                p:get(Hearts).current = p:get(Hearts).max
+                local a = p:get(AimState)
+                a.firing = 0
+                if p:has(C.IFrames) then p:remove(C.IFrames) end
+                if p:has(Downed) then p:remove(Downed) end -- downed = no target for enemies
+                if p:has(C.Revive) then p:remove(C.Revive) end
+                -- Re-park at the origin with zero velocity: nothing feeds input
+                -- here, so leftover velocity (e.g. a faked dash) drifts forever.
+                local v = p:get(Velocity)
+                v.dx, v.dy = 0, 0
+                local pos = p:get(Position)
+                pos.x, pos.y = 0, 0
+                local d = p:get(Dash)
+                d.burst_remaining = 0
+            end
+        )");
+        step(0.1f);
+    };
+
+    // --- Scenario 1: bomber arms near the player, then detonates -----------
+    lua.script(R"(spawn_enemy(40, 0, "core:bomber"))");
+    step(0.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.Fuse) do return true end
+        return false
+    )"), "bomber lights its fuse near a player");
+    step(1.5f);
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "bomber blast consumed it (death system ran)");
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current < p:get(Hearts).max
+        end
+    )"), "blast bullets hurt the player");
+    reset();
+
+    // --- Scenario 2: berserker telegraphs then lunges -----------------------
+    lua.script(R"(spawn_enemy(150, 0, "core:berserker"))");
+    bool telegraphed = false;
+    for (int i = 0; i < 30 && !telegraphed; ++i) { // watch up to 3 s in 0.1 slices
+        step(0.1f);
+        telegraphed = lua_bool(R"(
+            local C = import("core")
+            for e in world:each(C.Lunge) do
+                if e:get(C.Lunge).winding > 0 then return true end
+            end
+            return false
+        )");
+    }
+    check(telegraphed, "berserker enters its wind-up telegraph");
+    step(3.0f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current < p:get(Hearts).max
+        end
+    )"), "berserker lunge reached and hurt the player");
+    reset();
+
+    // --- Scenario 3: ranged wind-up then shot -------------------------------
+    lua.script(R"(spawn_enemy(200, 0, "core:slinger"))");
+    step(1.2f); // 1.0 s spawn grace + into the 0.4 s wind-up
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.Ranged) do
+            return e:get(C.Ranged).winding > 0 or e:get(C.Ranged).timer > 1.0
+        end
+        return false
+    )"), "slinger telegraphs (or already fired and cools down)");
+    step(1.0f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current < p:get(Hearts).max
+        end
+    )"), "slinger arrow hit the player");
+    reset();
+
+    // --- Scenario 4: Ent fires a 3-bullet fan --------------------------------
+    lua.script(R"(spawn_enemy(250, 0, "core:ent"))");
+    int volley = 0;
+    for (int i = 0; i < 40 && volley == 0; ++i) { // sample mid-flight
+        step(0.05f);
+        volley = static_cast<int>(lua.script(R"(
+            local C = import("core")
+            local n = 0
+            for b in world:each(C.Bullet) do
+                if b:get(C.Bullet).hostile == 1 then n = n + 1 end
+            end
+            return n
+        )").get<double>());
+    }
+    check(volley == 3, "ent volley is a 3-bullet fan");
+    reset();
+
+    // --- Scenario 5: elites always drop a heart ------------------------------
+    lua.script(R"(
+        local e = spawn_enemy(300, 300, "core:bandit_elite")
+        e:get(Health).current = 0
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for h in world:each(C.Heal) do return true end
+        return false
+    )"), "elite death drops a guaranteed heart");
+    reset();
+
+    // --- Scenario 7: Rhino Charger telegraphs, charges, connects ------------
+    lua.script(R"(spawn_enemy(400, 0, "core:rhino_charger"))");
+    step(5.0f); // grace + approach + windup + a charge or two
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current < p:get(Hearts).max
+        end
+    )"), "rhino charger's lunge reached the player");
+    reset();
+
+    // --- Scenario 8: Game Master summons adds and blinks away ---------------
+    lua.script(R"(spawn_enemy(100, 0, "core:gamemaster"))");
+    step(3.5f); // first summon at ~2.5 s; the player stands inside blink range
+    check(lua_bool(R"(
+        local n = 0
+        for e in world:each(Enemy) do n = n + 1 end
+        return n > 1
+    )"), "game master summoned adds");
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.Summon, Position) do
+            local p = e:get(Position)
+            return (p.x * p.x + p.y * p.y) > 200 * 200 -- blinked away from (100,0)
+        end
+        return false
+    )"), "game master blinked away from the player");
+    reset();
+
+    // --- Scenario 9: Frog King rages below half health ----------------------
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(900, 900, "core:boss")
+        boss:get(Health).current = boss:get(Health).max * 0.4
+    )");
+    step(0.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.Nova) do
+            return e:get(C.Nova).phase == 1
+        end
+        return false
+    )"), "frog king entered rage phase below 50% health");
+    lua.script(R"(
+        local C = import("core")
+        for e in world:each(C.Nova, Health) do
+            e:get(Health).current = 0
+        end
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for h in world:each(C.Heal) do return true end
+        return false
+    )"), "boss death paid the guaranteed drops (C.Boss path)");
+    reset();
+
+    // --- Scenario 10: Split Shot fans, Piercing Rounds punch through --------
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(80, 0, "core:bandit")
+        spawn_enemy(140, 0, "core:bandit")
+        for p in world:each(Player, C.Weapon, AimState) do
+            local w = p:get(C.Weapon)
+            w.projectiles, w.pierce, w.damage = 3, 1, 100
+            local a = p:get(AimState)
+            a.dx, a.dy, a.firing = 1, 0, 1
+        end
+    )");
+    int fan = 0;
+    for (int i = 0; i < 8 && fan < 3; ++i) { // catch the first volley mid-flight
+        step(1.0f / 60.0f);
+        fan = static_cast<int>(lua.script(R"(
+            local C = import("core")
+            local n = 0
+            for b in world:each(C.Bullet) do
+                if b:get(C.Bullet).hostile == 0 then n = n + 1 end
+            end
+            return n
+        )").get<double>());
+    }
+    check(fan >= 3, "split shot fans 3 bullets per pull");
+    step(1.5f);
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "one piercing bullet killed both bandits in line");
+    reset();
+
+    // --- Scenario 11: Leech heals on bullet kills ----------------------------
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(100, 0, "core:bandit")
+        for p in world:each(Player, C.Weapon, AimState, Hearts) do
+            p:set(C.Leech, { chance = 1.0 })
+            p:get(C.Weapon).damage = 100
+            p:get(Hearts).current = 1
+            local a = p:get(AimState)
+            a.dx, a.dy, a.firing = 1, 0, 1
+        end
+    )");
+    step(1.5f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current >= 2
+        end
+    )"), "leech kill restored a heart");
+    reset();
+
+    // --- Scenario 12: Orbiting Blades shred what stands on the ring ---------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:set(C.Orbit, {}) end
+        local e = spawn_enemy(70, 0, "core:bandit") -- parked ON the blade ring
+        e:get(Speed).value = 0
+    )");
+    step(3.0f); // 3 blades at 2.5 rad/s: a pass every 0.84 s melts 20 hp at 70 dps
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "orbiting blades killed the target on the ring");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:remove(C.Orbit) end
+    )");
+    reset();
+
+    // --- Scenario 13: Spiked Armor reflects contact hits ---------------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:set(C.Thorns, {}) end
+        spawn_enemy(30, 0, "core:bandit")
+    )");
+    step(1.0f); // touch lands -> 20 reflect kills the 20 hp bandit
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "spiked armor killed the biter");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:remove(C.Thorns) end
+    )");
+    reset();
+
+    // --- Scenario 14: Phoenix Feather cheats death ---------------------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, Hearts) do
+            p:set(C.Phoenix, {})
+            p:get(Hearts).current = 0
+        end
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for p in world:each(Player, Hearts) do
+            return not p:has(Downed) and p:get(Hearts).current >= 2
+                   and not p:has(C.Phoenix)
+        end
+    )"), "phoenix feather consumed itself instead of a down");
+    reset();
+
+    // --- Scenario 15: Adrenaline Core arms after a dash ----------------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, Dash) do
+            p:set(C.Overcharge, {})
+            p:get(Dash).burst_remaining = 0.1 -- mid-burst; it ends next ticks
+        end
+    )");
+    step(0.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for p in world:each(C.Overcharge) do
+            return p:get(C.Overcharge).remaining > 0
+        end
+        return false
+    )"), "adrenaline core armed when the dash burst ended");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:remove(C.Overcharge) end
+    )");
+    reset();
+
+    // --- Scenario 16: boss death drops a chest; walking on it opens it ------
+    lua.script(R"(
+        local e = spawn_enemy(30, 0, "core:miniboss")
+        e:get(Health).current = 0
+    )");
+    step(0.5f); // death drops the chest ~38 px away; pickups (20 Hz) grab it
+    int chest_notes = 0;
+    world.registry().view<ChestOpen>().each([&](core::Entity, const ChestOpen&) { ++chest_notes; });
+    check(chest_notes > 0, "opening the chest filed a ChestOpen round request");
+    check(lua_bool(R"(
+        local C = import("core")
+        for c in world:each(C.Chest) do return false end
+        return true
+    )"), "the chest was consumed on pickup");
+    world.registry().view<ChestOpen>().each(
+      [&](core::Entity e, const ChestOpen&) { world.registry().destroy(e); });
+    reset();
+
+    // --- Scenario 17: offer filtering — levels roll upgrades, chests objects -
+    {
+        const auto kind_of = [&](std::uint8_t wire_id) {
+            for (const mod::ContentDef& d : host.registry().defs()) {
+                if (d.wire_id == wire_id) { return d.kind; }
+            }
+            return mod::ContentKind::StatUpgrade;
+        };
+        bool level_clean = true;
+        for (const proto::LevelUpChoice& c :
+             mod::run_level_offer(host, world.registry(), player, 1, "level")) {
+            if (kind_of(c.id) == mod::ContentKind::Object) { level_clean = false; }
+        }
+        check(level_clean, "level-up offers contain no objects");
+        const auto chest_offer = mod::run_level_offer(host, world.registry(), player, 1, "chest");
+        bool chest_clean = !chest_offer.empty();
+        for (const proto::LevelUpChoice& c : chest_offer) {
+            if (kind_of(c.id) != mod::ContentKind::Object) { chest_clean = false; }
+        }
+        check(chest_clean, "chest offers contain only objects");
+    }
+
+    // --- Scenario 18: Frog Prince leaps and slams ----------------------------
+    lua.script(R"(spawn_enemy(400, 0, "core:frog_prince"))");
+    step(6.0f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            return p:get(Hearts).current < p:get(Hearts).max
+        end
+    )"), "frog prince's leap reached the player");
+    reset();
+
+    // --- Scenario 19: Bomb Lord carpets the ground with kegs ----------------
+    // Spawned raw, its nova rect defaults to center (0,0) — kegs land around
+    // the origin, which is exactly where the test player idles.
+    lua.script(R"(spawn_enemy(700, 0, "core:bomb_lord"))");
+    step(6.0f);
+    check(lua_bool(R"(
+        local n = 0
+        for e in world:each(Enemy) do n = n + 1 end
+        return n > 3
+    )"), "bomb lord planted powder kegs");
+    reset();
+
+    // --- Scenario 20: Vampire Lord regenerates -------------------------------
+    lua.script(R"(
+        local C = import("core")
+        local v = spawn_enemy(900, 900, "core:vampire_lord")
+        v:get(Health).current = v:get(Health).max * 0.5
+    )");
+    step(1.0f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.Regen, Health) do
+            return e:get(Health).current > e:get(Health).max * 0.5
+        end
+        return false
+    )"), "vampire lord regenerated while unharmed");
+    reset();
+
+    // --- Scenario 6: the player still shoots and kills ----------------------
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(120, 0, "core:bandit")
+        for p in world:each(Player, C.Weapon, AimState) do
+            local w = p:get(C.Weapon)
+            w.projectiles, w.pierce, w.damage = 1, 0, 10 -- back to the base loadout
+            if p:has(C.Leech) then p:remove(C.Leech) end
+            local a = p:get(AimState)
+            a.dx, a.dy, a.firing = 1, 0, 1
+        end
+    )");
+    step(2.0f);
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "player bullets still kill (shoot pipeline intact)");
+
+    std::printf(failures == 0 ? "ALL PASS\n" : "%d FAILURE(S)\n", failures);
+    return failures == 0 ? 0 : 1;
+}

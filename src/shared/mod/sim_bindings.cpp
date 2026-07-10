@@ -442,6 +442,13 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                       const core::Entity note = reg->create();
                                       reg->assign(note, RunEnd{ .won = static_cast<std::uint8_t>(won ? 1 : 0) });
                                   },
+                                  // A boss chest was opened: ask the server to run one
+                                  // offer round for EVERY player (level-up machinery,
+                                  // flavor = Chest; the mod rolls it objects-only).
+                                  "open_chest", [reg](ScriptWorld&) {
+                                      const core::Entity note = reg->create();
+                                      reg->assign(note, ChestOpen{});
+                                  },
                                   // Content offerable to `player` right now (availability +
                                   // object-ownership already filtered): the FACTS a Lua
                                   // level-offer roll works from. Each entry:
@@ -586,13 +593,15 @@ bool run_available(const ContentDef& def, EntityHandle handle)
 }
 
 std::vector<proto::LevelUpChoice> run_level_offer(LuaHost& host, core::Registry& reg,
-                                                  core::Entity player, int level)
+                                                  core::Entity player, int level,
+                                                  const char* context)
 {
     std::vector<proto::LevelUpChoice> out;
     const sol::protected_function& hook = host.state().level_offer;
     if (!hook.valid()) { return out; }
 
-    sol::protected_function_result res = hook(EntityHandle{ .reg = &reg, .entity = player }, level);
+    sol::protected_function_result res =
+      hook(EntityHandle{ .reg = &reg, .entity = player }, level, context);
     if (!res.valid()) {
         const sol::error err = res;
         std::fprintf(stderr, "[mod] level_offer error: %s\n", err.what());

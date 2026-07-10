@@ -125,6 +125,7 @@ void GameServer::update(core::FixedTimestep& timestep)
             emit_downed_transitions();
             check_level_up();
             check_run_end(); // mods may have called world:end_game this step
+            check_chest();   // ...or opened a boss chest (skipped once run_over_)
         }
         if (tick_ % proto::snapshot_every_n_ticks == 0) { stream_snapshots(); }
         ++tick_;
@@ -543,6 +544,34 @@ void GameServer::check_run_end()
     spdlog::info("run over: {} at wave {} (level {})", won != 0 ? "VICTORY" : "defeat", wave, level_);
 }
 
+// A boss chest was opened (world:open_chest -> a ChestOpen mailbox entity):
+// run ONE offer round for every connected player through the level-up
+// machinery, flavored Chest — the mod rolls it objects-only, the client shows
+// the treasure title. level_/xp are untouched; multiple notes in one step
+// (overlapping chests) still collapse into a single round.
+void GameServer::check_chest()
+{
+    if (run_over_) { return; } // the winning kill's chest dies with the run
+    core::Registry& registry = world_.registry();
+    std::vector<core::Entity> notes;
+    registry.view<ChestOpen>().each([&](core::Entity e, const ChestOpen&) { notes.push_back(e); });
+    if (notes.empty()) { return; }
+    for (const core::Entity e : notes) { registry.destroy(e); }
+
+    leveling_ = true;
+    offer_flavor_ = proto::OfferFlavor::Chest;
+    pending_.clear();
+    offered_.clear();
+    chosen_.clear();
+    for (const auto& [token, session] : sessions_) {
+        if (!session.connected) { continue; }
+        start_level_up_for(token);
+        pending_.insert(token);
+    }
+    if (pending_.empty()) { leveling_ = false; } // nobody to choose
+    spdlog::info("boss chest opened -> object pick for {} player(s)", pending_.size());
+}
+
 // Full reset for another run: wipe every world entity, rebuild each session's
 // player through the same path as a fresh join (loadout via on_player_spawn),
 // clear all progression/spawn/snapshot state, and drop everyone in the Lobby.
@@ -776,6 +805,7 @@ void GameServer::check_level_up()
     // Freeze the world and ask every connected player to choose an upgrade.
     // Keyed by token so a mid-level-up reconnect (new peer_id) still resolves.
     leveling_ = true;
+    offer_flavor_ = proto::OfferFlavor::Level;
     pending_.clear();
     offered_.clear();
     chosen_.clear();
@@ -796,8 +826,9 @@ void GameServer::start_level_up_for(std::uint64_t token)
     // the fallback. Rolled ONCE per (player, level): reconnects re-SEND the
     // stored offer (send_level_up), they never re-roll.
     const core::Entity player = sessions_[token].entity;
+    const char* context = offer_flavor_ == proto::OfferFlavor::Chest ? "chest" : "level";
     std::vector<proto::LevelUpChoice> offer =
-      mod::run_level_offer(lua_host_, world_.registry(), player, static_cast<int>(level_));
+      mod::run_level_offer(lua_host_, world_.registry(), player, static_cast<int>(level_), context);
     if (offer.empty()) { offer = roll_upgrades(player); }
     offered_[token] = std::move(offer);
     send_level_up(token);
@@ -811,6 +842,7 @@ void GameServer::send_level_up(std::uint64_t token)
     if (it == offered_.end()) { return; }
     proto::ByteWriter writer;
     writer.put(proto::MsgType::LevelUp);
+    writer.put(static_cast<std::uint8_t>(offer_flavor_)); // level-up vs boss chest (scene theme)
     writer.put(static_cast<std::uint8_t>(it->second.size()));
     for (const proto::LevelUpChoice& choice : it->second) { writer.put(choice); }
     server_.send(sessions_[token].peer_id, writer.bytes(), true);

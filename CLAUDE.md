@@ -135,27 +135,56 @@ guide), `mods/core/` (Soulkeeper's entire gameplay), `types/kernel.lua` (engine 
 - Every Lua callback is a protected call — a broken mod logs and is skipped, never crashes.
 
 ## Gameplay implemented
-Lobby + host-start + reconnect · waves (25s) with Lua-defined archetypes
-**Bandit/Scout/Mushroom/Brute/Slinger/Slasher/Vampire** (per-wave spawn weights, each with its own
-**animated sprite pack** — `mods/core/enemies.lua`; Slinger + Vampire stand off and fire
-**hostile projectiles** via Lua `core:ranged` systems, playing their packs' **attack clips** via
-Lua-driven `Render.fx`; the player is the animated Knight via `mod:player_sprite`) · manual-aim
-projectiles · **mini-boss @5 / BOSS @10 waves** (Frog King: nova bullet rings, arena lock via the
-`WaveHold` kernel tag ON the boss — wave clock frozen + trash cleared until it dies; killing a
-boss at wave ≥ 20 = **win**) · **XP orbs → shared team level pool → synchronized level-up card
-scene**: the offer is rolled IN LUA (`mod:level_offer` + `world:offerable`; core's `levelup.lua`
-does the rarity-first roll, **Crystal Ball** object = +1 card) with **5 rarity tiers**
-(grey/green/blue/purple/gold) — all content in `mods/core/` Lua (13 stat upgrades +
-**Onion**/**Frost Belt**/**Shockwave Dash**/**Auto Target**/**Crystal Ball** objects) ·
-**heart life** (3 hearts, 1 s i-frames, rare heart drops heal) · enemies **scale per wave** ·
-**dash on LSHIFT** (predicted; Shockwave makes it damage) · **crit** · co-op **downed → proximity
-revive** (3 s arc drawn via `mod:draw`+`ctx:arc`, boss kills revive everyone; red edge arrows
-point at downed teammates) · **game-over** (all downed = defeat; frozen-world overlay, host
-returns everyone to the lobby) · TAB console: `/pause` `/resume` + **mod commands**
-(`mod:command` — `/givexp` `/heal` `/wave` `/stress`) with TAB-completion + history ·
-**audio**: full SFX set + lobby/game/boss music (auto cross-fade; `assets/sound/` canonical
-names, all client-side triggers off snapshot state; local `/volume` `/sfx` `/music` verbs;
-mods rebind any sound via `mod:sound` and fire their own with `ctx:play/play_at`).
+Lobby + host-start + reconnect · waves (25s) with Lua-defined archetypes (~15 in
+`mods/core/enemies.lua`, **data-driven `register{}` table + auto gold ELITE twins** from wave 8 —
+4x HP/XP, 1.4x size, guaranteed heart via `C.EliteDrop`): fodder
+**Bandit/Marauder/Scout/Mushroom**, specials **Bomber** (Goblin Barrel: stops, fx=3 fuse
+telegraph, dies in a hostile bullet ring — kill it early to defuse), **Berserker** (`C.Lunge`
+telegraph→locked-line dash, motion-phase lockstep with targeting), **Slinger/Vampire/Cyclop/Ent**
+(all ranged attacks now **telegraph** `windup` s on fx=3 Prepare, then fire; `C.Ranged` grew
+`volley/spread/variant/bullet_radius` — Ent fans 3, Cyclop snipes a heavy variant-3 bullet),
+**Slasher**, wave-banded **Brute/Silverback/Goldhorn** Rhino tiers · HP scaling is **compound
++7%/wave** · manual-aim projectiles with **knockback** (`Weapon.knockback` rides each bullet) ·
+**scripted boss ladder to wave 50** (`MILESTONES` table: **@5 Rhino Charger** (boss-scale
+`C.Lunge` charge) · **@10 Frog King** (nova rings + **rage phases**: <50% HP faster/denser novas
++ aimed volley, <25% speed-up) · **@15 Frog Prince** (`C.Lunge` as a LEAP + `burst` landing-slam
+bullet ring, FrogMonster Jump clips) · **@20 Bomb Lord** (`C.Planter` carpets the arena with
+`core:mine` Powder Kegs — stationary shootable `C.Bomber` enemies that zone the floor — + aimed
+volleys + novas) · **@30 Vampire Lord** (fast novas + `C.Summon{pool=2}` bat swarms + `C.Regen`
+self-heal DPS check) · **@40 Elder Ent** (`C.Nova.spin` ROTATING spiral rings + wide fans +
+`core:bramble` pods) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink,
+spiral raging novas, ELITE summons `pool=3`, heavy aimed 5-volleys); 25/35/45 rotate the minis;
+every %10 wave is an ARENA (1920×1080 rect = `arena {960,540}` opt + matching `C.Nova.arena_w/h`,
+`WaveHold` freezes the wave clock); all carry `C.Boss` — death system keys **loot CHEST** +
+guaranteed drops/team-revive/win on it; client draws a **top-center boss HP bar** + shakes on
+boss fx) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
+held (`sprites.hpp` discovers ATK/Fire, Charge_RunLoop/Dash/Jump_Full, Prepare/Charge_Begin
+clips) · **XP orbs → shared team level pool → synchronized offer scene** (LevelUp msg carries an
+`OfferFlavor` byte: level vs chest — the scene titles TREASURE for chests): the offer is rolled
+IN LUA (`mod:level_offer(player, level, ctx)` + `world:offerable` entries carry
+`kind = upgrade|object`; core rolls **upgrades-only on level-ups, objects-only on chests** —
+**objects come exclusively from boss chests** (`KIND.chest` drop on `C.Boss` death → pickup calls
+`world:open_chest()` → the ChestOpen mailbox triggers one offer round for EVERYONE — the co-op
+fairness fix); rarity-first roll falls back down then UP a tier (an epic-only object pool must
+fill on a common roll); **Crystal Ball** = +1 card, **Lucky Clover** `C.Luck` tilts tier weights)
+with **5 rarity tiers** (grey/green/blue/purple/gold) — all content in `mods/core/` Lua (**20
+stat upgrades** incl. Split Shot `projectiles` fan, Piercing Rounds (`hit_cd` guards
+double-hits), Ricochet re-aim, Heavy Impact, Magnet `C.Magnet`, Leech kill-heal riding bullets,
+Greed per-player XP mult + **10 objects**:
+**Onion**/**Frost Belt**/**Shockwave Dash**/**Auto Target**/**Crystal Ball**/**Orbiting Blades**
+(`C.Orbit`, server-spun networked phase = client draw = hitbox)/**Spiked
+Armor**/**Phoenix Feather** (cheat death once)/**Lucky Clover**/**Adrenaline Core** (post-dash
+fire-rate)) · **heart life** (3 hearts, 1 s i-frames, rare heart drops heal) · **dash on LSHIFT**
+(predicted; Shockwave makes it damage) · **crit** · co-op **downed → proximity revive** (3 s arc
+via `mod:draw`+`ctx:arc`, boss kills revive everyone; red edge arrows point at downed teammates) ·
+**game-over** (all downed = defeat; frozen-world overlay, host returns everyone to the lobby) ·
+TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` `/heal` `/wave`
+`/stress`) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
+cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
+`/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (29 scenarios over the full
+mods/core pipeline incl. the chest round + offer filtering; build line in its header — needs
+`-freflection -fcontracts` + the sol2 defines; LuaHost must outlive the World).
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
@@ -187,7 +216,7 @@ mods rebind any sound via `mod:sound` and fire their own with `ctx:play/play_at`
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- XP magnet, F11 fullscreen toggle.
+- F11 fullscreen toggle. (XP magnet shipped: base pull + boss-kill vacuum + Magnet upgrade.)
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

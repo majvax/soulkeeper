@@ -354,7 +354,7 @@ void LuaHost::install_registration_api()
 
     // Render.kind values (proto::EntityKind) for Lua-spawned drawables.
     lua_["KIND"] = lua_.create_table_with("mover", 0, "player", 1, "enemy", 2, "bullet", 3,
-                                          "orb", 4, "heart", 5);
+                                          "orb", 4, "heart", 5, "chest", 6);
 
     lua_.new_usertype<EnemyBuilder>(
       "EnemyArchetype", sol::no_constructor,

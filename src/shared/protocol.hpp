@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 11;
+inline constexpr std::uint16_t protocol_version = 12;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -48,8 +48,13 @@ enum class MsgType : std::uint8_t {
     LuaCommand = 14,    // C2S: a mod console command line, "name args..." (host-only, reliable)
 };
 
-enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5 };
+enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5, Chest = 6 };
 enum class GameState : std::uint8_t { Lobby = 0, Playing = 1 };
+
+// LevelUp payload = u8 flavor, u8 count, count x LevelUpChoice. The flavor
+// only themes the client pick scene: a boss chest opens the same UI as a
+// level, but titled as treasure (and rolled objects-only by the mod).
+enum class OfferFlavor : std::uint8_t { Level = 0, Chest = 1 };
 
 // Card counts: the LevelUp message is `u8 count` + count entries. The GAME
 // (mod:level_offer) decides the count per player; these are the engine's

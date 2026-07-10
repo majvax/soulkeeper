@@ -29,8 +29,10 @@ callbacks.
 Kernel components — available as **prelude globals**: `Position{x,y}`, `Velocity{dx,dy}`,
 `Speed{value}`, `Health{current,max}` (float HP, enemies), `Hearts{current,max}` (player heart
 life), `Radius{value}`, `AimState{dx,dy,firing}`, `Dash{cooldown_max, cooldown, burst_remaining,
-dir_x, dir_y, shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind,variant}` (how the client draws
-an entity), `Scale{value}` (networked on-screen size multiplier — mutate it from rules like
+dir_x, dir_y, shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind,variant,fx}` (how the client draws
+an entity; `fx` picks an enemy pack's special clip: 1 = attack ATK, played once, 2 = charge loop
+Charge_RunLoop/Dash, 3 = telegraph Prepare, held on its last frame — set it from your systems,
+reset to 0 when the move ends), `Scale{value}` (networked on-screen size multiplier — mutate it from rules like
 Vitality; visual only, `Radius` stays the hitbox), `Downed{respawn_wave}`, plus the `Enemy` /
 `Player` tags. Kernel systems: spatial-hash rebuild, dash (client-predicted), movement
 integration. Everything else is Lua.
@@ -142,13 +144,17 @@ end)
   ownership filtered): `{ {id, kind, tiers = {bool×5}}, ... }`. The facts a `mod:level_offer`
   roll works from.
 - `world:end_game(won)` — end the run. THE GAME owns the rule (core's death system: every player
-  downed at once = `end_game(false)`; surviving to `WIN_WAVE` = `end_game(true)`); the engine
+  downed at once = `end_game(false)`; killing a boss at `WIN_WAVE` = `end_game(true)`); the engine
   freezes the sim, broadcasts the game-over screen (won/lost + final wave/level), and the host
   returns everyone to the lobby for a fresh run.
+- `world:open_chest()` — request ONE offer round for every connected player (the level-up
+  freeze/pick machinery with `ctx = "chest"` — see `mod:level_offer`). Core calls it when a
+  player walks over a boss loot chest (`KIND.chest` drawable + a chest tag component).
 - `spawn_bullet(x, y, vx, vy)` — kinetic drawable (bullet kind); attach your bullet component for
-  behavior, set `Render.variant` for tint (1 = hostile red, 2 = crit orange in the core skin).
+  behavior, set `Render.variant` for tint (1 = hostile red, 2 = crit orange, 3 = heavy hostile
+  in the core skin).
 - `spawn_entity(x, y)` — bare drawable for drops/markers: set `Render.kind` (see the `KIND`
-  table: `KIND.orb`, `KIND.heart`, ...) and attach components.
+  table: `KIND.orb`, `KIND.heart`, `KIND.chest`, ...) and attach components.
 - `spawn_enemy(x, y, "core:brute")` — spawn a registered archetype (applies its component bag at
   the current wave + fires `on_spawn`).
 
@@ -332,12 +338,17 @@ networked script components. core uses it for the revive arc:
 
 ### The level-up offer (`mod:level_offer`)
 
-The card roll is GAME policy: `mod:level_offer(function(player, level) … end)` returns up to 5
-entries of `{ id = "core:damage", rarity = 0..4 }`. Called ONCE per (player, level) — reconnects
-re-send the stored offer, never re-roll. Return nil/{} to fall back to the engine's fixed 3-card
-roll. Work from `world:offerable(player)`; core's `levelup.lua` implements the rarity-first roll
-(weights are mod-owned balance now) and reads `C.Insight` for bonus cards — the Crystal Ball
-object grants +1 choice per level-up, entirely in Lua.
+The card roll is GAME policy: `mod:level_offer(function(player, level, ctx) … end)` returns up
+to 5 entries of `{ id = "core:damage", rarity = 0..4 }`. Called ONCE per (player, round) —
+reconnects re-send the stored offer, never re-roll. Return nil/{} to fall back to the engine's
+fixed 3-card roll. `ctx` is the round flavor: `"level"` (XP threshold) or `"chest"` (a mod
+called `world:open_chest()` — the engine then runs ONE offer round for every connected player
+through the same freeze/pick machinery, and the client titles the scene as treasure). Work from
+`world:offerable(player)` and filter by `entry.kind`; core's `levelup.lua` rolls upgrades-only
+on levels and objects-only on chests (objects come exclusively from boss loot chests now), does
+the rarity-first roll (falling back down then UP a tier, so an epic-only object pool still fills
+cards on a common roll) and reads `C.Insight` for bonus cards — the Crystal Ball object grants
++1 choice per round, entirely in Lua.
 
 ### HUD hooks (`mod:hud`)
 

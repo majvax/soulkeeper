@@ -58,8 +58,38 @@ struct SpritePack
     {
         if (const AnimClip* c = clip("ATK")) { return c; }
         if (const AnimClip* c = clip("Attack")) { return c; }
+        if (const AnimClip* c = clip("Fire")) { return c; } // Ent's shot
         for (const auto& [stem, c] : clips) {
             if (stem.find("ATK") != std::string::npos) { return &c; }
+        }
+        return nullptr;
+    }
+
+    // The pack's charge/rush loop (Render.fx == 2): the tight run cycle first
+    // (Rhino's Charge_RunLoop), then full sequences, then dash art — packs
+    // without any keep their Move clip via the caller's fallback.
+    [[nodiscard]] const AnimClip* charge() const
+    {
+        if (const AnimClip* c = clip("Charge_RunLoop")) { return c; }
+        if (const AnimClip* c = clip("Charge_Full")) { return c; }
+        if (const AnimClip* c = clip("Dash_Full")) { return c; }
+        if (const AnimClip* c = clip("Dash")) { return c; }      // Orc Barbare's lunge pose
+        if (const AnimClip* c = clip("Jump_Full")) { return c; } // FrogMonster's leap
+        if (const AnimClip* c = clip("Jump")) { return c; }
+        for (const auto& [stem, c] : clips) {
+            if (stem.find("Charge") != std::string::npos) { return &c; }
+        }
+        return nullptr;
+    }
+
+    // The pack's wind-up/telegraph clip (Render.fx == 3): played once and held
+    // on the last frame — the "about to strike" pose enemies signal with.
+    [[nodiscard]] const AnimClip* prepare() const
+    {
+        if (const AnimClip* c = clip("Prepare")) { return c; }
+        if (const AnimClip* c = clip("Charge_Begin")) { return c; } // Rhino's stomp wind-up
+        for (const auto& [stem, c] : clips) {
+            if (stem.find("Prepare") != std::string::npos) { return &c; }
         }
         return nullptr;
     }

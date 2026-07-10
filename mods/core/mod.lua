@@ -24,6 +24,8 @@ function main()
     mod:subscribe("on_player_spawn", function(e)
         e:set(C.Weapon, {})
         e:set(C.Crit, {})
+        e:set(C.Magnet, {}) -- pickup pull radius (Magnet upgrades grow it)
+        e:set(C.Greed, {})  -- XP multiplier (Greed upgrades grow it)
     end)
 
     -- Console commands (typed as /name in the TAB console; host-only, run on
@@ -116,10 +118,25 @@ function main()
             hud:text(string.format("Fire rate  %.0f ms", w.cooldown_max * 1000))
             hud:text(string.format("Bullet spd %.0f", w.bullet_speed))
             hud:text(string.format("Range      %.2f s", w.lifetime))
+            hud:text(string.format("Knockback  %.0f", w.knockback))
+            -- Build extras: only shown once a card actually granted them.
+            if w.projectiles > 1 then hud:text(string.format("Bullets    x%d", w.projectiles)) end
+            if w.pierce > 0 then hud:text(string.format("Pierce     %d", w.pierce)) end
+            if w.bounces > 0 then hud:text(string.format("Bounce     %d", w.bounces)) end
         end
         local c = view:get(C.Crit)
         if c then
             hud:text(string.format("Crit       %.0f%% x%.2f", c.chance * 100, c.multiplier))
+        end
+        local m = view:get(C.Magnet)
+        if m and m.radius ~= 130 then hud:text(string.format("Magnet     %.0f", m.radius)) end
+        local g = view:get(C.Greed)
+        if g and g.mult > 1.0 then
+            hud:text(string.format("Greed      +%.0f%% XP", (g.mult - 1) * 100))
+        end
+        local l = view:get(C.Leech)
+        if l and l.chance > 0 then
+            hud:text(string.format("Leech      %.0f%%", l.chance * 100))
         end
 
         hud:end_panel()
