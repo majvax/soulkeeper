@@ -447,6 +447,358 @@ int main()
         return true
     )"), "player bullets still kill (shoot pipeline intact)");
 
+    reset();
+
+    // --- Scenario 27: arena clamp works WITHOUT C.Nova (C.Arena decouple) ---
+    lua.script(R"(
+        spawn_enemy(700, 0, "core:bomb_lord") -- C.Arena, no C.Nova
+        for p in world:each(Player, Position) do
+            local pos = p:get(Position)
+            pos.x, pos.y = 2000, 0 -- outside the (default-centered) rect
+        end
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Position) do
+            return p:get(Position).x <= 960.5
+        end
+    )"), "arena clamp confines players without a nova");
+    reset();
+
+    // --- Scenario 28: Bomb Lord tosses pre-lit kegs at the player -----------
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(700, 0, "core:bomb_lord")
+        boss:remove(C.Planter) -- isolate the toss: only lobbed kegs remain
+    )");
+    step(4.0f); // first toss at ~3 s; keg lands within scatter(200) of the player
+    check(lua_bool(R"(
+        local C = import("core")
+        -- 260 covers the full 200 px scatter (the boss is 700 px away, so a
+        -- hit here can only be a lobbed keg, never boss-adjacent placement).
+        for keg in world:each(C.Fuse, Position) do
+            local p = keg:get(Position)
+            if p.x * p.x + p.y * p.y < 260 * 260 then return true end
+        end
+        return false
+    )"), "bomb lord lobbed a lit keg at the player's feet");
+    reset();
+
+    // --- Scenario 29: Vampire Lord's blood bolts home ------------------------
+    lua.script(R"(spawn_enemy(600, 0, "core:vampire_lord"))");
+    step(2.5f); // first cast at ~2 s
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Homing, Velocity, Position) do
+            -- steered: velocity points at the player (at the origin)
+            local v = b:get(Velocity)
+            local p = b:get(Position)
+            local dot = v.dx * (0 - p.x) + v.dy * (0 - p.y)
+            if dot > 0 then return true end
+        end
+        return false
+    )"), "homing blood bolts steer toward the player");
+    reset();
+
+    // --- Scenario 30: Elder Ent — sprinkler streams + blooming seeds --------
+    lua.script(R"(spawn_enemy(500, 0, "core:elder_ent"))");
+    step(1.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local n = 0
+        for b in world:each(C.Bullet) do
+            if b:get(C.Bullet).hostile == 1 then n = n + 1 end
+        end
+        return n >= 6 -- the sprinkler streams continuously
+    )"), "elder ent's sprinkler streams bullets");
+    bool seed_seen = lua_bool(R"(
+        local C = import("core")
+        for s in world:each(C.Seed) do return true end
+        return false
+    )");
+    if (!seed_seen) { // the first seed launches at ~2.5 s
+        step(2.0f);
+        seed_seen = lua_bool(R"(
+            local C = import("core")
+            for s in world:each(C.Seed) do return true end
+            return false
+        )");
+    }
+    check(seed_seen, "elder ent lobbed a blooming seed");
+    step(3.0f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for s in world:each(C.Seed) do return false end
+        return true
+    )"), "the seed bloomed (popped into petals and died)");
+    reset();
+
+    // --- Scenario 31: Game Master's rotating cross barrage ------------------
+    lua.script(R"(spawn_enemy(500, 0, "core:gamemaster"))");
+    step(2.3f); // first volley at ~2 s, before the elite summons complicate things
+    check(lua_bool(R"(
+        local C = import("core")
+        local n = 0
+        for b in world:each(C.Bullet) do
+            if b:get(C.Bullet).hostile == 1 then n = n + 1 end
+        end
+        return n >= 12 -- 4 lanes x 3-bullet lances
+    )"), "game master fired a full cross barrage");
+    reset();
+
+    // --- Scenario 32: the rage aimed-volley is GONE (frog rings only) -------
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(400, 0, "core:boss")
+        boss:get(Health).current = boss:get(Health).max * 0.4 -- straight to rage
+    )");
+    step(3.0f); // several enraged rings
+    check(lua_bool(R"(
+        local C = import("core")
+        local rings, heavies = 0, 0
+        for b in world:each(C.Bullet) do
+            if b:get(C.Bullet).hostile == 1 then
+                rings = rings + 1
+                if b:get(Render).variant == 3 then heavies = heavies + 1 end
+            end
+        end
+        return rings > 0 and heavies == 0
+    )"), "frog king rages with rings only — no aimed heavies");
+    reset();
+
+    // --- Scenario 21: the XP curve is the mod's quadratic, not the fallback -
+    check(mod::run_xp_curve(host, 30) == 5U + 90U + 720U, // 5 + 3L + 0.8L^2
+          "xp curve is the mod's quadratic");
+    check(mod::run_xp_curve(host, 60) > 3 * mod::run_xp_curve(host, 30),
+          "xp curve grows super-linearly"); // doubling the level ~4x the cost (minus linear drag)
+
+    // --- Scenario 22: hearts only magnetize toward HURT players -------------
+    lua.script(R"(
+        local C = import("core")
+        local heart = spawn_entity(80, 0)
+        heart:get(Render).kind = KIND.heart
+        heart:set(C.Heal, {})
+    )");
+    step(0.6f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for h in world:each(C.Heal, Position) do
+            return h:get(Position).x > 70 -- untouched: no reserve trains at full HP
+        end
+        return false
+    )"), "a full-HP player does not attract hearts");
+    lua.script(R"(
+        for p in world:each(Player, Hearts) do
+            local h = p:get(Hearts)
+            h.current = math.floor(h.max - 1)
+        end
+    )");
+    step(0.8f); // magnet pulls it in, pickup heals
+    check(lua_bool(R"(
+        for p in world:each(Player, Hearts) do
+            local h = p:get(Hearts)
+            return h.current == h.max
+        end
+    )"), "a hurt player pulls and eats the heart");
+    reset();
+
+    // --- Scenario 23: Mirror Barrel doubles the volley backward -------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon, AimState) do
+            local w = p:get(C.Weapon)
+            w.projectiles, w.mirror = 2, 1
+            local a = p:get(AimState)
+            a.dx, a.dy, a.firing = 1, 0, 1
+        end
+    )");
+    int mirrored = 0;
+    for (int i = 0; i < 8 && mirrored < 4; ++i) {
+        step(1.0f / 60.0f);
+        mirrored = static_cast<int>(lua.script(R"(
+            local C = import("core")
+            local n = 0
+            for b in world:each(C.Bullet) do
+                if b:get(C.Bullet).hostile == 0 then n = n + 1 end
+            end
+            return n
+        )").get<double>());
+    }
+    check(mirrored >= 4, "mirror barrel fires the fan both ways");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon) do
+            local w = p:get(C.Weapon)
+            w.projectiles, w.mirror = 1, 0
+        end
+    )");
+    reset();
+
+    // --- Scenario 24: Goliath clamps speed and retires Swift Boots ----------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, Speed) do
+            p:set(C.Goliath, {})
+            p:get(Speed).value = 320
+        end
+    )");
+    step(1.2f); // identity_sys runs at 2 Hz
+    check(lua_bool(R"(
+        for p in world:each(Player, Speed) do
+            return p:get(Speed).value <= 200
+        end
+    )"), "goliath clamps speed to 200");
+    check(lua_bool(R"(
+        for p in world:each(Player) do
+            for _, entry in ipairs(world:offerable(p)) do
+                if entry.id == "core:movespeed" then return false end
+            end
+            return true
+        end
+    )"), "swift boots left goliath's pool");
+
+    // --- Scenario 25: Executioner's Edge — crit tracks pierce ---------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon) do
+            p:set(C.Executioner, {})
+            p:get(C.Weapon).pierce = 3
+        end
+    )");
+    step(1.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for p in world:each(C.Crit) do
+            local c = p:get(C.Crit).chance
+            return c > 0.23 and c < 0.25 -- 8% x 3 pierce
+        end
+    )"), "executioner crit chance tracks pierce");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do
+            p:remove(C.Goliath)
+            p:remove(C.Executioner)
+            p:get(Speed).value = 240
+            p:get(C.Weapon).pierce = 0
+            p:get(C.Crit).chance = 0.05
+        end
+    )");
+    reset();
+
+    // --- Scenario 33: RunStats scoreboard + floating damage numbers ---------
+    host.state().damage_events.clear();
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:set(RunStats, {}) end -- clean slate
+        local e = spawn_enemy(120, 0, "core:bandit")
+        e:get(Health).current = 1 -- one hit kills
+        e:get(Speed).value = 0    -- parked on the aim line, out of contact reach
+        for p in world:each(Player, AimState) do
+            local a = p:get(AimState)
+            a.dx, a.dy, a.firing = 1, 0, 1
+        end
+    )");
+    step(1.0f);
+    check(lua_bool(R"(
+        for p in world:each(Player, RunStats) do
+            local rs = p:get(RunStats)
+            return rs.kills >= 1 and rs.damage > 0
+        end
+    )"), "bullet kill credits the shooter's RunStats");
+    check(!host.state().damage_events.empty(), "damage numbers queued for the snapshot drain");
+    check(host.state().damage_events.size() <= proto::max_damage_events,
+          "damage-number queue respects its cap");
+    host.state().damage_events.clear();
+    reset();
+
+    // --- Scenario 34: signature bullets carry their boss's variant byte -----
+    lua.script(R"(spawn_enemy(300, 0, "core:vampire_lord"))");
+    step(2.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Homing) do
+            return b:get(Render).variant == 4 -- blood bolt
+        end
+        return false
+    )"), "vampire bolts wear the blood-bolt variant");
+    reset();
+    lua.script(R"(spawn_enemy(300, 0, "core:elder_ent"))");
+    step(2.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local seed, pellet = false, false
+        for b in world:each(C.Seed) do
+            if b:get(Render).variant == 6 then seed = true end
+        end
+        for b in world:each(C.Bullet) do
+            if b:get(Render).variant == 5 then pellet = true end
+        end
+        return seed and pellet
+    )"), "elder ent seeds/pellets wear their green variants");
+    reset();
+    lua.script(R"(spawn_enemy(300, 0, "core:gamemaster"))");
+    step(2.6f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Bullet) do
+            if b:get(Render).variant == 7 then return true end
+        end
+        return false
+    )"), "game master lances wear the lance variant");
+    reset();
+
+    // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------
+    float solo_hp = 0.0f;
+    lua.script(R"(
+        local e = spawn_enemy(500, 500, "core:bandit")
+        _SOLO_HP = e:get(Health).max
+    )");
+    solo_hp = lua["_SOLO_HP"].get<float>();
+    reset();
+    const core::Entity p2 = create_player(world.registry(), 40, 0);
+    host.events().emit("on_player_spawn",
+                       mod::EntityHandle{ .reg = &world.registry(), .entity = p2 });
+    lua.script(R"(
+        local e = spawn_enemy(500, 500, "core:bandit")
+        _DUO_HP = e:get(Health).max
+        local b = spawn_enemy(600, 600, "core:miniboss")
+        _DUO_BOSS = b:get(Health).max
+    )");
+    const float duo_hp = lua["_DUO_HP"].get<float>();
+    const float duo_boss = lua["_DUO_BOSS"].get<float>();
+    check(duo_hp > solo_hp * 1.4f && duo_hp < solo_hp * 1.6f,
+          "trash scales +50% with a second player");
+    check(duo_boss > 500.0f * 1.6f && duo_boss < 500.0f * 1.8f,
+          "boss scales +70% with a second player");
+    reset();
+
+    // --- Scenario 35: kill credit lands on the SHOOTER only (2 players) -----
+    lua["_P1"] = static_cast<double>(player);
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, AimState) do
+            p:set(RunStats, {})
+            local a = p:get(AimState)
+            if p:id() == _P1 then a.dx, a.dy, a.firing = 1, 0, 1 else a.firing = 0 end
+        end
+        local e = spawn_enemy(120, 0, "core:bandit")
+        e:get(Health).current = 1
+        e:get(Speed).value = 0
+    )");
+    step(1.0f);
+    check(lua_bool(R"(
+        local killer, bystander = false, true
+        for p in world:each(Player, RunStats) do
+            local rs = p:get(RunStats)
+            if p:id() == _P1 then
+                killer = rs.kills >= 1
+            elseif rs.kills ~= 0 then
+                bystander = false
+            end
+        end
+        return killer and bystander
+    )"), "kill credit lands on the shooter only");
+
     std::printf(failures == 0 ? "ALL PASS\n" : "%d FAILURE(S)\n", failures);
     return failures == 0 ? 0 : 1;
 }

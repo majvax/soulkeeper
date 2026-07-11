@@ -27,7 +27,10 @@ return function(mod, C)
             local s = e:get(Speed)
             if s then s.value = s.value + amount end
         end,
-        { value_format = "+{} SPD" })
+        {
+            value_format = "+{} SPD",
+            available = function(e) return not e:has(C.Goliath) end, -- Goliath walks forever
+        })
 
     -- Raises the heart LIMIT only — it never heals (find hearts for that).
     -- Vitality shows on the body: +6% size per heart gained (kernel Scale,
@@ -39,7 +42,10 @@ return function(mod, C)
             local s = e:get(Scale)
             if s then s.value = s.value + 0.20 * amount end
         end,
-        { value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png" })
+        {
+            value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png",
+            available = function(e) return not e:has(C.David) end, -- David stays glassy
+        })
 
     -- AOE Zone grows the damage aura (only offered once you own one).
     mod:upgrade("aoezone", "AOE Zone", { 5, 15, 25, 40, 60 },
@@ -77,7 +83,10 @@ return function(mod, C)
         end,
         {
             value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) .. "% CRIT" end,
-            available = function(e) return e:get(C.Crit).chance < 1.0 end
+            -- Executioner's Edge OWNS crit chance (it tracks pierce instead).
+            available = function(e)
+                return e:get(C.Crit).chance < 1.0 and not e:has(C.Executioner)
+            end
         })
 
     mod:upgrade("critdamage", "Lethality", { 0.10, 0.20, 0.35, 0.55, 0.90 },
@@ -106,16 +115,8 @@ return function(mod, C)
         end,
         { value_format = "+{} DASH" })
 
-    -- Split Shot: every trigger pull fans an extra bullet. Epic+, capped at 5.
-    mod:upgrade("multishot", "Split Shot", { 0, 0, 0, 1, 2 },
-        function(e, _, amount)
-            local w = e:get(C.Weapon)
-            if w then w.projectiles = math.min(5, math.floor(w.projectiles + amount)) end
-        end,
-        {
-            value_format = "+{} BULLET",
-            available = function(e) return e:get(C.Weapon).projectiles < 5 end,
-        })
+    -- (Extra bullets moved to OBJECTS — Split Barrel / Mirror Barrel: a chest
+    -- decision, not a repeatable stat lane.)
 
     -- Piercing Rounds: bullets punch through extra enemies. Rare+.
     mod:upgrade("pierce", "Piercing Rounds", { 0, 0, 1, 1, 2 },
@@ -164,15 +165,20 @@ return function(mod, C)
         })
 
     -- Greed: XP orbs are worth more to YOU (per-player, it's your pickup).
-    mod:upgrade("greed", "Greed", { 0.05, 0.10, 0.15, 0.25, 0.40 },
+    -- Stops at +150% — it's an economy valve, not a build axis (unbounded XP
+    -- income defeats the quadratic level curve).
+    mod:upgrade("greed", "Greed", { 0.04, 0.08, 0.12, 0.18, 0.30 },
         function(e, _, amount)
             if not e:has(C.Greed) then e:set(C.Greed, {}) end
             local g = e:get(C.Greed)
-            g.mult = g.mult + amount
+            g.mult = math.min(2.5, g.mult + amount)
         end,
         {
             value_text = function(amount)
                 return "+" .. math.floor(amount * 100 + 0.5) .. "% XP"
-            end
+            end,
+            available = function(e)
+                return not e:has(C.Greed) or e:get(C.Greed).mult < 2.5
+            end,
         })
 end

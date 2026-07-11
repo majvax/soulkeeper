@@ -288,6 +288,15 @@ struct ModHandle
         state->level_offer = std::move(fn);
     }
 
+    // The XP cost curve: fn(level) -> XP needed to reach the next level.
+    void xp_curve(sol::protected_function fn)
+    {
+        if (state->xp_curve.valid()) {
+            std::fprintf(stderr, "[mod] '%s': xp_curve replaces a previous hook\n", ns.c_str());
+        }
+        state->xp_curve = std::move(fn);
+    }
+
     // Register a console command: `/name args...` typed in the client console
     // runs fn on the SERVER (host-only) with the invoking player's handle +
     // the whitespace-split args (numeric tokens arrive as numbers). `usage`
@@ -372,6 +381,7 @@ void LuaHost::install_registration_api()
       "hud", &ModHandle::hud,
       "draw", &ModHandle::draw,
       "level_offer", &ModHandle::level_offer,
+      "xp_curve", &ModHandle::xp_curve,
       "command", &ModHandle::command,
       "subscribe", &ModHandle::subscribe,
       "emit", &ModHandle::emit);

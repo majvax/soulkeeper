@@ -105,6 +105,10 @@ public:
     [[nodiscard]] bool leveling() const noexcept { return leveling_; }
     [[nodiscard]] bool game_over() const noexcept { return game_over_; }
     [[nodiscard]] const proto::GameOverMsg& game_over_stats() const noexcept { return go_stats_; }
+    [[nodiscard]] const std::vector<proto::GameOverEntry>& game_over_entries() const noexcept
+    {
+        return go_entries_;
+    }
     [[nodiscard]] bool join_denied() const noexcept { return denied_; }
     [[nodiscard]] std::uint64_t mods_hash() const noexcept { return mods_hash_; }
     [[nodiscard]] std::uint64_t server_mods_hash() const noexcept { return server_mods_hash_; }
@@ -177,6 +181,12 @@ public:
         client_->send(writer.bytes(), true);
     }
 
+    // Floating combat numbers accumulated since the last take (move-out drain).
+    [[nodiscard]] std::vector<proto::DamageEvent> take_damage_events()
+    {
+        return std::exchange(damage_events_, {});
+    }
+
     void send_select(std::uint8_t index)
     {
         leveling_ = false; // close the overlay; server resumes once all have chosen
@@ -226,6 +236,14 @@ private:
                 go_stats_ = *msg;
                 game_over_ = true;
                 leveling_ = false; // a run end trumps any stale card offer
+                go_entries_.clear();
+                if (const auto count = reader.get<std::uint8_t>()) {
+                    for (std::uint8_t i = 0; i < *count; ++i) {
+                        if (const auto entry = reader.get<proto::GameOverEntry>()) {
+                            go_entries_.push_back(*entry);
+                        }
+                    }
+                }
             }
         } else if (type == proto::MsgType::Roster) {
             read_roster(reader);
@@ -242,6 +260,19 @@ private:
         } else if (type == proto::MsgType::Snapshot || type == proto::MsgType::SnapshotDelta) {
             // Keep the whole packet (tag included) for GameScene to decode.
             latest_snapshot_ = std::vector<std::byte>(payload.begin(), payload.end());
+        } else if (type == proto::MsgType::DamageEvents) {
+            const auto count = reader.get<std::uint8_t>();
+            const std::uint8_t n =
+              count ? std::min<std::uint8_t>(*count, proto::max_damage_events) : 0;
+            for (std::uint8_t i = 0; i < n; ++i) {
+                if (const auto ev = reader.get<proto::DamageEvent>()) {
+                    // Bounded: GameScene drains every frame; if it isn't alive
+                    // (lobby screens) the stale numbers just get replaced.
+                    if (damage_events_.size() < 2 * proto::max_damage_events) {
+                        damage_events_.push_back(*ev);
+                    }
+                }
+            }
         } else if (type == proto::MsgType::JoinDenied) {
             if (const auto denied = reader.get<proto::JoinDenied>()) {
                 denied_ = true;
@@ -290,7 +321,9 @@ private:
     bool offer_is_chest_ = false; // current offer round's flavor (scene theme)
     bool game_over_ = false;         // run ended; cleared when Lobby state arrives
     proto::GameOverMsg go_stats_{}; // valid while game_over_
+    std::vector<proto::GameOverEntry> go_entries_; // per-player scoreboard
     std::vector<proto::LevelUpChoice> choices_;
+    std::vector<proto::DamageEvent> damage_events_; // pending floating numbers
 };
 
 } // namespace client

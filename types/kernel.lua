@@ -76,6 +76,12 @@
 ---@class ScaleFields
 ---@field value number  # on-screen size multiplier (networked; 1.0 = normal, capped ~8x on the wire). Players spawn with it; enemies multiply it onto their archetype scale. Visual only — Radius is the hitbox.
 
+---@class RunStatsFields
+---@field damage number    # total damage dealt to enemies this run
+---@field kills integer    # killing blows credited to this player
+---@field downs integer    # times this player went down
+---@field revives integer  # teammates picked back up
+
 -- The kernel prelude (same handles in both VMs). Each carries its field shape so
 -- e:get(Handle) autocompletes (Enemy/Player are membership-only tags: no fields).
 ---@type PositionFields
@@ -108,6 +114,8 @@ Player = nil -- membership-only tag (no fields)
 Scale = nil
 ---@type Component
 WaveHold = nil -- membership-only tag: freezes the wave clock + spawning while any entity carries it (put it ON a boss)
+---@type RunStatsFields
+RunStats = nil -- per-player run scoreboard: mods increment it, the server ships it in GameOver (never snapshotted)
 
 ---Render.kind values for Lua-spawned drawables.
 ---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }
@@ -146,6 +154,11 @@ function Entity:remove(component) end
 
 ---Destroy the entity (safe on already-dead handles).
 function Entity:destroy() end
+
+---Stable numeric id (index+version) of this entity. Stamp it into a component
+---field (e.g. a bullet's `owner`) and match it back with `p:id() == owner`.
+---@return number
+function Entity:id() end
 
 --=============================================================================
 -- The `world` query facade (sim VM; use inside systems).
@@ -207,6 +220,15 @@ function world:offerable(player) end
 ---stats, and waits for the host to return everyone to the lobby.
 ---@param won boolean # true = victory, false = defeat
 function world:end_game(won) end
+
+---Queue a floating combat number at (x, y) — shown rising over the hit on
+---every client. Batched per snapshot tick (cap 48; extra calls are dropped),
+---so skip high-rate DoT ticks (auras) and report per-HIT damage only.
+---@param x number
+---@param y number
+---@param amount number # rounded to an integer on the wire
+---@param kind integer  # 0 = hit, 1 = crit (bigger + gold)
+function world:damage_number(x, y, amount, kind) end
 
 -- Kernel spawn primitives (sim VM). Return an Entity to attach components to.
 ---Spawn a kinetic drawable (Position/Velocity/Radius 4/Render bullet kind).

@@ -11,12 +11,33 @@
 -- on its own. `scale` is the on-screen height factor. Render.fx picks the
 -- special clips: 1 = attack, 2 = charge loop, 3 = telegraph (Prepare pose).
 
--- Health scaling: compound +7% per wave (~1.9x @10, ~3.6x @20). The player's
--- DPS compounds too (multishot/pierce/crit stack multiplicatively), so late
--- waves need more than the old linear ramp to stay threatening.
+-- TOTAL players in the session, downed included — co-op difficulty must not
+-- drop because someone is on the floor. Called at SPAWN time (sim VM only;
+-- the natural spawner re-resolves inits once per wave, so a join mid-wave
+-- kicks in on the next one).
+local function player_count()
+    local n = 0
+    for _ in world:each(Player) do n = n + 1 end
+    return math.max(1, n)
+end
+
+-- Health scaling: compound +8% per wave (~2.2x @10, ~4.3x @20, ~43x @50),
+-- times a co-op multiplier (+50% per extra player) — team DPS multiplies, so
+-- must the wall. The player's DPS compounds too (multishot/pierce/crit stack
+-- multiplicatively); this curve is tuned so wave 50 is NOT a given.
 local function health(base)
     return function(wave)
-        local h = base * (1.07 ^ (wave - 1))
+        local h = base * (1.08 ^ (wave - 1)) * (1 + 0.5 * (player_count() - 1))
+        return { current = h, max = h }
+    end
+end
+
+-- Boss health: a steeper compound (+10%/wave) and a heavier co-op multiplier
+-- (+70% per extra player) — bosses must outpace the horde and never die
+-- "instantly" to a stacked duo again.
+local function boss_health(base)
+    return function(wave)
+        local h = base * (1.10 ^ (wave - 1)) * (1 + 0.7 * (player_count() - 1))
         return { current = h, max = h }
     end
 end
@@ -28,11 +49,11 @@ local function speed(base)
     end
 end
 
--- XP scaling: +1 every 3 waves (the run is 50 waves now — leveling has to
--- keep pace with the compound HP curve).
+-- XP scaling: +1 every 4 waves. (The /3 experiment fed the level runaway —
+-- the quadratic xp_curve is the pace-setter now, income stays modest.)
 local function xp(base)
     return function(wave)
-        return { value = base + math.floor((wave - 1) / 3) }
+        return { value = base + math.floor((wave - 1) / 4) }
     end
 end
 
@@ -187,7 +208,7 @@ return function(mod, C)
         sprite = "assets/sprite/RhinoMonster_04_Devil",
         scale = 2.2,
     })
-        :component(Health, health(600))
+        :component(Health, boss_health(600))
         :component(Speed, speed(90))
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 26 })
@@ -205,7 +226,7 @@ return function(mod, C)
         scale = 2.0,
         tint = { 170, 235, 160 },
     })
-        :component(Health, health(700))
+        :component(Health, boss_health(700))
         :component(Speed, speed(95))
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 24 })
@@ -252,16 +273,16 @@ return function(mod, C)
         scale = 2.6,
         tint = { 255, 150, 150 },           -- reddish: reads as "elite"
     })
-        :component(Health, health(500))     -- scales like the rest
+        :component(Health, boss_health(500))     -- scales like the rest
         :component(Speed, speed(80))        -- lumbering
         :component(C.Touch, { hearts = 2 }) -- heavy contact (i-frames still apply)
         :component(Radius, { value = 32 })  -- big hitbox to match the size
         :component(XpReward, xp(20))        -- worth the fight
         :component(C.Boss, {})
 
-    -- Wave 10: the Frog King — a towering, golden bullet fountain. Radial
-    -- NOVAS that RAGE as its health drops (C.Nova phases: < 50% faster/denser
-    -- + aimed volleys, < 25% it speeds up).
+    -- Wave 10: the Frog King — THE bullet fountain, and the ONLY nova boss.
+    -- Radial rings that RAGE as its health drops (< 50% faster/denser rings,
+    -- < 25% it speeds up). Learn the ring rhythm; that's the whole fight.
     mod:enemy("boss", "Frog King", {
         weight = 0,
         sprite = "assets/sprite/FrogBoss",
@@ -269,99 +290,95 @@ return function(mod, C)
         tint = { 255, 215, 120 },            -- gold: unmistakably THE boss
         arena = { ARENA_W, ARENA_H },
     })
-        :component(Health, health(2000))     -- a proper health bar to chew through
+        :component(Health, boss_health(2000))     -- a proper health bar to chew through
         :component(Speed, speed(70))         -- walks, never runs
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 44 })
         :component(XpReward, xp(60))
-        :component(C.Nova, { cooldown = 2.4, bullets = 20, bullet_speed = 230,
-                             arena_w = ARENA_W, arena_h = ARENA_H })
+        :component(C.Nova, { cooldown = 2.4, bullets = 20, bullet_speed = 230 })
+        :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
-    -- Wave 20: the Bomb Lord — the arena SHRINKS around you: it carpets the
-    -- ground with Powder Kegs (planter_sys) while lobbing aimed 3-volleys and
-    -- the odd nova ring. Shoot the kegs or run out of floor.
+    -- Wave 20: the Bomb Lord — the floor is the enemy. It carpets the arena
+    -- with Powder Kegs (planter_sys) AND lobs pre-lit kegs at YOUR feet
+    -- (toss_sys). Shoot the kegs or run out of ground. No bullets of its own.
     mod:enemy("bomb_lord", "Bomb Lord", {
         weight = 0,
         sprite = "assets/sprite/Goblin_Barrel_03 (Red Skinned)",
         scale = 2.3,
         arena = { ARENA_W, ARENA_H },
     })
-        :component(Health, health(2600))
+        :component(Health, boss_health(2600))
         :component(Speed, speed(80))
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 30 })
         :component(XpReward, xp(80))
-        :component(C.Nova, { cooldown = 3.2, bullets = 14, bullet_speed = 220,
-                             arena_w = ARENA_W, arena_h = ARENA_H })
-        :component(C.Planter, { cooldown = 3.5, count = 3, kind = 1 })
-        :component(C.Ranged, { volley = 3, spread = 0.4, windup = 0.5, range = 520,
-                               standoff = 0, cooldown = 2.0, bullet_speed = 300 })
+        :component(C.Planter, { cooldown = 3.2, count = 3, kind = 1 })
+        :component(C.Toss, {})
+        :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
-    -- Wave 30: the Vampire Lord — a DPS check. Fast rings, bat swarms
-    -- (C.Summon pool 2), it blinks out of reach and it REGENERATES: stop
-    -- shooting and the fight rewinds.
+    -- Wave 30: the Vampire Lord — the hunt. Homing blood bolts that FOLLOW
+    -- you (bolt_sys + homing_sys), bat swarms (his lore — C.Summon pool 2),
+    -- it blinks out of reach and it REGENERATES: a DPS check you must win
+    -- while being chased.
     mod:enemy("vampire_lord", "Vampire Lord", {
         weight = 0,
         sprite = "assets/sprite/Vampire_Archer_01",
         scale = 2.4,
         arena = { ARENA_W, ARENA_H },
     })
-        :component(Health, health(3200))
+        :component(Health, boss_health(3200))
         :component(Speed, speed(95))
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 28 })
         :component(XpReward, xp(100))
-        :component(C.Nova, { cooldown = 2.6, bullets = 16, bullet_speed = 240,
-                             arena_w = ARENA_W, arena_h = ARENA_H })
+        :component(C.BoltCaster, {})
         :component(C.Summon, { pool = 2, cooldown = 6.0, count = 4,
                                blink_range = 200, blink_dist = 320 })
         :component(C.Regen, function(wave) return { per_second = 30 * (1.07 ^ (wave - 1)) } end)
+        :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
-    -- Wave 40: the Elder Ent — spiral bullet hell. Its novas ROTATE
-    -- (C.Nova.spin), the gaps walk, wide 5-bullet fans sweep the lanes, and
-    -- Spore Pods (planter_sys) grow where you'd want to dodge.
+    -- Wave 40: the Elder Ent — geometry, not aim. Continuously ROTATING
+    -- bullet streams (sprinkler_sys: sweeping arms you orbit through) and
+    -- fat seeds that BLOOM into petal rings mid-flight (seed_sys). Streams
+    -- sweep; the Frog's rings pulse — different dance entirely.
     mod:enemy("elder_ent", "Elder Ent", {
         weight = 0,
         sprite = "assets/sprite/Ent_LVL4",
         scale = 2.6,
         arena = { ARENA_W, ARENA_H },
     })
-        :component(Health, health(4200))
+        :component(Health, boss_health(4200))
         :component(Speed, speed(55))
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 32 })
         :component(XpReward, xp(120))
-        :component(C.Nova, { cooldown = 1.8, bullets = 18, bullet_speed = 200, spin = 0.45,
-                             arena_w = ARENA_W, arena_h = ARENA_H })
-        :component(C.Planter, { cooldown = 5.0, count = 4, kind = 2 })
-        :component(C.Ranged, { volley = 5, spread = 0.9, windup = 0.6, range = 560,
-                               standoff = 0, cooldown = 2.6, bullet_speed = 260 })
+        :component(C.Sprinkler, {})
+        :component(C.SeedLauncher, {})
+        :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
     -- Wave 50: THE GAME MASTER — the finale, and the WIN condition. It never
-    -- walks (Speed 0): it BLINKS. Spiral raging novas + heavy aimed 5-volleys
-    -- + ELITE summons (pool 3). Everything at once; kill it to win the run.
+    -- walks (Speed 0): it BLINKS. Rotating CROSS BARRAGES (barrage_sys —
+    -- lanes, not rings, and they turn every volley) + ELITE summons (pool 3).
+    -- Kill it to win the run.
     mod:enemy("gamemaster", "Game Master", {
         weight = 0,
         sprite = "assets/sprite/GameMaster",
         scale = 2.8,
         arena = { ARENA_W, ARENA_H },
     })
-        :component(Health, health(5000))
+        :component(Health, boss_health(5000))
         :component(Speed, speed(0))         -- it blinks, it never runs
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 26 })
         :component(XpReward, xp(200))
-        :component(C.Nova, { cooldown = 2.0, bullets = 22, bullet_speed = 240, spin = 0.3,
-                             arena_w = ARENA_W, arena_h = ARENA_H })
+        :component(C.Barrage, {})
         :component(C.Summon, { pool = 3, cooldown = 5.5, count = 3,
                                blink_range = 220, blink_dist = 360 })
-        :component(C.Ranged, { volley = 5, spread = 0.7, windup = 0.35, range = 640,
-                               standoff = 500, cooldown = 2.2, bullet_speed = 340,
-                               variant = 3, bullet_radius = 8 })
+        :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
     -- Wave milestones: the scripted boss ladder, dropped on the spawn ring
@@ -407,10 +424,10 @@ return function(mod, C)
                     local boss = spawn_enemy(cx, cy, id)
                     if boss then
                         boss:set(WaveHold, {})
-                        local nova = boss:get(C.Nova)
-                        nova.cx, nova.cy = cx, cy -- the rect never moves
+                        local arena = boss:get(C.Arena)
+                        arena.cx, arena.cy = cx, cy -- the rect never moves
                         for e in world:each(Enemy) do
-                            if not e:has(C.Nova) then e:destroy() end -- clear the arena
+                            if not e:has(C.Boss) then e:destroy() end -- clear the arena
                         end
                     end
                 else

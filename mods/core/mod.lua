@@ -24,8 +24,9 @@ function main()
     mod:subscribe("on_player_spawn", function(e)
         e:set(C.Weapon, {})
         e:set(C.Crit, {})
-        e:set(C.Magnet, {}) -- pickup pull radius (Magnet upgrades grow it)
-        e:set(C.Greed, {})  -- XP multiplier (Greed upgrades grow it)
+        e:set(C.Magnet, {})  -- pickup pull radius (Magnet upgrades grow it)
+        e:set(C.Greed, {})   -- XP multiplier (Greed upgrades grow it)
+        e:set(RunStats, {})  -- game-over scoreboard (kills/damage/downs/revives)
     end)
 
     -- Console commands (typed as /name in the TAB console; host-only, run on

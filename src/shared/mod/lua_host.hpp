@@ -16,6 +16,7 @@
 #include "shared/mod/events.hpp"
 #include "shared/mod/registry.hpp"
 #include "shared/mod/script_ecs.hpp"
+#include "shared/protocol.hpp"
 
 namespace mod {
 
@@ -76,6 +77,11 @@ struct ModState
     // re-send, never re-roll) and ships it. One hook; last registration wins.
     sol::protected_function level_offer;
 
+    // XP cost curve hook (mod:xp_curve). Sim-VM only: fn(level) -> XP needed
+    // to reach the NEXT level. Leveling pace is game balance, so the GAME owns
+    // the curve; the engine falls back to its linear default without a hook.
+    sol::protected_function xp_curve;
+
     // Console commands (mod:command). Registered in BOTH VMs from the same
     // mod.lua: the SIM VM runs fn (server side, host-typed `/name args...`);
     // the render VM only reads name+usage for console autocompletion/help.
@@ -86,6 +92,11 @@ struct ModState
         sol::protected_function fn; // fn(player, args...) — numeric args arrive as numbers
     };
     std::vector<ConsoleCommand> commands;
+
+    // Floating combat numbers queued by world:damage_number (sim VM only).
+    // The server drains this every snapshot tick into a DamageEvents packet;
+    // capped at max_damage_events so a mod loop can't flood the wire.
+    std::vector<proto::DamageEvent> damage_events;
 };
 
 class LuaHost

@@ -61,7 +61,8 @@ This produces two executables in `bin/`:
 | `Left Shift`   | Dash                                    |
 | `Tab`          | Console (`/pause`, `/wave`, `/givexp`…) |
 | `Enter`        | Start the run (host, in the lobby)      |
-| `Esc`          | Quit                                    |
+| `Esc`          | Menu in-game (volumes, pause, leave); quit on the entry screens |
+| `F11`          | Toggle fullscreen / windowed            |
 
 The debug overlay shows live FPS, frame time, and entity count.
 

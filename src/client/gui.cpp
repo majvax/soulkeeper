@@ -314,6 +314,35 @@ bool Gui::button(std::string_view label, float x, float y, float w, float h, boo
     return enabled && click_ && mouse_in(x, y, w, h) && press_inside;
 }
 
+float Gui::slider(float x, float y, float w, float value)
+{
+    const float h = slider_h();
+    const bool press_inside = press_x_ >= x && press_x_ < x + w && press_y_ >= y && press_y_ < y + h;
+    // Drag keys off where the press STARTED, not the hover — sliding fast off
+    // the thin track mid-drag keeps working (the usual slider annoyance).
+    if (mouse_down_ && press_inside) {
+        const float pad = slice_inset(PILL_BORDER, w, h);
+        value = (mouse_x_ - x - pad) / std::max(1.0f, w - (2.0f * pad));
+    }
+    value = std::clamp(value, 0.0f, 1.0f);
+
+    const bool hot = mouse_in(x, y, w, h) || (mouse_down_ && press_inside);
+    draw_9slice("assets/ui/pill_dark.png", x, y, w, h, PILL_BORDER, PILL_W, PILL_H, hot ? 255 : 210);
+    const float pad = slice_inset(PILL_BORDER, w, h);
+    const float fill = pad + (value * (w - (2.0f * pad)));
+    // The light pill needs room for both rounded ends before it reads as a bar.
+    if (fill > 2.0f * pad) {
+        draw_9slice("assets/ui/pill_light.png", x, y, fill + pad, h, PILL_BORDER, PILL_W, PILL_H,
+                    hot ? 255 : 225);
+    }
+    // Handle notch: a flat-color tick the drag hand can find.
+    SDL_SetRenderDrawColor(renderer_, 240, 240, 240, 255);
+    const SDL_FRect notch{ .x = x + fill - scale_, .y = y + (2.0f * scale_), .w = 2.0f * scale_,
+                           .h = h - (4.0f * scale_) };
+    SDL_RenderFillRect(renderer_, &notch);
+    return value;
+}
+
 bool Gui::input(std::string_view id, std::string& buf, float x, float y, float w, bool numeric)
 {
     const std::uint32_t my_id = hash_id(id);

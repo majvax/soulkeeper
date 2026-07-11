@@ -34,7 +34,8 @@ src/
                    #   Hearts[players],Radius,AimState,Dash,Render{kind,variant},Scale[wire size
                    #   multiplier, Lua-mutated],XpReward,EnemyTag)
                    #   gameplay(PlayerTag, ObjectInventory, WorldGrid[spatial-hash singleton])
-                   #   progression(GameStats{xp,wave}, Downed{respawn_wave})
+                   #   progression(GameStats{xp,wave}, Downed{respawn_wave}, RunStats{damage,
+                   #   kills,downs,revives} — Lua-incremented scoreboard, shipped in GameOver)
     system/        #   KERNEL systems only: grid (spatial rebuild), dash, movement
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
     factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
@@ -55,7 +56,7 @@ src/
     session.hpp    #   client net control-plane: connect/reconnect, drains net, roster/state/id, latest snapshot, send_*
     ui.hpp / renderer.hpp   # ImGuiLayer RAII; Textures cache (stb_image, image-or-rect fallback)
     gui.hpp/.cpp            # the game's OWN widget kit (immediate-mode): 9-sliced pixel-art
-                            #   panels/buttons/inputs/hearts from assets/ui/*.png (BlackAndWhite
+                            #   panels/buttons/sliders/inputs/hearts from assets/ui/*.png (BlackAndWhite
                             #   pack) + Press Start 2P text baked via stb_truetype (assets/font/).
                             #   USER-FACING UI draws with this: connect/lobby/level-up/game-over,
                             #   banners, AND mod HUD panels (HudContext buffers items, then draws
@@ -71,7 +72,7 @@ src/
                             #   (frame slicing, Idle/Move OR 8-way <State>_<Dir8> directional packs,
                             #   right-facing flip, play-once) — Lua only names the folder
     mod/render_bindings.*   # render VM bindings: draw ctx (texture/rect/circle/text/play) + player view
-    scene/{lobby,game,console,level_up}.hpp
+    scene/{connect,lobby,game,console,level_up,pause,game_over}.hpp # game_over owns the local-bests file
   client.cpp       # ~15-line bootstrap: argv host/name -> Engine::create -> run()
 mods/core/         # ALL built-in content as a Lua plugin (upgrades, objects, components, systems)
 types/kernel.lua   # lua-language-server stubs for the ENGINE mod API (editor autocomplete);
@@ -144,20 +145,26 @@ telegraph→locked-line dash, motion-phase lockstep with targeting), **Slinger/V
 (all ranged attacks now **telegraph** `windup` s on fx=3 Prepare, then fire; `C.Ranged` grew
 `volley/spread/variant/bullet_radius` — Ent fans 3, Cyclop snipes a heavy variant-3 bullet),
 **Slasher**, wave-banded **Brute/Silverback/Goldhorn** Rhino tiers · HP scaling is **compound
-+7%/wave** · manual-aim projectiles with **knockback** (`Weapon.knockback` rides each bullet) ·
-**scripted boss ladder to wave 50** (`MILESTONES` table: **@5 Rhino Charger** (boss-scale
-`C.Lunge` charge) · **@10 Frog King** (nova rings + **rage phases**: <50% HP faster/denser novas
-+ aimed volley, <25% speed-up) · **@15 Frog Prince** (`C.Lunge` as a LEAP + `burst` landing-slam
-bullet ring, FrogMonster Jump clips) · **@20 Bomb Lord** (`C.Planter` carpets the arena with
-`core:mine` Powder Kegs — stationary shootable `C.Bomber` enemies that zone the floor — + aimed
-volleys + novas) · **@30 Vampire Lord** (fast novas + `C.Summon{pool=2}` bat swarms + `C.Regen`
-self-heal DPS check) · **@40 Elder Ent** (`C.Nova.spin` ROTATING spiral rings + wide fans +
-`core:bramble` pods) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink,
-spiral raging novas, ELITE summons `pool=3`, heavy aimed 5-volleys); 25/35/45 rotate the minis;
-every %10 wave is an ARENA (1920×1080 rect = `arena {960,540}` opt + matching `C.Nova.arena_w/h`,
-`WaveHold` freezes the wave clock); all carry `C.Boss` — death system keys **loot CHEST** +
-guaranteed drops/team-revive/win on it; client draws a **top-center boss HP bar** + shakes on
-boss fx) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
++8%/wave × (1 + 0.5·(TOTAL players − 1))** — downed players still count; bosses steeper:
+**+10%/wave × (1 + 0.7·per extra player)** (`health`/`boss_health` in enemies.lua, resolved at
+spawn in the sim VM) · manual-aim projectiles with **knockback** (`Weapon.knockback` rides each
+bullet) ·
+**scripted boss ladder to wave 50, each boss a UNIQUE kit** (no cross-boss attack recycling;
+`MILESTONES` table: **@5 Rhino Charger** (boss-scale `C.Lunge` charge) · **@10 Frog King**
+(`C.Nova` rings are HIS alone; rage <50% = faster/denser rings, <25% speed-up — the aimed heavy
+volley is gone) · **@15 Frog Prince** (`C.Lunge` LEAP + `burst` landing-slam ring, FrogMonster
+Jump clips) · **@20 Bomb Lord** (all ground, no bullets: `C.Planter` keg carpet + `C.Toss`
+pre-lit kegs lobbed at each player's feet — kegs are shootable `core:mine` `C.Bomber` enemies) ·
+**@30 Vampire Lord** (`C.BoltCaster` homing blood bolts steered by `homing_sys` (`C.Homing`
+turn-capped) + bat swarms `C.Summon{pool=2}` (lore) + `C.Regen` DPS check) · **@40 Elder Ent**
+(geometry: `C.Sprinkler` continuously ROTATING bullet streams + `C.SeedLauncher`/`C.Seed` fat
+seeds that BLOOM into petal rings mid-flight) · **@50 GAME MASTER finale = the WIN**
+(`WIN_WAVE=50`; Speed 0 + blink, `C.Barrage` rotating CROSS lances (4 lanes × staggered-speed
+bursts, +45° per volley) + ELITE summons `pool=3`); 25/35/45 rotate the minis; every %10 wave is
+an ARENA (1920×1080: client wall = the def's `arena {960,540}` opt, sim clamp = the dedicated
+`C.Arena{cx,cy,w,h}` comp — decoupled from C.Nova; `WaveHold` freezes the wave clock); all carry
+`C.Boss` — death system keys **loot CHEST** + guaranteed drops/team-revive/win on it; client
+draws a **top-center boss HP bar** + shakes on boss fx) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
 held (`sprites.hpp` discovers ATK/Fire, Charge_RunLoop/Dash/Jump_Full, Prepare/Charge_Begin
 clips) · **XP orbs → shared team level pool → synchronized offer scene** (LevelUp msg carries an
 `OfferFlavor` byte: level vs chest — the scene titles TREASURE for chests): the offer is rolled
@@ -167,24 +174,49 @@ IN LUA (`mod:level_offer(player, level, ctx)` + `world:offerable` entries carry
 `world:open_chest()` → the ChestOpen mailbox triggers one offer round for EVERYONE — the co-op
 fairness fix); rarity-first roll falls back down then UP a tier (an epic-only object pool must
 fill on a common roll); **Crystal Ball** = +1 card, **Lucky Clover** `C.Luck` tilts tier weights)
-with **5 rarity tiers** (grey/green/blue/purple/gold) — all content in `mods/core/` Lua (**20
-stat upgrades** incl. Split Shot `projectiles` fan, Piercing Rounds (`hit_cd` guards
-double-hits), Ricochet re-aim, Heavy Impact, Magnet `C.Magnet`, Leech kill-heal riding bullets,
-Greed per-player XP mult + **10 objects**:
-**Onion**/**Frost Belt**/**Shockwave Dash**/**Auto Target**/**Crystal Ball**/**Orbiting Blades**
-(`C.Orbit`, server-spun networked phase = client draw = hitbox)/**Spiked
-Armor**/**Phoenix Feather** (cheat death once)/**Lucky Clover**/**Adrenaline Core** (post-dash
-fire-rate)) · **heart life** (3 hearts, 1 s i-frames, rare heart drops heal) · **dash on LSHIFT**
+with **5 rarity tiers** (grey/green/blue/purple/gold); the **XP cost curve is Lua policy too**
+(`mod:xp_curve`, linear engine fallback — core uses a QUADRATIC `5+3L+0.8L²`: linear cost vs
+wave-growing income was a level-112-by-wave-32 runaway) — all content in `mods/core/` Lua
+(**19 stat upgrades**, deliberately UNCAPPED (all-in builds are strategy; only Greed stops at
++150%, an economy valve) incl. Piercing Rounds (`hit_cd` guards double-hits), Ricochet re-aim,
+Heavy Impact, Magnet `C.Magnet`, Leech kill-heal riding bullets + **18 objects**:
+**Onion**/**Frost Belt**/**Shockwave Dash**/**Crystal Ball**/**Orbiting Blades** (`C.Orbit`,
+server-spun networked phase = client draw = hitbox)/**Spiked Armor**/**Phoenix Feather** (cheat
+death once)/**Lucky Clover**/**Adrenaline Core** (post-dash fire-rate)/**Split Barrel** (+2
+bullets)/**Mirror Barrel** (`Weapon.mirror`: the volley fires backward too) · CURSED objects
+show their price (**Auto Target** = auto-aim −30% DMG, **Berserker Sigil** +60% DMG −1 heart,
+**Glass Cannon** ×2 DMG at 1 heart, **Lead Plates** +2 hearts −25% SPD) · IDENTITY objects
+transform a playstyle and BLOCK an upgrade lane forever via its `available` (`C.Goliath` +3
+hearts/speed clamped 200/no Swift Boots, `C.David` +54% fire rate/3 hearts max/no Vitality,
+`C.Executioner` crit chance = 8%×pierce/no Keen Eye — the 2 Hz `identity_sys` enforces the live
+rules)) · **heart life** (3 hearts, 1 s i-frames, rare heart drops heal; hearts only magnetize
+toward HURT players — no banked reserve trains) · **dash on LSHIFT**
 (predicted; Shockwave makes it damage) · **crit** · co-op **downed → proximity revive** (3 s arc
-via `mod:draw`+`ctx:arc`, boss kills revive everyone; red edge arrows point at downed teammates) ·
-**game-over** (all downed = defeat; frozen-world overlay, host returns everyone to the lobby) ·
+via `mod:draw`+`ctx:arc`, boss kills revive everyone) · **off-screen pointers on a fixed-radius
+ring around the player** (NOT screen-edge — user call): teammates green/red-when-down + name,
+arena boss + loot chest gold ·
+**floating damage numbers**: Lua damage sites call `world:damage_number(x,y,amount,kind)` →
+ModState buffer → ONE unreliable `DamageEvents` packet per snapshot tick (cap 48) → client
+FloatNum pool (rise+fade 0.8 s, crits gold/bigger; per-HIT only — aura DoT ticks stay silent) ·
+**boss bullet identity**: `Render.variant` 4 blood bolt / 5 pellet-petal / 6 pulsing seed (despawn
+= green pop + `pop` sound) / 7 lance / 8 frog spit — variants 4/7 draw ORIENTED along motion
+(trail squares behind the head, direction from the interp delta); synthesized `shoot_4..8.wav`
+cast sounds ride the existing `shoot_<variant>` hook ·
+**game-over** (all downed = defeat; frozen-world overlay; per-player SCOREBOARD from RunStats
+(kills/dmg/revives; `C.Bullet.owner` = `p:id()` stamps kill credit) + local bests file
+(`SDL_GetPrefPath` records.txt: best wave/wins/runs, "NEW BEST!" flash); host returns everyone
+to the lobby) · **ESC pause menu** (PauseScene: volume sliders (`Gui::slider`), host-only
+run pause toggle via `Command::Pause/Resume`, DISCONNECT → `reset_to_connect()`; update returns
+Continue — the co-op world keeps running beneath, only input is modal) · **F11** fullscreen ↔
+windowed toggle (Engine::on_event, before scenes) ·
 TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` `/heal` `/wave`
 `/stress`) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (29 scenarios over the full
-mods/core pipeline incl. the chest round + offer filtering; build line in its header — needs
-`-freflection -fcontracts` + the sol2 defines; LuaHost must outlive the World).
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (54 checks over the full
+mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
+objects, RunStats attribution, damage-number queue, boss bullet variants; build line in its
+header — needs `-freflection -fcontracts` + the sol2 defines; LuaHost must outlive the World).
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
@@ -216,7 +248,8 @@ mods/core pipeline incl. the chest round + offer filtering; build line in its he
   matches (and kills) the invoking shell.
 
 ## Known-next / deferred
-- F11 fullscreen toggle. (XP magnet shipped: base pull + boss-kill vacuum + Magnet upgrade.)
+- Unlockable starting loadouts / lobby character select, gated on the run-stats records (the
+  "stats first, unlocks later" plan — RunStats + local bests shipped). (F11 + XP magnet shipped.)
 
 ## Coding standards
 - **DoD**: components are POD; systems are flat `view<...>().each` loops; tags are empty structs.

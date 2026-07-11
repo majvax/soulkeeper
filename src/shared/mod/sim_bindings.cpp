@@ -407,7 +407,10 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
       },
       "destroy", [](EntityHandle& h) {
           if (h.reg->valid(h.entity)) { h.reg->destroy(h.entity); }
-      });
+      },
+      // Stable numeric id (index+version) — lets mods stamp ownership into a
+      // component field (C.Bullet.owner) and match it back to a live handle.
+      "id", [](EntityHandle& h) { return static_cast<double>(h.entity); });
 
     // The `world` query facade + engine services.
     core::Registry* reg = &world_reg;
@@ -448,6 +451,17 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                   "open_chest", [reg](ScriptWorld&) {
                                       const core::Entity note = reg->create();
                                       reg->assign(note, ChestOpen{});
+                                  },
+                                  // Queue a floating combat number at (x, y). kind: 0 = hit,
+                                  // 1 = crit. Drained per snapshot tick by the server; capped
+                                  // so a runaway mod loop can't flood the wire.
+                                  "damage_number", [host_state = &host.state()](ScriptWorld&, float x, float y,
+                                                                                double amount, int kind) {
+                                      if (host_state->damage_events.size() >= proto::max_damage_events) { return; }
+                                      const double amt = std::clamp(amount, 0.0, 65535.0);
+                                      host_state->damage_events.push_back(proto::DamageEvent{
+                                        .x = x, .y = y, .amount = static_cast<std::uint16_t>(amt),
+                                        .kind = static_cast<std::uint8_t>(kind != 0 ? 1 : 0) });
                                   },
                                   // Content offerable to `player` right now (availability +
                                   // object-ownership already filtered): the FACTS a Lua
@@ -627,6 +641,29 @@ std::vector<proto::LevelUpChoice> run_level_offer(LuaHost& host, core::Registry&
         out.push_back({ .id = def->wire_id, .rarity = static_cast<std::uint8_t>(rarity) });
     }
     return out;
+}
+
+std::uint32_t run_xp_curve(LuaHost& host, int level)
+{
+    constexpr auto fallback = [](int lvl) {
+        return 5U + (static_cast<std::uint32_t>(lvl) * 4U); // the engine's old linear curve
+    };
+    const sol::protected_function& hook = host.state().xp_curve;
+    if (!hook.valid()) { return fallback(level); }
+    sol::protected_function_result res = hook(level);
+    if (!res.valid()) {
+        const sol::error err = res;
+        std::fprintf(stderr, "[mod] xp_curve error: %s\n", err.what());
+        return fallback(level);
+    }
+    const sol::object value = res;
+    if (!value.is<double>()) {
+        std::fprintf(stderr, "[mod] xp_curve must return a number\n");
+        return fallback(level);
+    }
+    const double cost = value.as<double>();
+    if (cost < 1.0 || cost > 4e9) { return fallback(level); }
+    return static_cast<std::uint32_t>(cost);
 }
 
 void run_apply(const ContentDef& def, EntityHandle handle, Rarity rarity)

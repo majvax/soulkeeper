@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 12;
+inline constexpr std::uint16_t protocol_version = 13;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -46,6 +46,7 @@ enum class MsgType : std::uint8_t {
     SnapshotDelta = 12, // S2C: world state as a delta vs an acked full/delta (unreliable)
     GameOver = 13,      // S2C: the run ended (won/lost + final stats); sim freezes (reliable)
     LuaCommand = 14,    // C2S: a mod console command line, "name args..." (host-only, reliable)
+    DamageEvents = 15,  // S2C: floating combat numbers, u8 count + DamageEvent[] (unreliable)
 };
 
 enum class EntityKind : std::uint8_t { Mover = 0, Player = 1, Enemy = 2, Projectile = 3, XpOrb = 4, Heart = 5, Chest = 6 };
@@ -190,6 +191,17 @@ struct GameOverMsg
     std::uint16_t final_level;
 };
 
+// Per-player scoreboard block trailing GameOverMsg: u8 count + count entries
+// (RunStats read off each player entity at run end; net_id matches the roster).
+struct GameOverEntry
+{
+    std::uint32_t net_id;
+    std::uint32_t damage; // rounded total damage dealt to enemies
+    std::uint16_t kills;
+    std::uint16_t downs;
+    std::uint16_t revives;
+};
+
 struct RosterHeader
 {
     std::uint8_t count;
@@ -261,7 +273,19 @@ struct PlayerAim // 13 bytes packed
     std::uint16_t dash_cd_ms;     // Dash.cooldown, ms until the next charge
     std::uint16_t dash_cd_max_ms; // Dash.cooldown_max, ms per charge refill
 };
+
+// Floating combat numbers (unreliable, batched per snapshot tick): the sim's
+// Lua damage sites report through world:damage_number; a lost packet just
+// drops a number. Payload = u8 count + count x DamageEvent (11 B each).
+struct DamageEvent
+{
+    float x, y;           // world position of the hit
+    std::uint16_t amount; // rounded damage
+    std::uint8_t kind;    // 0 = hit, 1 = crit (bigger + gold on the client)
+};
 #pragma pack(pop)
+
+inline constexpr std::size_t max_damage_events = 48; // per snapshot tick
 
 // Aim direction codec: components are already normalized to [-1, 1].
 [[nodiscard]] inline std::int8_t quantize_aim(float v) noexcept

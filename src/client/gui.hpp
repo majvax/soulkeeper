@@ -62,6 +62,12 @@ public:
     // Pill button; true on click. Disabled draws dim and never fires.
     bool button(std::string_view label, float x, float y, float w, float h, bool enabled = true);
 
+    // Horizontal slider (0..1): dark pill track, light fill, draggable —
+    // keeps following the mouse while the press stays held, even off-track.
+    // Returns the (possibly updated) value; h is slider_h().
+    float slider(float x, float y, float w, float value);
+    [[nodiscard]] float slider_h() const noexcept { return body_px() + (6.0f * scale_); }
+
     // Bitmap text. `px` is the on-screen glyph size — multiples of scale()
     // stay pixel-crisp (the font's native size is 8). Default (px <= 0) is
     // body size: 6 * scale().

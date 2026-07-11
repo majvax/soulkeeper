@@ -39,11 +39,17 @@ return function(mod, C)
             end,
         })
 
+    -- CURSED: free aim comes at a price — the sim aims for you, but every
+    -- shot hits softer. A comfort-vs-power decision, not a default pick.
     mod:object("autotarget", "Auto Target",
-        function(e) e:set(C.AutoTarget, {}) end,
+        function(e)
+            e:set(C.AutoTarget, {})
+            local w = e:get(C.Weapon)
+            if w then w.damage = w.damage * 0.7 end
+        end,
         {
             rarity = "legendary",
-            value_text = function() return "auto-targets enemies" end,
+            value_text = function() return "auto-aim, -30% DMG" end,
         })
 
     -- +1 card on every future level-up (levelup.lua reads C.Insight).
@@ -119,5 +125,102 @@ return function(mod, C)
         {
             rarity = "epic",
             value_text = function() return "dash boosts fire rate" end,
+        })
+
+    ------------------------------------------------------------ bullet barrels
+    -- Extra bullets are a chest DECISION now (the Split Shot upgrade is gone).
+    mod:object("split_barrel", "Split Barrel",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then w.projectiles = math.floor(w.projectiles + 2) end
+        end,
+        {
+            rarity = "epic",
+            value_text = function() return "+2 bullets" end,
+        })
+    mod:object("mirror_barrel", "Mirror Barrel",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then w.mirror = 1 end
+        end,
+        {
+            rarity = "legendary",
+            value_text = function() return "volley fires backward too" end,
+        })
+
+    ----------------------------------------------------------------- cursed
+    -- Power with a visible price — pick them FOR a strategy.
+    mod:object("berserker_sigil", "Berserker Sigil",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then w.damage = w.damage * 1.6 end
+            local h = e:get(Hearts)
+            if h then
+                h.max = math.floor(math.max(1, h.max - 1))
+                h.current = math.floor(math.min(h.current, h.max))
+            end
+        end,
+        {
+            rarity = "legendary",
+            value_text = function() return "+60% DMG, -1 max heart" end,
+        })
+    mod:object("glass_cannon", "Glass Cannon",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then w.damage = w.damage * 2 end
+            local h = e:get(Hearts)
+            if h then
+                h.max = 1
+                h.current = math.floor(math.min(h.current, 1))
+            end
+        end,
+        {
+            rarity = "legendary",
+            value_text = function() return "x2 DMG, 1 max heart" end,
+        })
+    mod:object("lead_plates", "Lead Plates",
+        function(e)
+            local h = e:get(Hearts)
+            if h then h.max = math.floor(h.max + 2) end
+            local s = e:get(Speed)
+            if s then s.value = s.value * 0.75 end
+        end,
+        {
+            rarity = "epic",
+            value_text = function() return "+2 max hearts, -25% SPD" end,
+        })
+
+    ---------------------------------------------------------------- identity
+    -- One-time playstyle transforms: each BLOCKS an upgrade lane forever
+    -- (upgrades.lua `available` checks) and identity_sys enforces the live
+    -- rule so later picks can't undo it.
+    mod:object("goliath", "Goliath",
+        function(e)
+            local h = e:get(Hearts)
+            if h then h.max = math.floor(h.max + 3) end
+            e:set(C.Goliath, {}) -- identity_sys clamps Speed to 200; no more Swift Boots
+        end,
+        {
+            rarity = "epic",
+            value_text = function() return "+3 hearts, slow forever" end,
+        })
+    mod:object("david", "David",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then w.cooldown_max = math.max(0.08, w.cooldown_max * 0.65) end
+            e:set(C.David, {}) -- identity_sys clamps hearts to 3; no more Vitality
+        end,
+        {
+            rarity = "epic",
+            value_text = function() return "+54% fire rate, 3 hearts max" end,
+        })
+    -- SYNERGY: crit chance BECOMES a function of pierce (8% per pierce) —
+    -- pierce stacking feeds two axes, Keen Eye leaves the pool. The
+    -- pierce-crit build.
+    mod:object("executioner", "Executioner's Edge",
+        function(e) e:set(C.Executioner, {}) end,
+        {
+            rarity = "legendary",
+            value_text = function() return "crit = 8% per pierce" end,
         })
 end

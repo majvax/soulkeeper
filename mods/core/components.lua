@@ -21,18 +21,22 @@ return function(mod)
         projectiles = 1, -- bullets per trigger pull (a fan when > 1)
         pierce = 0,      -- extra enemies each bullet punches through
         bounces = 0,     -- ricochets toward the next enemy after a hit
+        mirror = 0,      -- 1 = the whole volley also fires BACKWARD (Mirror Barrel)
     }, { networked = true })
     C.Crit = mod:component("crit", { chance = 0.05, multiplier = 1.5 }, { networked = true })
 
     -- A bullet in flight (attached to spawn_bullet entities).
     -- hostile = 1: enemy-fired, hits players instead of enemies.
     C.Bullet = mod:component("bullet", {
-        damage = 10, lifetime = 1.2, hostile = 0,
+        damage = 10,
+        lifetime = 1.2,
+        hostile = 0,
         knockback = 0,
         pierce = 0,  -- hits left to punch through (fly on, don't die)
         bounces = 0, -- ricochets left (re-aim at the next enemy on hit)
         leech = 0,   -- shooter's kill-heal chance, carried by the bullet
         hit_cd = 0,  -- short immunity after a pierce so one enemy isn't hit twice
+        owner = 0,   -- shooter's entity id (p:id()) for the run-stats scoreboard
     })
 
     -- Contact damage an enemy deals: whole HEARTS per hit.
@@ -58,13 +62,13 @@ return function(mod)
         cooldown = 1.6,
         bullet_speed = 260,
         damage = 1,
-        timer = 1.0,  -- brief grace period after spawning
-        windup = 0.4, -- telegraph length (0 = fire instantly, old behavior)
-        winding = 0,  -- telegraph time left (internal)
-        anim = 0,     -- attack-clip window left (drives Render.fx)
-        volley = 1,   -- bullets per shot (a fan when > 1)
-        spread = 0,   -- total fan angle in radians (volley > 1)
-        variant = 1,  -- bullet visual: 1 = red, 3 = heavy (Cyclop)
+        timer = 1.0,       -- brief grace period after spawning
+        windup = 0.4,      -- telegraph length (0 = fire instantly, old behavior)
+        winding = 0,       -- telegraph time left (internal)
+        anim = 0,          -- attack-clip window left (drives Render.fx)
+        volley = 1,        -- bullets per shot (a fan when > 1)
+        spread = 0,        -- total fan angle in radians (volley > 1)
+        variant = 1,       -- bullet visual: 1 = red, 3 = heavy (Cyclop)
         bullet_radius = 0, -- override the bullet hitbox (0 = default)
     })
     -- Suicide bomber: within `trigger` px of a player it stops, lights the
@@ -72,10 +76,10 @@ return function(mod)
     -- Killing it before the fuse runs out cancels the blast entirely.
     C.Bomber = mod:component("bomber", {
         trigger = 70,
-        fuse = 0.9,          -- telegraph seconds once triggered
+        fuse = 0.9, -- telegraph seconds once triggered
         blast_bullets = 10,
         blast_speed = 250,
-        blast_range = 90,    -- bullets live blast_range / blast_speed seconds
+        blast_range = 90, -- bullets live blast_range / blast_speed seconds
         damage = 1,
     })
     C.Fuse = mod:component("fuse", { timer = 0.9 }) -- lit: countdown to boom
@@ -91,14 +95,15 @@ return function(mod)
         speed = 430,
         duration = 0.35,
         cooldown = 2.2,
-        timer = 1.0,      -- grace after spawn, then per-lunge cooldown
-        burst = 0,        -- hostile bullets on dash end (0 = plain lunge)
+        timer = 1.0, -- grace after spawn, then per-lunge cooldown
+        burst = 0,   -- hostile bullets on dash end (0 = plain lunge)
         burst_speed = 240,
         burst_damage = 1,
-        winding = 0,      -- telegraph time left (internal)
-        dashing = 0,      -- dash time left (internal)
-        dx = 0, dy = 0,   -- locked dash direction (internal)
-        saved_speed = 0,  -- Speed.value stashed during windup/dash (internal)
+        winding = 0,     -- telegraph time left (internal)
+        dashing = 0,     -- dash time left (internal)
+        dx = 0,
+        dy = 0,          -- locked dash direction (internal)
+        saved_speed = 0, -- Speed.value stashed during windup/dash (internal)
     })
 
     -- Bomb/bramble planter (boss attack): every `cooldown` s, drop `count`
@@ -116,6 +121,74 @@ return function(mod)
     -- Passive self-heal (Vampire Lord): out-DPS it or the fight never ends.
     C.Regen = mod:component("regen", { per_second = 20 })
 
+    -- Bomb toss (Bomb Lord's second act): every `cooldown` s, lob a PRE-LIT
+    -- keg at each live player's position (small scatter — dodge the spot).
+    -- The keg is a core:mine with its C.Fuse already burning.
+    C.Toss = mod:component("toss", {
+        cooldown = 4.5,
+        timer = 3.0,
+        fuse = 1.3,    -- lit fuse length on the lobbed keg
+        scatter = 200, -- landing offset radius around the player
+        anim = 0,
+    })
+
+    -- Homing blood bolts (Vampire Lord): fires `bolts` bullets that STEER
+    -- toward the nearest player (each bullet carries C.Homing).
+    C.BoltCaster = mod:component("boltcaster", {
+        cooldown = 2.2,
+        timer = 2.0,
+        bolts = 3,
+        bullet_speed = 200,
+        damage = 1,
+        lifetime = 3.5,
+        turn_rate = 2.2, -- rad/s copied onto each bolt
+        anim = 0,
+    })
+    -- On a hostile bullet: the homing system bends its velocity toward the
+    -- nearest live player, capped at `turn` rad/s. Outrunnable, not ignorable.
+    C.Homing = mod:component("homing", { turn = 2.2 })
+
+    -- Bullet sprinkler (Elder Ent): continuously rotating STREAMS — every
+    -- emission tick, one bullet per arm at the current angle; the arms sweep.
+    -- Rings pulse (Frog King); streams sweep (Elder Ent).
+    C.Sprinkler = mod:component("sprinkler", {
+        arms = 3,
+        angular_vel = 0.9, -- rad/s arm sweep
+        angle = 0,         -- internal
+        bullet_speed = 190,
+        damage = 1,
+        lifetime = 2.4,
+    })
+
+    -- Blooming seeds (Elder Ent's second act): lob a slow fat seed at a
+    -- player; mid-flight it POPS into a ring of `petals` slow bullets.
+    C.SeedLauncher = mod:component("seedlauncher", {
+        cooldown = 3.2,
+        timer = 2.5,
+        bullet_speed = 170,
+        bloom_after = 1.1,
+        petals = 6,
+        petal_speed = 150,
+        damage = 1,
+        anim = 0,
+    })
+    C.Seed = mod:component("seed", { bloom = 1.1, petals = 6, petal_speed = 150, damage = 1 })
+
+    -- Rotating cross barrage (Game Master): `lanes` tight bullet lances at
+    -- staggered speeds; the whole cross rotates `rotate` radians per volley
+    -- (+ then x then +...). Lanes, not rings — his geometry.
+    C.Barrage = mod:component("barrage", {
+        cooldown = 2.4,
+        timer = 2.0,
+        lanes = 4,
+        per_lane = 3,
+        rotate = 0.7853981, -- pi/4
+        angle = 0,          -- internal
+        bullet_speed = 260,
+        damage = 1,
+        anim = 0,
+    })
+
     -- Elites always pay out a healing heart on death (death system checks it).
     C.EliteDrop = mod:component("elitedrop", {})
 
@@ -126,14 +199,14 @@ return function(mod)
     -- 3 = ELITES (the Game Master finale).
     C.Summon = mod:component("summon", {
         cooldown = 5.0,
-        timer = 2.5,        -- first summon shortly after the entrance
+        timer = 2.5, -- first summon shortly after the entrance
         count = 3,
         pool = 1,
         blink_range = 170,
         blink_dist = 300,
         blink_cooldown = 1.2,
-        blink_cd = 0,       -- internal
-        anim = 0,           -- attack-clip window left (drives Render.fx)
+        blink_cd = 0, -- internal
+        anim = 0,     -- attack-clip window left (drives Render.fx)
     })
 
     -- Pure TAGS: zero-field components used only for membership (has/each).
@@ -142,6 +215,13 @@ return function(mod)
     -- Boss loot chest: walking over it opens the objects-only pick for the
     -- whole team (pickups system -> world:open_chest()).
     C.Chest = mod:component("chesttag", {})
+
+    -- IDENTITY tags (one-time playstyle transforms; each blocks an upgrade
+    -- from ever being offered again — see upgrades.lua `available` checks —
+    -- and identity_sys keeps their live rules enforced).
+    C.Goliath = mod:component("goliath", {})         -- tank: hearts up, speed clamped
+    C.David = mod:component("david", {})             -- glassy speedster: fire rate up, hearts clamped
+    C.Executioner = mod:component("executioner", {}) -- crit chance = f(pierce)
 
     -- Revive bar on a Downed player (0..1). Networked so every client can
     -- draw the progress arc over the body (core's mod:draw hook).
@@ -163,7 +243,7 @@ return function(mod)
     C.Orbit = mod:component("orbit", {
         count = 3,
         radius = 70,
-        dps = 70, -- fodder crossing the ring dies mid-crossing
+        dps = 70,   -- fodder crossing the ring dies mid-crossing
         spin = 2.5, -- rad/s
         phase = 0,
     }, { networked = true })
@@ -187,25 +267,29 @@ return function(mod)
         was_bursting = 0, -- internal dash-end edge detector
     })
 
-    -- Boss special: every `cooldown` s, a radial ring of `bullets` hostile
-    -- projectiles. RAGES as it drops: below 50% health the rings come faster
-    -- and denser plus an aimed volley; below 25% it speeds up (phase tracks).
+    -- The Frog King's SIGNATURE (his alone): every `cooldown` s, a radial
+    -- ring of `bullets` hostile projectiles. RAGES as it drops: below 50%
+    -- health the rings come faster and denser; below 25% it speeds up.
     C.Nova = mod:component("nova", {
         cooldown = 3.0,
-        timer = 2.0,   -- first ring shortly after the arena entrance
+        timer = 2.0, -- first ring shortly after the arena entrance
         bullets = 16,
         bullet_speed = 210,
         damage = 1,
-        spin = 0,      -- radians each ring rotates past the last: > 0 = SPIRAL walls
-        angle = 0,     -- accumulated ring rotation (internal)
-        phase = 0,     -- 0 calm / 1 enraged / 2 frenzied (internal)
-        anim = 0,      -- attack-clip window left (drives Render.fx)
-        -- Fixed arena rect: center = the boss's spawn point (set at spawn by
-        -- enemies.lua), half extents = the archetype's `arena` opt values.
+        spin = 0,  -- radians each ring rotates past the last: > 0 = SPIRAL walls
+        angle = 0, -- accumulated ring rotation (internal)
+        phase = 0, -- 0 calm / 1 enraged / 2 frenzied (internal)
+        anim = 0,  -- attack-clip window left (drives Render.fx)
+    })
+
+    -- Arena confinement (sim side; the CLIENT keys its wall/prediction off
+    -- the archetype's `arena` opt): players and the bearer stay inside the
+    -- fixed rect. Center = spawn point (set by the milestone hook).
+    C.Arena = mod:component("arena", {
         cx = 0,
         cy = 0,
-        arena_w = 560,
-        arena_h = 300,
+        w = 960, -- half extents (1920x1080 full)
+        h = 540,
     })
     return C
 end

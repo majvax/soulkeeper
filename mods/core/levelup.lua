@@ -12,6 +12,14 @@ return function(mod, C)
     local WEIGHTS = { 0.45, 0.28, 0.16, 0.08, 0.03 }
     local BASE_CARDS = 3
 
+    -- XP cost of the NEXT level: QUADRATIC. Income grows ~linearly with the
+    -- wave (more enemies, richer orbs, elites), so a linear cost curve runs
+    -- away (playtest: level 112 by wave 32, a menu every few seconds). This
+    -- lands around level 35-45 by wave 30 — roughly a level per wave late.
+    mod:xp_curve(function(level)
+        return 5 + 3 * level + math.floor(0.8 * level * level)
+    end)
+
     -- Weighted tier roll -> 1..5 (Lua-side index; wire rarity = tier - 1).
     -- Luck (the Lucky Clover) tilts the roll upward: each tier's weight is
     -- multiplied by 1 + luck * (tier - 1), so commons keep their base weight

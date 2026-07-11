@@ -42,6 +42,25 @@ return function(mod, C)
         return true
     end
 
+    -- Run-stats scoreboard: credit damage (and a kill) to a player handle, or
+    -- to a bullet's stamped owner id (a <=4-player scan — hits are rare next
+    -- to ticks). Shown on the game-over screen.
+    local function credit(p, damage, killed)
+        local rs = p:get(RunStats)
+        if not rs then return end
+        rs.damage = rs.damage + damage
+        if killed then rs.kills = math.floor(rs.kills + 1) end
+    end
+    local function credit_owner(owner_id, damage, killed)
+        if owner_id == 0 then return end
+        for p in world:each(Player, RunStats) do
+            if p:id() == owner_id then
+                credit(p, damage, killed)
+                return
+            end
+        end
+    end
+
     ----------------------------------------------------------------- targeting
     -- Steer every enemy toward the nearest live player at its Speed; ranged
     -- enemies hold position inside their standoff ring (folded in here so the
@@ -110,21 +129,33 @@ return function(mod, C)
                 local pp = p:get(Position)
                 local crit = p:get(C.Crit)
                 local leech = p:has(C.Leech) and p:get(C.Leech).chance or 0
-                local n = math.floor(w.projectiles)
-                for i = 1, n do
-                    local a = n > 1 and 0.14 * ((i - 1) - (n - 1) / 2) or 0
-                    local ca, sa = math.cos(a), math.sin(a)
-                    local dx, dy = aim.dx * ca - aim.dy * sa, aim.dx * sa + aim.dy * ca
-                    local damage = w.damage
-                    local is_crit = crit and math.random() < crit.chance
-                    if is_crit then damage = damage * crit.multiplier end
-                    local b = spawn_bullet(pp.x, pp.y, dx * w.bullet_speed, dy * w.bullet_speed)
-                    b:set(C.Bullet, {
-                        damage = damage, lifetime = w.lifetime, knockback = w.knockback,
-                        pierce = w.pierce, bounces = w.bounces, leech = leech,
-                    })
-                    if is_crit then b:get(Render).variant = 2 end -- orange
+                local pid = p:id() -- stamped on each bullet for kill credit
+                -- One volley per direction: forward always, backward too with
+                -- the Mirror Barrel (each bullet rolls its own crit).
+                local function volley(ax, ay)
+                    local n = math.floor(w.projectiles)
+                    for i = 1, n do
+                        local a = n > 1 and 0.14 * ((i - 1) - (n - 1) / 2) or 0
+                        local ca, sa = math.cos(a), math.sin(a)
+                        local dx, dy = ax * ca - ay * sa, ax * sa + ay * ca
+                        local damage = w.damage
+                        local is_crit = crit and math.random() < crit.chance
+                        if is_crit then damage = damage * crit.multiplier end
+                        local b = spawn_bullet(pp.x, pp.y, dx * w.bullet_speed, dy * w.bullet_speed)
+                        b:set(C.Bullet, {
+                            damage = damage,
+                            lifetime = w.lifetime,
+                            knockback = w.knockback,
+                            pierce = w.pierce,
+                            bounces = w.bounces,
+                            leech = leech,
+                            owner = pid,
+                        })
+                        if is_crit then b:get(Render).variant = 2 end -- orange
+                    end
                 end
+                volley(aim.dx, aim.dy)
+                if w.mirror == 1 then volley(-aim.dx, -aim.dy) end
                 w.cooldown = w.cooldown_max
             end
         end
@@ -166,7 +197,15 @@ return function(mod, C)
                         local hit = br + e:get(Radius).value
                         if dx * dx + dy * dy < hit * hit then
                             local h = e:get(Health)
+                            local was_alive = h.current > 0
                             h.current = h.current - bullet.damage
+                            -- Floating number; crit bullets were tagged variant 2 at fire time.
+                            world:damage_number(ep.x, ep.y, bullet.damage,
+                                b:get(Render).variant == 2 and 1 or 0)
+                            -- Corpse overlaps (death system runs at 30 Hz) don't pad stats.
+                            if was_alive then
+                                credit_owner(bullet.owner, bullet.damage, h.current <= 0)
+                            end
                             -- Kill-heal (Leech): the shooter's chance rides the
                             -- bullet; the heart goes to the nearest live player.
                             if h.current <= 0 and bullet.leech > 0
@@ -254,7 +293,11 @@ return function(mod, C)
                         -- Spiked Armor: a landed hit bites back.
                         if hurt_player(p, e:get(C.Touch).hearts) and p:has(C.Thorns) then
                             local h = e:get(Health)
-                            h.current = h.current - p:get(C.Thorns).damage
+                            local was_alive = h.current > 0
+                            local thorns = p:get(C.Thorns).damage
+                            h.current = h.current - thorns
+                            world:damage_number(ep.x, ep.y, thorns, 0)
+                            if was_alive then credit(p, thorns, h.current <= 0) end
                         end
                         break -- one hit per window; i-frames cover the rest
                     end
@@ -274,7 +317,10 @@ return function(mod, C)
                 for e in world:nearby(pp.x, pp.y, 40, Enemy, Health, Position) do
                     local ep = e:get(Position)
                     local h = e:get(Health)
+                    local was_alive = h.current > 0
                     h.current = h.current - d.shockwave
+                    world:damage_number(ep.x, ep.y, d.shockwave, 0)
+                    if was_alive then credit(p, d.shockwave, h.current <= 0) end
                     local dx, dy = ep.x - pp.x, ep.y - pp.y
                     local len = math.sqrt(dx * dx + dy * dy)
                     if len < 1 then dx, dy, len = 1, 0, 1 end
@@ -343,7 +389,12 @@ return function(mod, C)
                 local pp = p:get(Position)
                 local radius = p:has(C.Magnet) and p:get(C.Magnet).radius or MAGNET_RADIUS
                 magnetize(pp, C.Xp, dt, radius)
-                magnetize(pp, C.Heal, dt, radius)
+                -- Hearts only pull toward a HURT player — a full-HP player
+                -- must not bank a train of reserve hearts behind them.
+                local h = p:get(Hearts)
+                if h and h.current < h.max then
+                    magnetize(pp, C.Heal, dt, radius)
+                end
             end
         end
     end)
@@ -459,7 +510,7 @@ return function(mod, C)
                 local pp = p:get(Position)
                 if not p:has(C.Revive) then p:set(C.Revive, {}) end
                 local rv = p:get(C.Revive)
-                local _, d2 = nearest_player(pp.x, pp.y)
+                local reviver, d2 = nearest_player(pp.x, pp.y)
                 if d2 < REVIVE_RADIUS * REVIVE_RADIUS then
                     rv.progress = rv.progress + dt / REVIVE_SECONDS
                 else
@@ -467,6 +518,12 @@ return function(mod, C)
                 end
                 if rv.progress >= 1 then
                     revive(p)
+                    -- Scoreboard credit to whoever finished the arc (boss-kill
+                    -- mass revives credit nobody — no single rescuer).
+                    if reviver then
+                        local rs = reviver:get(RunStats)
+                        if rs then rs.revives = math.floor(rs.revives + 1) end
+                    end
                     alive = alive + 1
                 end
             elseif p:get(Hearts).current <= 0 then
@@ -481,6 +538,8 @@ return function(mod, C)
                 else
                     p:set(Downed, { respawn_wave = 0 }) -- wave respawn retired: revive instead
                     p:set(C.Revive, {})
+                    local rs = p:get(RunStats)
+                    if rs then rs.downs = math.floor(rs.downs + 1) end
                     local v = p:get(Velocity)
                     if v then v.dx, v.dy = 0, 0 end
                 end
@@ -535,7 +594,7 @@ return function(mod, C)
                 if r.winding <= 0 then
                     r.timer = r.cooldown -- pay the cooldown even on a whiff
                     if fire_ranged(e, r) then
-                        r.anim = 0.5 -- play the attack clip (Render.fx)
+                        r.anim = 0.5     -- play the attack clip (Render.fx)
                         e:get(Render).fx = 1
                     else
                         e:get(Render).fx = 0
@@ -600,8 +659,11 @@ return function(mod, C)
                     local a = (i / n) * 2 * math.pi
                     local b = spawn_bullet(ep.x, ep.y, math.cos(a) * bomber.blast_speed,
                         math.sin(a) * bomber.blast_speed)
-                    b:set(C.Bullet, { damage = bomber.damage, hostile = 1,
-                                      lifetime = bomber.blast_range / bomber.blast_speed })
+                    b:set(C.Bullet, {
+                        damage = bomber.damage,
+                        hostile = 1,
+                        lifetime = bomber.blast_range / bomber.blast_speed
+                    })
                     b:get(Render).variant = 1
                 end
                 e:get(Health).current = 0 -- the death system drops the orb
@@ -668,11 +730,11 @@ return function(mod, C)
         end
     end)
 
-    -- Boss nova: a radial ring of hostile bullets every Nova.cooldown seconds,
-    -- with RAGE phases keyed on its health: < 50% the rings come faster and
-    -- denser plus a 3-bullet aimed volley; < 25% the boss itself speeds up.
-    -- 10 Hz is plenty for multi-second cooldowns; the timer uses the
-    -- accumulated dt. One boss alive at a time, so the walk is tiny.
+    -- The Frog King's nova (HIS signature — no other boss rings): a radial
+    -- ring of hostile bullets every Nova.cooldown seconds, with RAGE phases
+    -- keyed on its health: < 50% the rings come faster and denser; < 25% the
+    -- boss itself speeds up. 10 Hz is plenty for multi-second cooldowns; the
+    -- timer uses the accumulated dt. One boss alive at a time: tiny walk.
     mod:system("nova", { phase = "update", rate = 10, stagger = 0.33 }, function(dt)
         for e in world:each(C.Nova, Position, Health, Enemy) do
             local nova = e:get(C.Nova)
@@ -700,26 +762,7 @@ return function(mod, C)
                     local b = spawn_bullet(ep.x, ep.y, math.cos(a) * nova.bullet_speed,
                         math.sin(a) * nova.bullet_speed)
                     b:set(C.Bullet, { damage = nova.damage, hostile = 1, lifetime = 2.2 })
-                    b:get(Render).variant = 1 -- hostile: red
-                end
-                -- Enraged: an aimed 3-bullet volley punishes standing still.
-                if nova.phase >= 1 then
-                    local _, d2, px, py = nearest_player(ep.x, ep.y)
-                    if d2 < math.huge then
-                        local len = math.sqrt(d2)
-                        if len > 0 then
-                            local dx, dy = (px - ep.x) / len, (py - ep.y) / len
-                            for k = -1, 1 do
-                                local a = k * 0.22
-                                local ca, sa = math.cos(a), math.sin(a)
-                                local vx, vy = dx * ca - dy * sa, dx * sa + dy * ca
-                                local b = spawn_bullet(ep.x, ep.y, vx * nova.bullet_speed * 1.5,
-                                    vy * nova.bullet_speed * 1.5)
-                                b:set(C.Bullet, { damage = nova.damage, hostile = 1, lifetime = 2.0 })
-                                b:get(Render).variant = 3 -- heavy: reads as the aimed shot
-                            end
-                        end
-                    end
+                    b:get(Render).variant = 8 -- frog spit: bright-green ring pellet
                 end
                 nova.timer = nova.cooldown
                 nova.anim = 0.9 -- play the boss's attack clip (Render.fx)
@@ -735,8 +778,8 @@ return function(mod, C)
     -- away from any player that closes in. 10 Hz: both timers are
     -- multi-second; the blink check radius dwarfs per-100 ms movement.
     local SUMMON_POOLS = {
-        { "core:bandit", "core:scout", "core:marauder" },                -- 1: trash
-        { "core:scout", "core:scout", "core:scout_elite" },              -- 2: bat swarm
+        { "core:bandit",          "core:scout",         "core:marauder" },     -- 1: trash
+        { "core:scout",           "core:scout",         "core:scout_elite" },  -- 2: bat swarm
         { "core:berserker_elite", "core:slasher_elite", "core:bomber_elite" }, -- 3: ELITES
     }
     mod:system("summon_sys", { phase = "update", rate = 10, stagger = 0.65 }, function(dt)
@@ -750,7 +793,7 @@ return function(mod, C)
                 for i = 1, n do
                     local a = math.random() * 2 * math.pi
                     spawn_enemy(ep.x + math.cos(a) * 110, ep.y + math.sin(a) * 110,
-                                kinds[math.random(#kinds)])
+                        kinds[math.random(#kinds)])
                 end
                 s.timer = s.cooldown
                 s.anim = 0.8 -- the ATK clip doubles as the summon cast
@@ -774,22 +817,22 @@ return function(mod, C)
         end
     end)
 
-    -- Boss arena confinement: while a nova-bearer lives, players (and the
+    -- Boss arena confinement: while a C.Arena bearer lives, players (and the
     -- boss itself) can't leave the FIXED rect recorded at its spawn — no
     -- hit-and-run. The client predicts the same clamp (via the archetype's
     -- `arena` opt) so the wall doesn't rubber-band. 60 Hz keeps the overshoot
     -- under ~4 px at run speed.
-    local function rect_clamp(pos, nova)
-        pos.x = math.max(nova.cx - nova.arena_w, math.min(nova.cx + nova.arena_w, pos.x))
-        pos.y = math.max(nova.cy - nova.arena_h, math.min(nova.cy + nova.arena_h, pos.y))
+    local function rect_clamp(pos, arena)
+        pos.x = math.max(arena.cx - arena.w, math.min(arena.cx + arena.w, pos.x))
+        pos.y = math.max(arena.cy - arena.h, math.min(arena.cy + arena.h, pos.y))
     end
     mod:system("arena", { phase = "update", rate = 60, stagger = 0.25 }, function(dt)
-        for e in world:each(C.Nova, Position) do
-            local nova = e:get(C.Nova)
-            if nova.arena_w > 0 then
-                rect_clamp(e:get(Position), nova) -- the boss stays home too
+        for e in world:each(C.Arena, Position) do
+            local arena = e:get(C.Arena)
+            if arena.w > 0 then
+                rect_clamp(e:get(Position), arena) -- the boss stays home too
                 for p in world:each(Player, Position) do
-                    rect_clamp(p:get(Position), nova)
+                    rect_clamp(p:get(Position), arena)
                 end
             end
         end
@@ -813,9 +856,38 @@ return function(mod, C)
                     local dx, dy = ep.x - bx, ep.y - by
                     if dx * dx + dy * dy < 26 * 26 then
                         local h = e:get(Health)
+                        local was_alive = h.current > 0
                         h.current = h.current - o.dps * dt
+                        -- No floating numbers for aura ticks (spam), but the
+                        -- damage still counts on the scoreboard.
+                        if was_alive then credit(p, o.dps * dt, h.current <= 0) end
                     end
                 end
+            end
+        end
+    end)
+
+    -- Identity enforcement: the one-time identity objects declare LIVE rules
+    -- ("my speed is capped", "my crit tracks pierce") — this keeps them true
+    -- against later picks (Lead Plates, Sharp Rounds, boss buffs...). 2 Hz on
+    -- <=4 players is free.
+    mod:system("identity_sys", { phase = "update", rate = 2, stagger = 0.5 }, function(dt)
+        for p in world:each(Player) do
+            if p:has(C.Goliath) then
+                local s = p:get(Speed)
+                if s and s.value > 200 then s.value = 200 end
+            end
+            if p:has(C.David) then
+                local h = p:get(Hearts)
+                if h and h.max > 3 then
+                    h.max = 3
+                    h.current = math.floor(math.min(h.current, 3))
+                end
+            end
+            if p:has(C.Executioner) then
+                local w = p:get(C.Weapon)
+                local c = p:get(C.Crit)
+                if w and c then c.chance = math.min(1.0, 0.08 * w.pierce) end
             end
         end
     end)
@@ -835,6 +907,199 @@ return function(mod, C)
         end
     end)
 
+    -- Bomb toss (Bomb Lord): lob a PRE-LIT keg at each live player's spot —
+    -- ground denial ON you (the carpet planter denies random ground). The keg
+    -- is a core:mine whose C.Fuse is already burning; the existing fuse
+    -- system detonates it, and it's shootable until then.
+    mod:system("toss_sys", { phase = "update", rate = 10, stagger = 0.05 }, function(dt)
+        for e in world:each(C.Toss, Position, Enemy) do
+            local t = e:get(C.Toss)
+            t.timer = t.timer - dt
+            if t.timer <= 0 then
+                for p in world:each(Player, Position) do
+                    if not p:has(Downed) then
+                        local pp = p:get(Position)
+                        local a = math.random() * 2 * math.pi
+                        local r = math.random() * t.scatter
+                        local keg = spawn_enemy(pp.x + math.cos(a) * r, pp.y + math.sin(a) * r,
+                            "core:mine")
+                        if keg then keg:set(C.Fuse, { timer = t.fuse }) end
+                    end
+                end
+                t.timer = t.cooldown
+                t.anim = 0.6
+                e:get(Render).fx = 1
+            elseif t.anim > 0 then
+                t.anim = t.anim - dt
+                if t.anim <= 0 then e:get(Render).fx = 0 end
+            end
+        end
+    end)
+
+    -- Homing blood bolts (Vampire Lord): cast a few slow bullets that STEER.
+    mod:system("bolt_sys", { phase = "update", rate = 10, stagger = 0.2 }, function(dt)
+        for e in world:each(C.BoltCaster, Position, Enemy) do
+            local bc = e:get(C.BoltCaster)
+            bc.timer = bc.timer - dt
+            if bc.timer <= 0 then
+                local ep = e:get(Position)
+                local _, d2, px, py = nearest_player(ep.x, ep.y)
+                if d2 < math.huge then
+                    local len = math.max(1, math.sqrt(d2))
+                    for i = 1, math.floor(bc.bolts) do
+                        -- Launch fanned; the homing does the aiming.
+                        local a = (i - (bc.bolts + 1) / 2) * 0.5
+                        local ca, sa = math.cos(a), math.sin(a)
+                        local dx, dy = (px - ep.x) / len, (py - ep.y) / len
+                        local vx, vy = dx * ca - dy * sa, dx * sa + dy * ca
+                        local b = spawn_bullet(ep.x, ep.y, vx * bc.bullet_speed, vy * bc.bullet_speed)
+                        b:set(C.Bullet, { damage = bc.damage, hostile = 1, lifetime = bc.lifetime })
+                        b:set(C.Homing, { turn = bc.turn_rate })
+                        b:get(Render).variant = 4 -- blood bolt: dark-red tear w/ trail
+                    end
+                    bc.timer = bc.cooldown
+                    bc.anim = 0.5
+                    e:get(Render).fx = 1
+                end
+            elseif bc.anim > 0 then
+                bc.anim = bc.anim - dt
+                if bc.anim <= 0 then e:get(Render).fx = 0 end
+            end
+        end
+    end)
+
+    -- Homing steer: bend each homing bullet's velocity toward the nearest
+    -- live player, capped at `turn` rad/s — outrun it or break its arc with
+    -- a dash; never ignore it. 20 Hz over a handful of bolts.
+    mod:system("homing_sys", { phase = "motion", rate = 20, stagger = 0.6 }, function(dt)
+        for b in world:each(C.Homing, Velocity, Position) do
+            local bp = b:get(Position)
+            local _, d2, px, py = nearest_player(bp.x, bp.y)
+            if d2 < math.huge then
+                local v = b:get(Velocity)
+                local speed = math.sqrt(v.dx * v.dx + v.dy * v.dy)
+                if speed > 1 then
+                    local want = math.atan(py - bp.y, px - bp.x)
+                    local cur = math.atan(v.dy, v.dx)
+                    local diff = want - cur
+                    while diff > math.pi do diff = diff - 2 * math.pi end
+                    while diff < -math.pi do diff = diff + 2 * math.pi end
+                    local max_turn = b:get(C.Homing).turn * dt
+                    diff = math.max(-max_turn, math.min(max_turn, diff))
+                    local na = cur + diff
+                    v.dx, v.dy = math.cos(na) * speed, math.sin(na) * speed
+                end
+            end
+        end
+    end)
+
+    -- Bullet sprinkler (Elder Ent): rotating STREAMS — one bullet per arm per
+    -- emission tick, arms sweeping continuously. You orbit through the gaps;
+    -- they chase. ~12 Hz x 3 arms = 36 bullets/s, ~85 alive at 2.4 s life.
+    mod:system("sprinkler_sys", { phase = "update", rate = 12, stagger = 0.35 }, function(dt)
+        for e in world:each(C.Sprinkler, Position, Enemy) do
+            local s = e:get(C.Sprinkler)
+            s.angle = s.angle + s.angular_vel * dt
+            local ep = e:get(Position)
+            local n = math.floor(s.arms)
+            for i = 1, n do
+                local a = s.angle + (i / n) * 2 * math.pi
+                local b = spawn_bullet(ep.x, ep.y, math.cos(a) * s.bullet_speed,
+                    math.sin(a) * s.bullet_speed)
+                b:set(C.Bullet, { damage = s.damage, hostile = 1, lifetime = s.lifetime })
+                b:get(Render).variant = 5 -- sickly-green sprinkler pellet
+            end
+        end
+    end)
+
+    -- Blooming seeds (Elder Ent): lob a fat slow seed at the nearest player;
+    -- mid-flight it POPS into a ring of slow petals (seed_bloom below).
+    mod:system("seed_sys", { phase = "update", rate = 10, stagger = 0.7 }, function(dt)
+        for e in world:each(C.SeedLauncher, Position, Enemy) do
+            local sl = e:get(C.SeedLauncher)
+            sl.timer = sl.timer - dt
+            if sl.timer <= 0 then
+                local ep = e:get(Position)
+                local _, d2, px, py = nearest_player(ep.x, ep.y)
+                if d2 < math.huge then
+                    local len = math.max(1, math.sqrt(d2))
+                    local b = spawn_bullet(ep.x, ep.y, (px - ep.x) / len * sl.bullet_speed,
+                        (py - ep.y) / len * sl.bullet_speed)
+                    b:set(C.Bullet, {
+                        damage = sl.damage,
+                        hostile = 1,
+                        lifetime = sl.bloom_after + 2.0
+                    })
+                    b:set(C.Seed, {
+                        bloom = sl.bloom_after,
+                        petals = sl.petals,
+                        petal_speed = sl.petal_speed,
+                        damage = sl.damage
+                    })
+                    b:get(Render).variant = 6 -- fat pulsing seed: "that one will pop"
+                    sl.timer = sl.cooldown
+                    sl.anim = 0.5
+                    e:get(Render).fx = 1
+                end
+            elseif sl.anim > 0 then
+                sl.anim = sl.anim - dt
+                if sl.anim <= 0 then e:get(Render).fx = 0 end
+            end
+        end
+    end)
+
+    mod:system("seed_bloom", { phase = "update", rate = 20, stagger = 0.9 }, function(dt)
+        for b in world:each(C.Seed, Position) do
+            local seed = b:get(C.Seed)
+            seed.bloom = seed.bloom - dt
+            if seed.bloom <= 0 then
+                local bp = b:get(Position)
+                local n = math.floor(seed.petals)
+                for i = 1, n do
+                    local a = (i / n) * 2 * math.pi
+                    local petal = spawn_bullet(bp.x, bp.y, math.cos(a) * seed.petal_speed,
+                        math.sin(a) * seed.petal_speed)
+                    petal:set(C.Bullet, { damage = seed.damage, hostile = 1, lifetime = 1.6 })
+                    petal:get(Render).variant = 5 -- petals match the sprinkler green
+                end
+                b:destroy()
+            end
+        end
+    end)
+
+    -- Rotating cross barrage (Game Master): tight lances in `lanes`
+    -- directions at staggered speeds, the whole cross rotating each volley —
+    -- lanes, not rings: stand BETWEEN them, and don't camp (they rotate).
+    mod:system("barrage_sys", { phase = "update", rate = 10, stagger = 0.4 }, function(dt)
+        for e in world:each(C.Barrage, Position, Enemy) do
+            local bar = e:get(C.Barrage)
+            bar.timer = bar.timer - dt
+            if bar.timer <= 0 then
+                local ep = e:get(Position)
+                local lanes = math.floor(bar.lanes)
+                local per = math.floor(bar.per_lane)
+                for i = 1, lanes do
+                    local a = bar.angle + (i / lanes) * 2 * math.pi
+                    local ca, sa = math.cos(a), math.sin(a)
+                    for k = 1, per do
+                        local mult = 0.85 + 0.15 * (k - 1) -- lance: staggered speeds
+                        local b = spawn_bullet(ep.x, ep.y, ca * bar.bullet_speed * mult,
+                            sa * bar.bullet_speed * mult)
+                        b:set(C.Bullet, { damage = bar.damage, hostile = 1, lifetime = 2.6 })
+                        b:get(Render).variant = 7 -- white-violet lance shard
+                    end
+                end
+                bar.angle = bar.angle + bar.rotate
+                bar.timer = bar.cooldown
+                bar.anim = 0.7
+                e:get(Render).fx = 1
+            elseif bar.anim > 0 then
+                bar.anim = bar.anim - dt
+                if bar.anim <= 0 then e:get(Render).fx = 0 end
+            end
+        end
+    end)
+
     -- Bomb/bramble planter (Bomb Lord, Elder Ent): drop stationary hazards at
     -- random ground spots — inside the boss's own arena rect when it has one
     -- (C.Nova), else scattered around it. The hazards are "core:mine"/
@@ -850,10 +1115,10 @@ return function(mod, C)
                 local kind = PLANT_KINDS[math.floor(pl.kind)] or PLANT_KINDS[1]
                 for i = 1, math.floor(pl.count) do
                     local x, y
-                    if e:has(C.Nova) and e:get(C.Nova).arena_w > 0 then
-                        local nova = e:get(C.Nova)
-                        x = nova.cx + (math.random() * 2 - 1) * (nova.arena_w - 80)
-                        y = nova.cy + (math.random() * 2 - 1) * (nova.arena_h - 80)
+                    if e:has(C.Arena) and e:get(C.Arena).w > 0 then
+                        local arena = e:get(C.Arena)
+                        x = arena.cx + (math.random() * 2 - 1) * (arena.w - 80)
+                        y = arena.cy + (math.random() * 2 - 1) * (arena.h - 80)
                     else
                         local a = math.random() * 2 * math.pi
                         local r = 150 + math.random() * 300

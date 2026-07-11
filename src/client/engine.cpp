@@ -14,6 +14,12 @@ void Engine::reset_to_lobby()
     scenes_.push<LobbyScene>(this); // top: the session is still connected
 }
 
+void Engine::reset_to_connect()
+{
+    scenes_.clear();
+    scenes_.push<ConnectScene>(this); // the session was dropped: back to the entry menu
+}
+
 std::expected<Engine, EngineError> Engine::create(const EngineConfig& config)
 {
     if (!SDL_Init(SDL_INIT_VIDEO)) { return std::unexpected(EngineError::sdl_init_failed); }
@@ -36,6 +42,13 @@ void Engine::on_event(const SDL_Event& event)
 {
     ui_layer_.process_event(event);
     gui_.handle_event(event); // records mouse/typing; widgets consume at render
+    // F11 flips fullscreen/windowed globally, before the scenes see the key —
+    // every scene already sizes itself off the real render output size.
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11 && !event.key.repeat) {
+        fullscreen_ = !fullscreen_;
+        SDL_SetWindowFullscreen(window_.get(), fullscreen_);
+        return;
+    }
     const bool unconsumed = scenes_.handle_event(event);
     if (event.type == SDL_EVENT_QUIT) { quit(); }
     // Global exit key — only when no scene claimed the event (modal scenes

@@ -7,6 +7,7 @@
 #include "client/scene/console.hpp"
 #include "client/scene/game_over.hpp"
 #include "client/scene/level_up.hpp"
+#include "client/scene/pause.hpp"
 #include "client/sprites.hpp"
 #include "client/trainer.hpp"
 #include "shared/components/combat.hpp"
@@ -63,6 +64,16 @@ struct Poof
     bool pickup;     // orbs/hearts sparkle small and bright
 };
 
+// A floating combat number (server DamageEvents packet): rises + fades over
+// its short life, crits bigger and gold.
+struct FloatNum
+{
+    float x, y;           // world position of the hit
+    float t0;             // anim clock at arrival
+    std::uint16_t amount;
+    bool crit;
+};
+
 // Everything draw_player needs to pick a clip in the directional player pack.
 // Remotes only know movement (+ downed via hearts); firing/dash are local-only.
 struct PlayerAnim
@@ -101,6 +112,11 @@ public:
             engine_->scenes().push<ConsoleScene>(engine_);
             return Stop;
         }
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+            clear_input();
+            engine_->scenes().push<PauseScene>(engine_);
+            return Stop;
+        }
         // A held key whose KEY_UP we might miss (window/alt-tab) → reset.
         if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             clear_input();
@@ -135,6 +151,18 @@ public:
         // Apply the latest server snapshot (world stays live even if input is
         // blocked by the console).
         if (auto snap = session.take_snapshot()) { consume_snapshot(*snap); }
+
+        // Floating combat numbers: stamp arrivals with the anim clock; the
+        // render pass animates + expires them. Bounded so a hectic fight can't
+        // grow the pool (oldest numbers are the ones nearly faded anyway).
+        for (const proto::DamageEvent& ev : session.take_damage_events()) {
+            float_nums_.push_back(FloatNum{ .x = ev.x, .y = ev.y, .t0 = anim_time_,
+                                            .amount = ev.amount, .crit = ev.kind != 0 });
+        }
+        if (float_nums_.size() > 96) {
+            float_nums_.erase(float_nums_.begin(),
+                              float_nums_.begin() + static_cast<std::ptrdiff_t>(float_nums_.size() - 96));
+        }
         if (!has_player_ && session.has_id()) { spawn_local_player(session.my_net_id()); }
 
         // Open the level-up card scene on the rising edge of a level-up.
@@ -536,6 +564,10 @@ private:
                         audio.play_at("heart", pos.x, pos.y, lis_x, lis_y);
                     } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
                         audio.play_at("death", pos.x, pos.y, lis_x, lis_y);
+                    } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)
+                               && rem.variant == 6 && audio.has("pop")) {
+                        // The Elder Ent's seed blooming into its petal ring.
+                        audio.play_at("pop", pos.x, pos.y, lis_x, lis_y);
                     }
                 }
                 if (arena_active_ && it->first == arena_net_id_) {
@@ -745,7 +777,12 @@ private:
                   // No health bar over players — the HUD hearts show life now.
                   if (overlays) { label(x, y, engine_->session().name_of(rem.net_id)); }
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
-                  draw_projectile(r, x, y, rem.variant);
+                  float ddx = p.x - prev.x;
+                  float ddy = p.y - prev.y;
+                  const float dlen = std::sqrt((ddx * ddx) + (ddy * ddy));
+                  ddx = dlen > 0.01f ? ddx / dlen : 1.0f;
+                  ddy = dlen > 0.01f ? ddy / dlen : 0.0f;
+                  draw_projectile(r, x, y, rem.variant, ddx, ddy, anim_time_);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
                   draw_xp_orb(r, x, y);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
@@ -775,39 +812,72 @@ private:
             if (overlays) { label(rx, ry, engine_->session().name()); }
         }
 
-        // Teammates off-screen: an edge arrow pointing at each remote player,
-        // with their name — red when they're down (the "go revive" pointer).
+        // Floating combat numbers: pixel-font text rising off the hit point,
+        // fading over its last third. Drawn AFTER the world so enemies never
+        // walk over the numbers, with SDL (gui text) so a scene stacked above
+        // still covers them.
+        {
+            constexpr float num_life = 0.8f;
+            std::erase_if(float_nums_, [&](const FloatNum& n) { return anim_time_ - n.t0 > num_life; });
+            client::Gui& ui = engine_->gui();
+            for (const FloatNum& n : float_nums_) {
+                const float age = (anim_time_ - n.t0) / num_life; // 0..1
+                const float rise = 26.0f * age;
+                const float fade = std::min(1.0f, (1.0f - age) * 3.0f); // full, then fade out
+                const auto alpha = static_cast<std::uint8_t>(fade * 255.0f);
+                const client::GuiColor col = n.crit ? client::GuiColor{ 255, 205, 110, alpha }
+                                                    : client::GuiColor{ 255, 240, 210, alpha };
+                const float px = (n.crit ? 5.0f : 3.0f) * ui.scale(); // scale-multiples stay crisp
+                ui.text_centered(n.x + ox, n.y + oy - 22.0f - rise, std::to_string(n.amount),
+                                 col, px);
+            }
+        }
+
+        // Off-screen pointers: arrows on a FIXED RADIUS ring around the local
+        // player (screen-edge arrows sat in peripheral vision and got missed),
+        // pointing at teammates (green; red when down — the "go revive" cue),
+        // the arena boss and any loot chest (gold).
         if (overlays && has_player_) {
+            const float cx = ox + render_x_; // ring center = the local player
+            const float cy = oy + render_y_;
+            const float ring = 46.0f * engine_->gui().scale();
+            const auto pointer = [&](float sx, float sy, ImU32 col, const std::string& label_text) {
+                constexpr float margin = 34.0f;
+                if (sx >= margin && sx <= ww - margin && sy >= margin && sy <= wh - margin) {
+                    return; // on screen: the sprite itself is the cue
+                }
+                float dx = sx - cx;
+                float dy = sy - cy;
+                const float len = std::sqrt((dx * dx) + (dy * dy));
+                if (len < 1.0f) { return; }
+                dx /= len;
+                dy /= len;
+                const float ax = cx + (dx * ring);
+                const float ay = cy + (dy * ring);
+                ImDrawList* fg = ImGui::GetForegroundDrawList();
+                const ImVec2 tip(ax + (dx * 13.0f), ay + (dy * 13.0f));
+                const ImVec2 left(ax - (dy * 8.0f), ay + (dx * 8.0f));
+                const ImVec2 right(ax + (dy * 8.0f), ay - (dx * 8.0f));
+                fg->AddTriangleFilled(tip, left, right, col);
+                const ImVec2 sz = ImGui::CalcTextSize(label_text.c_str());
+                // Label just INSIDE the ring (between player and arrow) so it
+                // never covers the arrow head.
+                fg->AddText(ImVec2(ax - (dx * 14.0f) - (sz.x * 0.5f), ay - (dy * 14.0f) - sz.y),
+                            col, label_text.c_str());
+            };
             registry_.view<Position, PrevPosition, Remote>().each(
               [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
-                  if (rem.kind != static_cast<std::uint8_t>(proto::EntityKind::Player)) { return; }
                   const float sx = ox + prev.x + ((p.x - prev.x) * t);
                   const float sy = oy + prev.y + ((p.y - prev.y) * t);
-                  constexpr float margin = 34.0f;
-                  if (sx >= margin && sx <= ww - margin && sy >= margin && sy <= wh - margin) {
-                      return; // on screen: the sprite itself is the cue
+                  if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
+                      const bool down = rem.health == 0;
+                      pointer(sx, sy, down ? IM_COL32(240, 80, 80, 230) : IM_COL32(120, 220, 130, 230),
+                              engine_->session().name_of(rem.net_id));
+                  } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Chest)) {
+                      pointer(sx, sy, IM_COL32(255, 205, 110, 230), "LOOT");
+                  } else if (arena_active_ && rem.net_id == arena_net_id_) {
+                      pointer(sx, sy, IM_COL32(255, 205, 110, 230), "BOSS");
                   }
-                  const float ax = std::clamp(sx, margin, ww - margin);
-                  const float ay = std::clamp(sy, margin, wh - margin);
-                  // Unit direction from the arrow anchor toward the teammate.
-                  float dx = sx - ax;
-                  float dy = sy - ay;
-                  const float len = std::sqrt((dx * dx) + (dy * dy));
-                  if (len < 1.0f) { return; }
-                  dx /= len;
-                  dy /= len;
-                  const bool down = rem.health == 0;
-                  const ImU32 col = down ? IM_COL32(240, 80, 80, 230) : IM_COL32(120, 220, 130, 230);
-                  ImDrawList* fg = ImGui::GetForegroundDrawList();
-                  const ImVec2 tip(ax + (dx * 13.0f), ay + (dy * 13.0f));
-                  const ImVec2 left(ax - (dy * 8.0f), ay + (dx * 8.0f));
-                  const ImVec2 right(ax + (dy * 8.0f), ay - (dx * 8.0f));
-                  fg->AddTriangleFilled(tip, left, right, col);
-                  const std::string name = engine_->session().name_of(rem.net_id);
-                  const ImVec2 sz = ImGui::CalcTextSize(name.c_str());
-                  fg->AddText(ImVec2(std::clamp(ax - (sz.x * 0.5f), 4.0f, ww - sz.x - 4.0f),
-                                     std::clamp(ay - (dy * 16.0f) - (sz.y * 0.5f), 4.0f, wh - sz.y - 4.0f)),
-                              col, name.c_str());
               });
         }
 
@@ -879,8 +949,17 @@ private:
         SDL_RenderFillRect(r, &rect);
     }
 
-    static void draw_projectile(SDL_Renderer* r, float cx, float cy, std::uint8_t variant)
+    // Variants 4..8 are the bosses' signature bullets — each fight's threat
+    // reads by silhouette/color alone. dx/dy = unit motion direction (from the
+    // interpolation delta): 4/7 trail shrinking squares BEHIND the head, the
+    // cheap way to say "flying that way" without rotated geometry.
+    static void draw_projectile(SDL_Renderer* r, float cx, float cy, std::uint8_t variant,
+                                float dx, float dy, float time)
     {
+        const auto square = [&](float x, float y, float s) {
+            const SDL_FRect rect{ .x = x - (s * 0.5f), .y = y - (s * 0.5f), .w = s, .h = s };
+            SDL_RenderFillRect(r, &rect);
+        };
         float size = 7.0f;
         if (variant == 1) {
             SDL_SetRenderDrawColor(r, 255, 90, 70, 255); // hostile (enemy-fired)
@@ -890,11 +969,40 @@ private:
         } else if (variant == 3) {
             SDL_SetRenderDrawColor(r, 220, 50, 90, 255); // heavy hostile (Cyclop)
             size = 14.0f;
+        } else if (variant == 4) { // Vampire Lord blood bolt: dark tear + tail
+            SDL_SetRenderDrawColor(r, 140, 15, 45, 255);
+            for (int i = 1; i <= 3; ++i) {
+                square(cx - (dx * 7.0f * static_cast<float>(i)),
+                       cy - (dy * 7.0f * static_cast<float>(i)),
+                       7.0f - (1.5f * static_cast<float>(i)));
+            }
+            SDL_SetRenderDrawColor(r, 210, 30, 60, 255);
+            size = 9.0f;
+        } else if (variant == 5) { // Elder Ent sprinkler pellet / seed petal
+            SDL_SetRenderDrawColor(r, 150, 210, 90, 255);
+            size = 6.0f;
+        } else if (variant == 6) { // Elder Ent seed: fat two-tone pulse
+            const float pulse = 12.0f + (3.0f * std::sin(time * 9.0f));
+            SDL_SetRenderDrawColor(r, 70, 120, 40, 255);
+            square(cx, cy, pulse + 5.0f);
+            SDL_SetRenderDrawColor(r, 160, 230, 90, 255);
+            size = pulse;
+        } else if (variant == 7) { // Game Master lance: pale shard + violet tail
+            SDL_SetRenderDrawColor(r, 145, 115, 220, 255);
+            for (int i = 1; i <= 3; ++i) {
+                square(cx - (dx * 6.0f * static_cast<float>(i)),
+                       cy - (dy * 6.0f * static_cast<float>(i)),
+                       8.0f - (2.0f * static_cast<float>(i)));
+            }
+            SDL_SetRenderDrawColor(r, 225, 210, 255, 255);
+            size = 8.0f;
+        } else if (variant == 8) { // Frog King spit: bright-green ring pellet
+            SDL_SetRenderDrawColor(r, 110, 225, 90, 255);
+            size = 8.0f;
         } else {
             SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
         }
-        const SDL_FRect rect{ .x = cx - (size * 0.5f), .y = cy - (size * 0.5f), .w = size, .h = size };
-        SDL_RenderFillRect(r, &rect);
+        square(cx, cy, size);
     }
 
     // Move while moving, Idle while still — whichever the pack actually has.
@@ -1284,6 +1392,7 @@ private:
     // Game-feel state (client-only, inferred from snapshot deltas).
     float shake_amp_ = 0.0f;     // camera shake amplitude px (decays in update)
     std::vector<Poof> poofs_;    // death/pickup bursts (cap 48)
+    std::vector<FloatNum> float_nums_; // floating combat numbers (cap 96)
     std::vector<Poof> trail_;    // dash ghost samples (radius unused)
     // Boss arena (fixed rect): center = the arena enemy's spawn position (its
     // first sighting), half extents from its def. Cleared when the boss dies.

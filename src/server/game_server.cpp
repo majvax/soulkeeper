@@ -25,16 +25,6 @@
 
 namespace {
 
-// XP required to reach the next level (curve on the current level).
-std::uint32_t xp_needed_for(std::uint16_t level)
-{
-    return 5u + static_cast<std::uint32_t>(level) * 4u;
-}
-
-} // namespace
-
-namespace {
-
 // Spawn / wave tuning.
 constexpr float wave_duration = 25.0f;   // seconds per wave
 constexpr float spawn_distance = 600.0f; // ring radius around a player
@@ -61,12 +51,14 @@ namespace server {
 
 GameServer::GameServer(net::Server server) : server_{ std::move(server) }, world_{ shared::make_game_world() }
 {
-    xp_needed_ = xp_needed_for(level_);
     // Bind the ECS into the sim VM, then load plugins (upgrades + objects).
     // Bindings capture &world_.registry(), which is stable for our lifetime.
     mod::install_sim_bindings(lua_host_, world_.registry());
     lua_host_.load_dir("mods");
     mod::install_script_systems(lua_host_, world_); // add Lua-defined systems to the pipeline
+    // AFTER load_dir: the XP curve is game balance (mod:xp_curve, linear
+    // engine fallback) — seeding earlier would miss the mod's hook.
+    xp_needed_ = mod::run_xp_curve(lua_host_, level_);
     if (lua_host_.enemies().count() == 0) {
         spdlog::warn("no enemy archetypes registered (mods/core missing?) — waves will spawn nothing");
     }
@@ -339,8 +331,7 @@ void GameServer::on_join(std::uint32_t peer_id, proto::ByteReader& reader)
     // Re-send the cached GameOver so they see the same overlay as everyone else.
     if (reconnected && run_over_) {
         proto::ByteWriter over;
-        over.put(proto::MsgType::GameOver);
-        over.put(run_over_msg_);
+        put_game_over(over);
         server_.send(peer_id, over.bytes(), true);
     }
 
@@ -537,11 +528,33 @@ void GameServer::check_run_end()
     std::uint16_t wave = 1;
     registry.view<GameStats>().each([&](core::Entity, const GameStats& stats) { wave = stats.wave; });
     run_over_msg_ = proto::GameOverMsg{ .won = won, .final_wave = wave, .final_level = level_ };
+    // Freeze each player's RunStats (Lua-incremented) into the scoreboard
+    // block — cached with the verdict so reconnecters see the same numbers.
+    run_over_entries_.clear();
+    for (const auto& [token, session] : sessions_) {
+        const RunStats* rs = registry.try_get<RunStats>(session.entity);
+        if (rs == nullptr) { continue; }
+        const auto clamp16 = [](std::int32_t v) {
+            return static_cast<std::uint16_t>(std::clamp(v, 0, 65535));
+        };
+        run_over_entries_.push_back(proto::GameOverEntry{
+          .net_id = session.entity,
+          .damage = static_cast<std::uint32_t>(std::max(0.0f, rs->damage)),
+          .kills = clamp16(rs->kills), .downs = clamp16(rs->downs),
+          .revives = clamp16(rs->revives) });
+    }
     proto::ByteWriter writer;
-    writer.put(proto::MsgType::GameOver);
-    writer.put(run_over_msg_); // cached so reconnecters get the same verdict
+    put_game_over(writer);
     server_.broadcast(writer.bytes(), true);
     spdlog::info("run over: {} at wave {} (level {})", won != 0 ? "VICTORY" : "defeat", wave, level_);
+}
+
+void GameServer::put_game_over(proto::ByteWriter& writer) const
+{
+    writer.put(proto::MsgType::GameOver);
+    writer.put(run_over_msg_);
+    writer.put(static_cast<std::uint8_t>(run_over_entries_.size()));
+    for (const proto::GameOverEntry& entry : run_over_entries_) { writer.put(entry); }
 }
 
 // A boss chest was opened (world:open_chest -> a ChestOpen mailbox entity):
@@ -586,6 +599,7 @@ void GameServer::reset_run()
     registry.view<GameStats>().each([&](core::Entity, GameStats& stats) {
         stats = GameStats{ .xp = 0, .wave = 1 };
     });
+    run_over_entries_.clear(); // the old scoreboard dies with the run
 
     for (auto& [token, session] : sessions_) {
         session.entity = create_player(registry, 0, 0);
@@ -603,7 +617,7 @@ void GameServer::reset_run()
     }
 
     level_ = 1;
-    xp_needed_ = 8;
+    xp_needed_ = mod::run_xp_curve(lua_host_, level_);
     leveling_ = false;
     pending_.clear();
     offered_.clear();
@@ -789,6 +803,21 @@ void GameServer::stream_snapshots()
             snapshot_bytes_sent_ += full.bytes().size();
         }
     }
+
+    // Floating combat numbers queued by the mods this snapshot window: one
+    // unreliable broadcast, then the queue resets (a lost packet drops a few
+    // numbers, never the game state).
+    std::vector<proto::DamageEvent>& events = lua_host_.state().damage_events;
+    if (!events.empty()) {
+        proto::ByteWriter packet;
+        packet.reserve(2 + (events.size() * sizeof(proto::DamageEvent)));
+        packet.put(proto::MsgType::DamageEvents);
+        packet.put(static_cast<std::uint8_t>(events.size()));
+        for (const proto::DamageEvent& ev : events) { packet.put(ev); }
+        server_.broadcast(packet.bytes(), false);
+        snapshot_bytes_sent_ += packet.bytes().size();
+        events.clear();
+    }
 }
 
 void GameServer::check_level_up()
@@ -800,7 +829,7 @@ void GameServer::check_level_up()
 
     stats->xp -= xp_needed_;
     ++level_;
-    xp_needed_ = xp_needed_for(level_);
+    xp_needed_ = mod::run_xp_curve(lua_host_, level_);
 
     // Freeze the world and ask every connected player to choose an upgrade.
     // Keyed by token so a mid-level-up reconnect (new peer_id) still resolves.

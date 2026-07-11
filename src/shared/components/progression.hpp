@@ -40,3 +40,14 @@ struct WaveHold
 struct ChestOpen
 {
 };
+
+// Per-player run scoreboard, incremented by the Lua damage/death/revive
+// systems (prelude handle) and read by the server at run end for the
+// game-over stats block. Never snapshotted — it only matters once.
+struct RunStats
+{
+    float damage = 0.0f;        // total damage dealt to enemies
+    std::int32_t kills = 0;     // killing blows credited (C.Bullet.owner etc.)
+    std::int32_t downs = 0;     // times this player went down
+    std::int32_t revives = 0;   // teammates picked back up
+};

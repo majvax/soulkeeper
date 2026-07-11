@@ -100,6 +100,9 @@ private:
     bool paused_ = false;
     bool run_over_ = false; // game-over screen up; waiting for host BackToLobby
     proto::GameOverMsg run_over_msg_{}; // cached verdict, re-sent to reconnecters
+    // Cached per-player scoreboard (RunStats at run end), sent after the msg.
+    std::vector<proto::GameOverEntry> run_over_entries_;
+    void put_game_over(proto::ByteWriter& writer) const; // verdict + scoreboard block
     std::uint32_t tick_ = 0;
     float spawn_timer_ = 0.0f;
     float wave_timer_ = 0.0f;

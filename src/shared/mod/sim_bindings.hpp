@@ -70,4 +70,9 @@ void run_apply(const ContentDef& def, EntityHandle handle, Rarity rarity);
                                                                 core::Entity player, int level,
                                                                 const char* context = "level");
 
+// XP needed to reach the next level, through the mods' curve (mod:xp_curve).
+// Validates the result; no hook / hook error / nonsense -> the engine's
+// linear fallback. Leveling pace is game balance, owned by the mod.
+[[nodiscard]] std::uint32_t run_xp_curve(LuaHost& host, int level);
+
 } // namespace mod

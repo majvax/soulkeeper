@@ -33,9 +33,14 @@ dir_x, dir_y, shockwave, charges, max_charges}`, `XpReward{value}`, `Render{kind
 an entity; `fx` picks an enemy pack's special clip: 1 = attack ATK, played once, 2 = charge loop
 Charge_RunLoop/Dash, 3 = telegraph Prepare, held on its last frame — set it from your systems,
 reset to 0 when the move ends), `Scale{value}` (networked on-screen size multiplier — mutate it from rules like
-Vitality; visual only, `Radius` stays the hitbox), `Downed{respawn_wave}`, plus the `Enemy` /
-`Player` tags. Kernel systems: spatial-hash rebuild, dash (client-predicted), movement
-integration. Everything else is Lua.
+Vitality; visual only, `Radius` stays the hitbox), `Downed{respawn_wave}`,
+`RunStats{damage,kills,downs,revives}` (the per-player run scoreboard: attach it on spawn and
+increment it from your damage/death/revive systems — the server freezes it into the game-over
+scoreboard; never snapshotted), plus the `Enemy` / `Player` tags. Kernel systems: spatial-hash
+rebuild, dash (client-predicted), movement integration. Everything else is Lua.
+
+Entity handles also expose `e:id()` — a stable numeric id you can stamp into a component field
+(core stamps the shooter into `C.Bullet.owner`) and match back later with `p:id() == owner`.
 
 ### Plugins, exports, import()
 A plugin is a folder `mods/<name>/mod.lua` defining a global `main()`. **The folder name is the
@@ -150,9 +155,15 @@ end)
 - `world:open_chest()` — request ONE offer round for every connected player (the level-up
   freeze/pick machinery with `ctx = "chest"` — see `mod:level_offer`). Core calls it when a
   player walks over a boss loot chest (`KIND.chest` drawable + a chest tag component).
+- `world:damage_number(x, y, amount, kind)` — queue a floating combat number over the hit
+  (kind 0 = hit, 1 = crit: bigger + gold). Batched into one unreliable packet per snapshot tick,
+  capped at 48 (extras drop) — report per-HIT damage only, never high-rate DoT ticks (core's
+  Orbiting Blades count on the scoreboard but stay silent here).
 - `spawn_bullet(x, y, vx, vy)` — kinetic drawable (bullet kind); attach your bullet component for
-  behavior, set `Render.variant` for tint (1 = hostile red, 2 = crit orange, 3 = heavy hostile
-  in the core skin).
+  behavior, set `Render.variant` for tint. The core skin: 1 = hostile red, 2 = crit orange,
+  3 = heavy hostile (Cyclop), and one signature byte per boss — 4 = blood bolt (dark tear +
+  trail, oriented along motion), 5 = green pellet/petal, 6 = fat pulsing seed (clients pop a
+  burst + `pop` sound when it despawns), 7 = lance shard (oriented), 8 = bright frog-spit.
 - `spawn_entity(x, y)` — bare drawable for drops/markers: set `Render.kind` (see the `KIND`
   table: `KIND.orb`, `KIND.heart`, `KIND.chest`, ...) and attach components.
 - `spawn_enemy(x, y, "core:brute")` — spawn a registered archetype (applies its component bag at
@@ -297,9 +308,10 @@ observes in snapshots — mods get them for free, and can join in two ways:
   `mod:sound` lines. Last registration wins; not part of the plugin hash.
 
 Canonical names: `shoot hit hurt death dash pickup heart levelup select click wave boss downed
-revive defeat win` (one-shots) and `music_lobby music_game music_boss` (looping tracks — the
-engine cross-fades lobby ↔ game ↔ boss-arena automatically). Missing files are silent, never
-fatal. Local volume: console `/volume`, `/sfx`, `/music <0..1>`.
+revive defeat win pop` (one-shots; `pop` = the Elder Ent's seed blooming) and `music_lobby
+music_game music_boss` (looping tracks — the engine cross-fades lobby ↔ game ↔ boss-arena
+automatically). Missing files are silent, never fatal. Local volume: console `/volume`, `/sfx`,
+`/music <0..1>` — or the ESC menu's sliders.
 
 **Per-projectile shots.** When a projectile appears, the engine first tries
 `shoot_<variant>` — the bullet's `Render.variant` byte, the same one that picks its color —
@@ -310,8 +322,10 @@ b:get(Render).variant = 3                       -- in your shooting system
 mod:sound("shoot_3", "mods/mymod/sfx/bow.wav")  -- at load
 ```
 
-Core ships `shoot` (player firearm; crits are variant 2 and fall back to it) and `shoot_1`
-(hostile bullets — the ranged enemies' arrow whoosh).
+Core ships `shoot` (player firearm; crits are variant 2 and fall back to it), `shoot_1`
+(hostile bullets — the ranged enemies' arrow whoosh), and one cast sound per boss signature:
+`shoot_4` (vampire bolt thwip), `shoot_5` (sprinkler tick — deliberately tiny/quiet, it fires
+~25×/s), `shoot_6` (seed bloop), `shoot_7` (lance zap), `shoot_8` (frog croak).
 
 ### Console commands (`mod:command`)
 
@@ -349,6 +363,14 @@ on levels and objects-only on chests (objects come exclusively from boss loot ch
 the rarity-first roll (falling back down then UP a tier, so an epic-only object pool still fills
 cards on a common roll) and reads `C.Insight` for bonus cards — the Crystal Ball object grants
 +1 choice per round, entirely in Lua.
+
+### The XP cost curve (`mod:xp_curve`)
+
+Leveling pace is game balance, so the GAME owns it: `mod:xp_curve(function(level) return cost
+end)` returns the XP needed to reach the NEXT level. No hook (or a hook error) falls back to the
+engine's linear `5 + 4*level`. Core uses a QUADRATIC (`5 + 3L + 0.8L²`) — XP income grows with
+the wave, so a linear cost curve makes levels accelerate forever (playtest: level 112 by wave
+32). One hook; last registration wins.
 
 ### HUD hooks (`mod:hud`)
 

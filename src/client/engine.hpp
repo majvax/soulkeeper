@@ -117,6 +117,8 @@ public:
     // Engine (defined in engine.cpp) because scene headers can't name Connect/
     // Lobby without an include cycle — the Engine already owns the initial push.
     void reset_to_lobby();
+    // Drop back to just [Connect] after a voluntary disconnect (pause menu).
+    void reset_to_connect();
     // The client's render VM: content metadata (labels/sprites) + draw hooks,
     // shared by the game and level-up scenes.
     [[nodiscard]] mod::LuaHost& mods() noexcept { return render_host_; }
@@ -176,6 +178,7 @@ private:
     ImGuiLayer ui_layer_;
     std::function<void()> hud_render_; // GameScene's stats-panel draw (see set_hud_render)
     bool running_ = false;
+    bool fullscreen_ = true; // window is created SDL_WINDOW_FULLSCREEN; F11 toggles
 };
 
 } // namespace client
