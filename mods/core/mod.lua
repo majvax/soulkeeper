@@ -10,9 +10,10 @@ function main()
     ---@type core.Components
     local C = include("components.lua")(mod) -- component handles (Weapon, Bullet, ...)
     include("systems.lua")(mod, C)
+    local BRAIN = include("brains.lua")(mod, C) -- boss fight director (move tables) -> brain ids
     include("upgrades.lua")(mod, C)
     include("objects.lua")(mod, C)
-    include("enemies.lua")(mod, C)
+    include("enemies.lua")(mod, C, BRAIN)
     include("levelup.lua")(mod, C) -- the level-up offer roll (mod:level_offer)
 
     -- The player's look: an animation pack (a folder of <Clip>_<N>x1.png

@@ -59,7 +59,7 @@ end
 
 ---@param mod Mod
 ---@param C core.Components
-return function(mod, C)
+return function(mod, C, BRAIN)
     -- Register an archetype and (unless no_elite) its gold ELITE twin:
     -- 4x health/XP, 1.4x size, always drops a heart. Elites start rolling at
     -- wave 8 and ramp toward ~45% of their base archetype's weight by wave
@@ -201,8 +201,10 @@ return function(mod, C)
     local ARENA_W, ARENA_H = 960, 540
 
     -- Wave 5 mini: the Rhino Charger — a boss-sized lunge (the Berserker's
-    -- C.Lunge with monster numbers): long stomp telegraph, then a
-    -- cross-field charge you sidestep or eat 2 hearts.
+    -- C.Lunge with monster numbers) DIRECTED by a brain: charges on its own
+    -- clock + a close-range stomp shockwave; at half health the tells shorten.
+    -- Mechanic components on brained bosses are PARKED (cooldown/timer 9999):
+    -- brains.lua fires them.
     mod:enemy("rhino_charger", "Rhino Charger", {
         weight = 0,
         sprite = "assets/sprite/RhinoMonster_04_Devil",
@@ -214,7 +216,8 @@ return function(mod, C)
         :component(Radius, { value = 26 })
         :component(XpReward, xp(25))
         :component(C.Lunge, { range = 560, windup = 0.85, speed = 560,
-                              duration = 0.8, cooldown = 2.2, timer = 2.0 })
+                              duration = 0.8, cooldown = 9999, timer = 9999 })
+        :component(C.Brain, { id = BRAIN.RHINO })
         :component(C.Boss, {})
 
     -- Wave 15 mini: the Frog Prince — a leaper. Telegraph (Prepare), LEAP to
@@ -232,7 +235,8 @@ return function(mod, C)
         :component(Radius, { value = 24 })
         :component(XpReward, xp(30))
         :component(C.Lunge, { range = 640, windup = 0.7, speed = 640, duration = 0.55,
-                              cooldown = 2.0, timer = 2.0, burst = 10, burst_speed = 240 })
+                              cooldown = 9999, timer = 9999, burst = 10, burst_speed = 240 })
+        :component(C.Brain, { id = BRAIN.FROG_PRINCE })
         :component(C.Boss, {})
 
     -- Ground hazards the planter bosses drop (weight 0, spawned by
@@ -295,7 +299,8 @@ return function(mod, C)
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 44 })
         :component(XpReward, xp(60))
-        :component(C.Nova, { cooldown = 2.4, bullets = 20, bullet_speed = 230 })
+        :component(C.Nova, { cooldown = 9999, timer = 9999, bullets = 20, bullet_speed = 230 })
+        :component(C.Brain, { id = BRAIN.FROG_KING })
         :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
@@ -313,8 +318,9 @@ return function(mod, C)
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 30 })
         :component(XpReward, xp(80))
-        :component(C.Planter, { cooldown = 3.2, count = 3, kind = 1 })
-        :component(C.Toss, {})
+        :component(C.Planter, { cooldown = 9999, timer = 9999, count = 6, kind = 1 })
+        :component(C.Toss, { cooldown = 9999, timer = 9999 })
+        :component(C.Brain, { id = BRAIN.BOMB_LORD })
         :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
@@ -333,9 +339,10 @@ return function(mod, C)
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 28 })
         :component(XpReward, xp(100))
-        :component(C.BoltCaster, {})
-        :component(C.Summon, { pool = 2, cooldown = 6.0, count = 4,
-                               blink_range = 200, blink_dist = 320 })
+        :component(C.BoltCaster, { cooldown = 9999, timer = 9999 })
+        :component(C.Summon, { pool = 2, cooldown = 9999, timer = 9999, count = 4,
+                               blink_range = 200, blink_dist = 320 }) -- blink stays ambient
+        :component(C.Brain, { id = BRAIN.VAMPIRE })
         :component(C.Regen, function(wave) return { per_second = 30 * (1.07 ^ (wave - 1)) } end)
         :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
@@ -355,8 +362,9 @@ return function(mod, C)
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 32 })
         :component(XpReward, xp(120))
-        :component(C.Sprinkler, {})
-        :component(C.SeedLauncher, {})
+        :component(C.Sprinkler, {}) -- ambient: never parked (the brain REVERSES it)
+        :component(C.SeedLauncher, { cooldown = 9999, timer = 9999 })
+        :component(C.Brain, { id = BRAIN.ENT })
         :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 
@@ -375,9 +383,10 @@ return function(mod, C)
         :component(C.Touch, { hearts = 2 })
         :component(Radius, { value = 26 })
         :component(XpReward, xp(200))
-        :component(C.Barrage, {})
-        :component(C.Summon, { pool = 3, cooldown = 5.5, count = 3,
-                               blink_range = 220, blink_dist = 360 })
+        :component(C.Barrage, { cooldown = 9999, timer = 9999 })
+        :component(C.Summon, { pool = 3, cooldown = 9999, timer = 9999, count = 3,
+                               blink_range = 220, blink_dist = 360 }) -- blink stays ambient
+        :component(C.Brain, { id = BRAIN.GAMEMASTER })
         :component(C.Arena, { w = ARENA_W, h = ARENA_H })
         :component(C.Boss, {})
 

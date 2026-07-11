@@ -225,6 +225,16 @@ mod:enemy("slinger", "Slinger", {
 Every enemy needs at least `Health` and `Radius` (the server warns otherwise). `on_spawn` in opts
 remains the escape hatch for dynamic per-spawn logic.
 
+**Boss brains (a core PATTERN, not engine API).** Core's milestone bosses aren't cooldown
+loops: each carries `C.Brain{id}` and its mechanic components are PARKED in the def
+(`cooldown/timer = 9999`); `mods/core/brains.lua` holds per-boss MOVE TABLES — weighted-random
+picks that never repeat back-to-back, jittered cooldowns, health-gated phases with one-time
+`on_phase` escalations, telegraphed wind-ups (fx=3, Speed parked) and channeled moves. A move
+usually just zeroes a parked timer ("poke") so the mechanic system fires with its own telegraph
+and anim. Continuous mechanics (the Ent's sprinkler, regen, blink-evasion) stay ambient. A mod
+building its own boss can copy the file's approach wholesale — it's ~150 lines of plain Lua over
+the standard component/system API.
+
 ### Visuals: animation packs (zero animation code)
 `sprite` (enemies) and `mod:player_sprite(path)` accept an **animation-pack folder** — a directory
 of horizontal strip PNGs named `<Clip>_<N>x1.png` (N frames; a character-name prefix like

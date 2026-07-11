@@ -149,18 +149,27 @@ telegraph→locked-line dash, motion-phase lockstep with targeting), **Slinger/V
 **+10%/wave × (1 + 0.7·per extra player)** (`health`/`boss_health` in enemies.lua, resolved at
 spawn in the sim VM) · manual-aim projectiles with **knockback** (`Weapon.knockback` rides each
 bullet) ·
-**scripted boss ladder to wave 50, each boss a UNIQUE kit** (no cross-boss attack recycling;
-`MILESTONES` table: **@5 Rhino Charger** (boss-scale `C.Lunge` charge) · **@10 Frog King**
-(`C.Nova` rings are HIS alone; rage <50% = faster/denser rings, <25% speed-up — the aimed heavy
-volley is gone) · **@15 Frog Prince** (`C.Lunge` LEAP + `burst` landing-slam ring, FrogMonster
-Jump clips) · **@20 Bomb Lord** (all ground, no bullets: `C.Planter` keg carpet + `C.Toss`
-pre-lit kegs lobbed at each player's feet — kegs are shootable `core:mine` `C.Bomber` enemies) ·
-**@30 Vampire Lord** (`C.BoltCaster` homing blood bolts steered by `homing_sys` (`C.Homing`
-turn-capped) + bat swarms `C.Summon{pool=2}` (lore) + `C.Regen` DPS check) · **@40 Elder Ent**
-(geometry: `C.Sprinkler` continuously ROTATING bullet streams + `C.SeedLauncher`/`C.Seed` fat
-seeds that BLOOM into petal rings mid-flight) · **@50 GAME MASTER finale = the WIN**
-(`WIN_WAVE=50`; Speed 0 + blink, `C.Barrage` rotating CROSS lances (4 lanes × staggered-speed
-bursts, +45° per volley) + ELITE summons `pool=3`); 25/35/45 rotate the minis; every %10 wave is
+**scripted boss ladder to wave 50, each boss a UNIQUE kit driven by a BRAIN**
+(`mods/core/brains.lua`: the fight director — every milestone boss carries `C.Brain{id}`, its
+mechanic comps are PARKED in the def (`cooldown/timer 9999`) and brain MOVES fire them by
+zeroing the timer ("poke"); moves = weighted-random picks, **never the same twice in a row**,
+cooldowns jittered ×0.75–1.25 and tightened by health-gated PHASES (`phases` thresholds +
+one-time `on_phase` escalations); windup>0 moves telegraph fx=3 with Speed parked, channeled
+moves run `during(boss,brain,dt)`; continuous mechanics (sprinkler/regen/blink-evasion) stay
+ambient, TRASH archetypes stay brainless self-firing. Kits, still no cross-boss recycling:
+**@5 Rhino Charger** (`C.Lunge` charges + close-range STOMP shock; <50% shorter tells) ·
+**@10 Frog King** (`C.Nova` rings HIS alone w/ rage densify + arena HOPS reposition the rings +
+<50% aimed spit cone, variant 8) · **@15 Frog Prince** (`C.Lunge` LEAP-slam + spit arc + <60%
+chained DOUBLE leap; <40% bigger landing ring) · **@20 Bomb Lord** (all ground: `C.Planter`
+carpet BATCHES + `C.Toss` pre-lit kegs + homing ROLLER keg (mine w/ Speed) + <60% keg CAGE
+ringing a player; <30% faster fuses) · **@30 Vampire Lord** (`C.BoltCaster` homing bolts + bat
+`C.Summon{pool=2}` (lore) + <50% BLINK-STRIKE beside a random player + `C.Regen` DPS check) ·
+**@40 Elder Ent** (ambient `C.Sprinkler` streams that REVERSE direction when hurt +
+`C.SeedLauncher` seed fans (`volley`, phase 2 = 3) + root snares: `core:bramble` under every
+player) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink, 5 moves:
+`C.Barrage` rotating CROSS lances + ELITE summons `pool=3` + channeled SPIRAL burst +
+simultaneous LANCE RAIN at every player + <35% CHECKMATE WALL — takes center, sweeps a
+gap-2-slot bullet wall across half the arena); 25/35/45 rotate the minis; every %10 wave is
 an ARENA (1920×1080: client wall = the def's `arena {960,540}` opt, sim clamp = the dedicated
 `C.Arena{cx,cy,w,h}` comp — decoupled from C.Nova; `WaveHold` freezes the wave clock); all carry
 `C.Boss` — death system keys **loot CHEST** + guaranteed drops/team-revive/win on it; client
@@ -213,10 +222,13 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 `/stress`) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (54 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (58 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
-objects, RunStats attribution, damage-number queue, boss bullet variants; build line in its
-header — needs `-freflection -fcontracts` + the sol2 defines; LuaHost must outlive the World).
+objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
+phases/forced moves; build line in its header — needs `-freflection -fcontracts` + the sol2
+defines; LuaHost must outlive the World. Boss scenarios fire PARKED mechanics
+deterministically by zeroing `comp.timer` (a brain poke) or force a brain move via
+`brain.move = i; brain.winding = 0.05` — never wait on autonomous picks, they're jittered).
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.

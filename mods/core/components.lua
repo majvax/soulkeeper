@@ -165,6 +165,7 @@ return function(mod)
     C.SeedLauncher = mod:component("seedlauncher", {
         cooldown = 3.2,
         timer = 2.5,
+        volley = 1, -- seeds per cast, fanned (the Ent's brain raises it in phase 2)
         bullet_speed = 170,
         bloom_after = 1.1,
         petals = 6,
@@ -207,6 +208,24 @@ return function(mod)
         blink_cooldown = 1.2,
         blink_cd = 0, -- internal
         anim = 0,     -- attack-clip window left (drives Render.fx)
+    })
+
+    -- Boss BRAIN: the fight director (brains.lua). `id` picks the move table;
+    -- the boss's mechanic components are PARKED (cooldown/timer 9999) and the
+    -- brain fires them — weighted-random moves, never the same twice in a row,
+    -- jittered cooldowns, health-gated phases. Mechanics keep owning the HOW.
+    C.Brain = mod:component("brain", {
+        id = 0,
+        timer = 2.0,       -- until the next move pick
+        winding = 0,       -- telegraph remaining (fx = 3, Speed parked)
+        channel = 0,       -- channeled-move remaining (`during` runs each tick)
+        move = 0,          -- move index being wound/channeled (also = last used)
+        phase = 1,         -- health-gated escalation step (one-way)
+        saved_speed = -1,  -- Speed parked during telegraph/channel (-1 = none)
+        anim = 0,          -- fx window left for inline strikes (delegates self-manage)
+        used_mask = 0,     -- bitmask of executed move indices (variety telemetry/tests)
+        c1 = 0,
+        c2 = 0, -- per-move scratch registers (hop velocity, spiral angle/accumulator)
     })
 
     -- Pure TAGS: zero-field components used only for membership (has/each).

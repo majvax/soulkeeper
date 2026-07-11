@@ -1023,20 +1023,25 @@ return function(mod, C)
                 local _, d2, px, py = nearest_player(ep.x, ep.y)
                 if d2 < math.huge then
                     local len = math.max(1, math.sqrt(d2))
-                    local b = spawn_bullet(ep.x, ep.y, (px - ep.x) / len * sl.bullet_speed,
-                        (py - ep.y) / len * sl.bullet_speed)
-                    b:set(C.Bullet, {
-                        damage = sl.damage,
-                        hostile = 1,
-                        lifetime = sl.bloom_after + 2.0
-                    })
-                    b:set(C.Seed, {
-                        bloom = sl.bloom_after,
-                        petals = sl.petals,
-                        petal_speed = sl.petal_speed,
-                        damage = sl.damage
-                    })
-                    b:get(Render).variant = 6 -- fat pulsing seed: "that one will pop"
+                    local base = math.atan(py - ep.y, px - ep.x)
+                    local n = math.floor(sl.volley) -- > 1: fanned spread (brain phase 2)
+                    for i = 1, n do
+                        local a = base + (n > 1 and 0.55 * ((i - 1) / (n - 1) - 0.5) or 0)
+                        local b = spawn_bullet(ep.x, ep.y, math.cos(a) * sl.bullet_speed,
+                            math.sin(a) * sl.bullet_speed)
+                        b:set(C.Bullet, {
+                            damage = sl.damage,
+                            hostile = 1,
+                            lifetime = sl.bloom_after + 2.0
+                        })
+                        b:set(C.Seed, {
+                            bloom = sl.bloom_after,
+                            petals = sl.petals,
+                            petal_speed = sl.petal_speed,
+                            damage = sl.damage
+                        })
+                        b:get(Render).variant = 6 -- fat pulsing seed: "that one will pop"
+                    end
                     sl.timer = sl.cooldown
                     sl.anim = 0.5
                     e:get(Render).fx = 1

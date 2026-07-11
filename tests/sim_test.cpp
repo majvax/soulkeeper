@@ -86,16 +86,23 @@ int main()
         for e in world:each(C.Fuse) do return true end
         return false
     )"), "bomber lights its fuse near a player");
-    step(1.5f);
+    // Poll for the hurt MOMENT every sim tick: the bomber's 4% death
+    // heart-drop can magnetize to the freshly hurt player and heal them back
+    // within a fraction of a second.
+    bool blast_hurt = false;
+    for (int i = 0; i < 180; ++i) {
+        world.step(1.0f / 120.0f);
+        blast_hurt = blast_hurt || lua_bool(R"(
+            for p in world:each(Player, Hearts) do
+                return p:get(Hearts).current < p:get(Hearts).max
+            end
+        )");
+    }
     check(lua_bool(R"(
         for e in world:each(Enemy) do return false end
         return true
     )"), "bomber blast consumed it (death system ran)");
-    check(lua_bool(R"(
-        for p in world:each(Player, Hearts) do
-            return p:get(Hearts).current < p:get(Hearts).max
-        end
-    )"), "blast bullets hurt the player");
+    check(blast_hurt, "blast bullets hurt the player");
     reset();
 
     // --- Scenario 2: berserker telegraphs then lunges -----------------------
@@ -169,8 +176,17 @@ int main()
     reset();
 
     // --- Scenario 7: Rhino Charger telegraphs, charges, connects ------------
-    lua.script(R"(spawn_enemy(400, 0, "core:rhino_charger"))");
-    step(5.0f); // grace + approach + windup + a charge or two
+    // Force the CHARGE move (its brain may open with the stomp when it has
+    // closed in by pick time — scenario 36 covers autonomous picking).
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(400, 0, "core:rhino_charger")
+        local brain = boss:get(C.Brain)
+        brain.timer = 9999
+        brain.move = 1 -- charge
+        brain.winding = 0.05
+    )");
+    step(4.0f); // windup + the cross-field dash
     check(lua_bool(R"(
         for p in world:each(Player, Hearts) do
             return p:get(Hearts).current < p:get(Hearts).max
@@ -179,8 +195,14 @@ int main()
     reset();
 
     // --- Scenario 8: Game Master summons adds and blinks away ---------------
-    lua.script(R"(spawn_enemy(100, 0, "core:gamemaster"))");
-    step(3.5f); // first summon at ~2.5 s; the player stands inside blink range
+    // Brained bosses park their mechanics (cooldown 9999); tests fire them
+    // deterministically by zeroing the timer — exactly what a brain move does.
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(100, 0, "core:gamemaster")
+        boss:get(C.Summon).timer = 0
+    )");
+    step(1.5f); // the player stands inside blink range
     check(lua_bool(R"(
         local n = 0
         for e in world:each(Enemy) do n = n + 1 end
@@ -402,10 +424,14 @@ int main()
     reset();
 
     // --- Scenario 19: Bomb Lord carpets the ground with kegs ----------------
-    // Spawned raw, its nova rect defaults to center (0,0) — kegs land around
+    // Spawned raw, its arena rect defaults to center (0,0) — kegs land around
     // the origin, which is exactly where the test player idles.
-    lua.script(R"(spawn_enemy(700, 0, "core:bomb_lord"))");
-    step(6.0f);
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(700, 0, "core:bomb_lord")
+        boss:get(C.Planter).timer = 0 -- fire the (parked) carpet batch
+    )");
+    step(1.0f);
     check(lua_bool(R"(
         local n = 0
         for e in world:each(Enemy) do n = n + 1 end
@@ -469,9 +495,10 @@ int main()
     lua.script(R"(
         local C = import("core")
         local boss = spawn_enemy(700, 0, "core:bomb_lord")
-        boss:remove(C.Planter) -- isolate the toss: only lobbed kegs remain
+        boss:remove(C.Planter)      -- isolate the toss: only lobbed kegs remain
+        boss:get(C.Toss).timer = 0  -- fire it now (parked otherwise)
     )");
-    step(4.0f); // first toss at ~3 s; keg lands within scatter(200) of the player
+    step(0.6f); // keg lands lit (fuse 1.3 s) within scatter(200) of the player
     check(lua_bool(R"(
         local C = import("core")
         -- 260 covers the full 200 px scatter (the boss is 700 px away, so a
@@ -485,8 +512,11 @@ int main()
     reset();
 
     // --- Scenario 29: Vampire Lord's blood bolts home ------------------------
-    lua.script(R"(spawn_enemy(600, 0, "core:vampire_lord"))");
-    step(2.5f); // first cast at ~2 s
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(600, 0, "core:vampire_lord"):get(C.BoltCaster).timer = 0
+    )");
+    step(1.0f); // cast fires immediately; the homing bends them over ~1 s
     check(lua_bool(R"(
         local C = import("core")
         for b in world:each(C.Homing, Velocity, Position) do
@@ -501,8 +531,11 @@ int main()
     reset();
 
     // --- Scenario 30: Elder Ent — sprinkler streams + blooming seeds --------
-    lua.script(R"(spawn_enemy(500, 0, "core:elder_ent"))");
-    step(1.2f);
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(500, 0, "core:elder_ent"):get(C.SeedLauncher).timer = 0
+    )");
+    step(0.8f); // before the seed's 1.1 s bloom
     check(lua_bool(R"(
         local C = import("core")
         local n = 0
@@ -511,20 +544,11 @@ int main()
         end
         return n >= 6 -- the sprinkler streams continuously
     )"), "elder ent's sprinkler streams bullets");
-    bool seed_seen = lua_bool(R"(
+    check(lua_bool(R"(
         local C = import("core")
         for s in world:each(C.Seed) do return true end
         return false
-    )");
-    if (!seed_seen) { // the first seed launches at ~2.5 s
-        step(2.0f);
-        seed_seen = lua_bool(R"(
-            local C = import("core")
-            for s in world:each(C.Seed) do return true end
-            return false
-        )");
-    }
-    check(seed_seen, "elder ent lobbed a blooming seed");
+    )"), "elder ent lobbed a blooming seed");
     step(3.0f);
     check(lua_bool(R"(
         local C = import("core")
@@ -534,8 +558,11 @@ int main()
     reset();
 
     // --- Scenario 31: Game Master's rotating cross barrage ------------------
-    lua.script(R"(spawn_enemy(500, 0, "core:gamemaster"))");
-    step(2.3f); // first volley at ~2 s, before the elite summons complicate things
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(500, 0, "core:gamemaster"):get(C.Barrage).timer = 0
+    )");
+    step(0.5f); // one full volley, before the brain layers anything else on
     check(lua_bool(R"(
         local C = import("core")
         local n = 0
@@ -551,8 +578,9 @@ int main()
         local C = import("core")
         local boss = spawn_enemy(400, 0, "core:boss")
         boss:get(Health).current = boss:get(Health).max * 0.4 -- straight to rage
+        boss:get(C.Nova).timer = 0                            -- ring now (parked)
     )");
-    step(3.0f); // several enraged rings
+    step(1.0f); // an enraged ring (+ whatever the brain layers on)
     check(lua_bool(R"(
         local C = import("core")
         local rings, heavies = 0, 0
@@ -712,8 +740,11 @@ int main()
     reset();
 
     // --- Scenario 34: signature bullets carry their boss's variant byte -----
-    lua.script(R"(spawn_enemy(300, 0, "core:vampire_lord"))");
-    step(2.5f);
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(300, 0, "core:vampire_lord"):get(C.BoltCaster).timer = 0
+    )");
+    step(0.8f);
     check(lua_bool(R"(
         local C = import("core")
         for b in world:each(C.Homing) do
@@ -722,8 +753,11 @@ int main()
         return false
     )"), "vampire bolts wear the blood-bolt variant");
     reset();
-    lua.script(R"(spawn_enemy(300, 0, "core:elder_ent"))");
-    step(2.5f);
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(300, 0, "core:elder_ent"):get(C.SeedLauncher).timer = 0
+    )");
+    step(0.8f); // before the 1.1 s bloom; the ambient sprinkler supplies pellets
     check(lua_bool(R"(
         local C = import("core")
         local seed, pellet = false, false
@@ -736,8 +770,11 @@ int main()
         return seed and pellet
     )"), "elder ent seeds/pellets wear their green variants");
     reset();
-    lua.script(R"(spawn_enemy(300, 0, "core:gamemaster"))");
-    step(2.6f);
+    lua.script(R"(
+        local C = import("core")
+        spawn_enemy(300, 0, "core:gamemaster"):get(C.Barrage).timer = 0
+    )");
+    step(0.5f);
     check(lua_bool(R"(
         local C = import("core")
         for b in world:each(C.Bullet) do
@@ -745,6 +782,62 @@ int main()
         end
         return false
     )"), "game master lances wear the lance variant");
+    reset();
+
+    // --- Scenario 36: the brain runs the fight — move VARIETY ----------------
+    // Left alone the Game Master must execute at least two DIFFERENT moves
+    // (used_mask gains a bit per distinct move; never-repeat guarantees
+    // variety once two picks happened). 14 s covers the worst opener: the
+    // elite summon at its jittered-longest cooldown (2 + 7 x 1.25 ~= 10.8 s).
+    lua.script(R"(spawn_enemy(600, 0, "core:gamemaster"))");
+    step(14.0f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for boss in world:each(C.Brain) do
+            local m = math.floor(boss:get(C.Brain).used_mask)
+            return m > 0 and (m & (m - 1)) ~= 0 -- at least two bits set
+        end
+        return false
+    )"), "the brain fired at least two distinct moves in 10 s");
+    reset();
+
+    // --- Scenario 37: health-gated phase escalation --------------------------
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(900, 900, "core:gamemaster")
+        boss:get(Health).current = boss:get(Health).max * 0.30 -- below both gates
+    )");
+    step(0.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for boss in world:each(C.Brain) do
+            return boss:get(C.Brain).phase == 3
+        end
+        return false
+    )"), "the brain escalates to phase 3 below 35% health");
+    reset();
+
+    // --- Scenario 38: Bomb Lord's keg CAGE rings the player ------------------
+    // Force the move (index 4 in its table) by loading it into the brain's
+    // wind-up directly — the same path a natural pick takes.
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(700, 0, "core:bomb_lord")
+        local brain = boss:get(C.Brain)
+        brain.timer = 9999
+        brain.move = 4       -- cage
+        brain.winding = 0.05
+    )");
+    step(0.3f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local n = 0
+        for keg in world:each(C.Fuse, Position) do
+            local p = keg:get(Position)
+            if p.x * p.x + p.y * p.y < 260 * 260 then n = n + 1 end
+        end
+        return n >= 8
+    )"), "the forced cage move ringed the player with lit kegs");
     reset();
 
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------
