@@ -42,6 +42,19 @@ function main()
     mod:command("wave", "/wave <n>  -- jump to wave n", function(_, n)
         world:set_wave(math.floor(tonumber(n) or 1))
     end)
+    -- Grant N free UPGRADE picks (level-flavored offer menus, one after the
+    -- other) — no XP/level cost. Capped so a fat-fingered count can't lock the
+    -- team into an endless menu chain.
+    mod:command("upgrade", "/upgrade <n>  -- grant n upgrade picks", function(_, n)
+        n = math.max(1, math.min(20, math.floor(tonumber(n) or 1)))
+        for _ = 1, n do world:grant_offer("level") end
+    end)
+    -- Grant N free OBJECT picks (chest-flavored menus) — the same pick the team
+    -- gets from a boss chest, without the boss.
+    mod:command("object", "/object <n>  -- grant n object picks", function(_, n)
+        n = math.max(1, math.min(20, math.floor(tonumber(n) or 1)))
+        for _ = 1, n do world:grant_offer("object") end
+    end)
     mod:command("stress", "/stress <count>  -- spawn a horde around you (perf testing)",
         function(player, count)
             local n = math.floor(tonumber(count) or 100)

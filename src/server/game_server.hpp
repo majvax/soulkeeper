@@ -63,7 +63,9 @@ private:
     void spawn_enemies(float dt);
     void refresh_spawn_weights(std::uint16_t wave); // re-evaluate enemy defs' weight(wave)
     void check_level_up();
-    void check_chest();   // ChestOpen mailbox -> one objects-only offer round for everyone
+    void check_chest();          // ChestOpen mailbox -> one objects-only offer round for everyone
+    void check_offer_grants();   // OfferGrant mailbox -> one forced round (/upgrade, /object)
+    void begin_offer_round(proto::OfferFlavor flavor); // freeze + roll+send cards to every player
     void check_run_end(); // RunEnd mailbox -> freeze + GameOver broadcast
     void reset_run();     // host BackToLobby -> wipe the run, back to Lobby
     void start_level_up_for(std::uint64_t token); // roll fresh cards (Lua hook first), store, send

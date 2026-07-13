@@ -221,6 +221,14 @@ function world:offerable(player) end
 ---@param won boolean # true = victory, false = defeat
 function world:end_game(won) end
 
+---Force ONE offer round without the usual trigger (XP threshold / boss chest)
+---— the machinery behind core's /upgrade and /object dev commands. `kind`
+---"object"/"chest" gives an objects pick, anything else an upgrade pick. One
+---call = one menu; call it N times for N sequential menus (each freezes the
+---sim like a normal level-up; the next fires once everyone has picked).
+---@param kind string # "object" | "chest" -> objects; else upgrades
+function world:grant_offer(kind) end
+
 ---Queue a floating combat number at (x, y) — shown rising over the hit on
 ---every client. Batched per snapshot tick (cap 48; extra calls are dropped),
 ---so skip high-rate DoT ticks (auras) and report per-HIT damage only.

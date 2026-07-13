@@ -230,10 +230,12 @@ run pause toggle via `Command::Pause/Resume`, DISCONNECT → `reset_to_connect()
 Continue — the co-op world keeps running beneath, only input is modal) · **F11** fullscreen ↔
 windowed toggle (Engine::on_event, before scenes) ·
 TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` `/heal` `/wave`
-`/stress`) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
+`/stress` `/upgrade <n>` `/object <n>` — the last two file `OfferGrant` mailbox notes via
+`world:grant_offer(kind)`; the server runs ONE per round so N notes = N sequential menus,
+shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (58 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (65 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves; build line in its header — needs `-freflection -fcontracts` + the sol2

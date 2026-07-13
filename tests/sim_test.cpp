@@ -391,6 +391,24 @@ int main()
       [&](core::Entity e, const ChestOpen&) { world.registry().destroy(e); });
     reset();
 
+    // --- Scenario 16b: /upgrade /object grants file OfferGrant notes ---------
+    // The dev verb backing the console commands: N calls = N notes, flavored
+    // level (0) vs object (1); the server consumes one per round.
+    lua.script(R"(
+        world:grant_offer("level")
+        world:grant_offer("object")
+        world:grant_offer("object")
+    )");
+    int grant_level = 0;
+    int grant_object = 0;
+    world.registry().view<OfferGrant>().each([&](core::Entity, const OfferGrant& g) {
+        if (g.flavor == 0) { ++grant_level; } else { ++grant_object; }
+    });
+    check(grant_level == 1 && grant_object == 2, "grant_offer files one note per call, flavored");
+    world.registry().view<OfferGrant>().each(
+      [&](core::Entity e, const OfferGrant&) { world.registry().destroy(e); });
+    reset();
+
     // --- Scenario 17: offer filtering — levels roll upgrades, chests objects -
     {
         const auto kind_of = [&](std::uint8_t wire_id) {

@@ -116,8 +116,9 @@ void GameServer::update(core::FixedTimestep& timestep)
             emit_enemy_deaths();      // any enemy gone after the step died
             emit_downed_transitions();
             check_level_up();
-            check_run_end(); // mods may have called world:end_game this step
-            check_chest();   // ...or opened a boss chest (skipped once run_over_)
+            check_run_end();      // mods may have called world:end_game this step
+            check_chest();        // ...or opened a boss chest (skipped once run_over_)
+            check_offer_grants(); // ...or a dev /upgrade /object grant (one per round)
         }
         if (tick_ % proto::snapshot_every_n_ticks == 0) { stream_snapshots(); }
         ++tick_;
@@ -571,17 +572,7 @@ void GameServer::check_chest()
     if (notes.empty()) { return; }
     for (const core::Entity e : notes) { registry.destroy(e); }
 
-    leveling_ = true;
-    offer_flavor_ = proto::OfferFlavor::Chest;
-    pending_.clear();
-    offered_.clear();
-    chosen_.clear();
-    for (const auto& [token, session] : sessions_) {
-        if (!session.connected) { continue; }
-        start_level_up_for(token);
-        pending_.insert(token);
-    }
-    if (pending_.empty()) { leveling_ = false; } // nobody to choose
+    begin_offer_round(proto::OfferFlavor::Chest);
     spdlog::info("boss chest opened -> object pick for {} player(s)", pending_.size());
 }
 
@@ -595,6 +586,9 @@ void GameServer::reset_run()
 
     std::vector<core::Entity> doomed; // players, enemies, bullets, orbs, hearts
     registry.view<Position>().each([&](core::Entity e, const Position&) { doomed.push_back(e); });
+    // Pending grant notes have no Position (they're bare mailboxes): sweep them
+    // too so a queued /upgrade /object can't leak into the next run.
+    registry.view<OfferGrant>().each([&](core::Entity e, const OfferGrant&) { doomed.push_back(e); });
     for (const core::Entity e : doomed) { registry.destroy(e); } // script rows go too
     registry.view<GameStats>().each([&](core::Entity, GameStats& stats) {
         stats = GameStats{ .xp = 0, .wave = 1 };
@@ -832,9 +826,18 @@ void GameServer::check_level_up()
     xp_needed_ = mod::run_xp_curve(lua_host_, level_);
 
     // Freeze the world and ask every connected player to choose an upgrade.
-    // Keyed by token so a mid-level-up reconnect (new peer_id) still resolves.
+    begin_offer_round(proto::OfferFlavor::Level);
+    spdlog::info("team reached level {}", level_);
+    lua_host_.events().emit("on_level_up", static_cast<int>(level_));
+}
+
+// Freeze the sim and roll+send an offer to every connected player (the shared
+// core of level-ups, boss chests and the /upgrade /object grants). Keyed by
+// token so a mid-round reconnect (new peer_id) still resolves.
+void GameServer::begin_offer_round(proto::OfferFlavor flavor)
+{
     leveling_ = true;
-    offer_flavor_ = proto::OfferFlavor::Level;
+    offer_flavor_ = flavor;
     pending_.clear();
     offered_.clear();
     chosen_.clear();
@@ -844,8 +847,29 @@ void GameServer::check_level_up()
         pending_.insert(token);
     }
     if (pending_.empty()) { leveling_ = false; } // nobody to choose
-    spdlog::info("team reached level {}", level_);
-    lua_host_.events().emit("on_level_up", static_cast<int>(level_));
+}
+
+// OfferGrant mailbox (/upgrade, /object): consume exactly ONE note and run its
+// round. One-per-tick + the round's own freeze means N queued notes become N
+// SEQUENTIAL menus. Only fires between rounds (the tick loop gates on
+// !leveling_) and never during the game-over freeze.
+void GameServer::check_offer_grants()
+{
+    if (run_over_ || leveling_) { return; }
+    core::Registry& registry = world_.registry();
+    core::Entity note{};
+    bool found = false;
+    std::uint8_t flavor = 0;
+    registry.view<OfferGrant>().each([&](core::Entity e, const OfferGrant& g) {
+        if (found) { return; } // one per round; the rest wait their turn
+        note = e;
+        flavor = g.flavor;
+        found = true;
+    });
+    if (!found) { return; }
+    registry.destroy(note);
+    begin_offer_round(flavor != 0 ? proto::OfferFlavor::Chest : proto::OfferFlavor::Level);
+    spdlog::info("granted a {} offer round", flavor != 0 ? "object" : "upgrade");
 }
 
 void GameServer::start_level_up_for(std::uint64_t token)

@@ -41,6 +41,17 @@ struct ChestOpen
 {
 };
 
+// One-shot sim->server mailbox: `world:grant_offer(kind)` files one of these to
+// force an offer round WITHOUT the usual trigger (XP threshold / boss chest) —
+// the dev commands /upgrade and /object. The server consumes exactly ONE per
+// round, so N notes = N sequential menus (a granted round freezes the sim like
+// any other, and the next note fires once picks complete). flavor mirrors
+// proto::OfferFlavor (0 = Level/upgrade, 1 = Chest/object).
+struct OfferGrant
+{
+    std::uint8_t flavor = 0;
+};
+
 // Per-player run scoreboard, incremented by the Lua damage/death/revive
 // systems (prelude handle) and read by the server at run end for the
 // game-over stats block. Never snapshotted — it only matters once.

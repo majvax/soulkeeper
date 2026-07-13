@@ -452,6 +452,16 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                       const core::Entity note = reg->create();
                                       reg->assign(note, ChestOpen{});
                                   },
+                                  // Force an offer round without the usual trigger (dev
+                                  // commands /upgrade, /object). kind "object"/"chest" ->
+                                  // an objects pick, anything else -> an upgrade pick.
+                                  // One note = one round; call it N times for N menus.
+                                  "grant_offer", [reg](ScriptWorld&, std::string kind) {
+                                      const bool object = kind == "object" || kind == "chest";
+                                      const core::Entity note = reg->create();
+                                      reg->assign(note, OfferGrant{ .flavor = object ? std::uint8_t{ 1 }
+                                                                                      : std::uint8_t{ 0 } });
+                                  },
                                   // Queue a floating combat number at (x, y). kind: 0 = hit,
                                   // 1 = crit. Drained per snapshot tick by the server; capped
                                   // so a runaway mod loop can't flood the wire.
