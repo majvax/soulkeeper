@@ -76,6 +76,8 @@ return function(mod, C, BRAIN)
             if a.ranged then b:component(C.Ranged, a.ranged) end
             if a.bomber then b:component(C.Bomber, a.bomber) end
             if a.lunge then b:component(C.Lunge, a.lunge) end
+            if a.armor then b:component(C.Armor, a.armor) end
+            if a.ambush then b:component(C.Ambush, a.ambush) end
         end
         apply(mod:enemy(a.id, a.label, {
             weight = a.weight, sprite = a.sprite, scale = a.scale, tint = a.tint,
@@ -171,6 +173,35 @@ return function(mod, C, BRAIN)
         ranged = { range = 380, cooldown = 1.2, bullet_speed = 320 },
     }
 
+    register { -- late-wave light melee: fast, cheap, everywhere
+        id = "squire", label = "Squire",
+        sprite = "assets/sprite/Dwarfette_LVL1", scale = 0.95,
+        weight = function(wave) return math.max(0, wave - 9) * 1.1 end,
+        hp = 40, speed = 160, touch = 1, radius = 9, xp = 2,
+    }
+    register { -- walking DPS check: flat plate vs every bullet (floor 1)
+        id = "shieldbearer", label = "Shieldbearer",
+        sprite = "assets/sprite/Knight_LVL1", scale = 1.1,
+        weight = function(wave) return math.max(0, wave - 11) * 0.8 end,
+        hp = 90, speed = 90, touch = 1, radius = 12, xp = 4,
+        armor = function(wave) return { flat = 4 + wave * 0.25 } end,
+    }
+    register { -- caster: a slow homing orb that FOLLOWS you — keep moving
+        id = "acolyte", label = "Acolyte",
+        sprite = "assets/sprite/Sorcerer_LVL1", scale = 1.0,
+        weight = function(wave) return math.max(0, wave - 13) * 0.7 end,
+        hp = 35, speed = 95, touch = 1, radius = 10, xp = 3,
+        ranged = { range = 420, standoff = 320, cooldown = 3.0, windup = 0.7,
+                   bullet_speed = 170, homing = 1.4, variant = 6, bullet_radius = 8 },
+    }
+    register { -- ambusher: an inert prop until you walk into its reach
+        id = "mimic", label = "Mimic",
+        sprite = "assets/sprite/Mimic_LVL1", scale = 1.1,
+        weight = function(wave) return math.max(0, wave - 15) * 0.7 end,
+        hp = 110, speed = 0, touch = 2, radius = 12, xp = 5,
+        ambush = {},
+    }
+
     ------------------------------------------------------------------ brutes
     -- One silhouette, three wave bands: the Rhino skins ARE the difficulty tell.
     register {
@@ -237,6 +268,58 @@ return function(mod, C, BRAIN)
         :component(C.Lunge, { range = 640, windup = 0.7, speed = 640, duration = 0.55,
                               cooldown = 9999, timer = 9999, burst = 10, burst_speed = 240 })
         :component(C.Brain, { id = BRAIN.FROG_PRINCE })
+        :component(C.Boss, {})
+
+    -- Wave 25 mini: the Knight Commander — shield charges, aimed sword waves,
+    -- squire rallies (spaced, like all summons), and below half a close-range
+    -- shield slam. The first mini with adds: protect-the-carry pressure.
+    mod:enemy("knight_commander", "Knight Commander", {
+        weight = 0,
+        sprite = "assets/sprite/Knight_LVL4",
+        scale = 2.2,
+    })
+        :component(Health, boss_health(1400))
+        :component(Speed, speed(95))
+        :component(C.Touch, { hearts = 2 })
+        :component(Radius, { value = 24 })
+        :component(XpReward, xp(45))
+        :component(C.Lunge, { range = 560, windup = 0.7, speed = 520,
+                              duration = 0.7, cooldown = 9999, timer = 9999 })
+        :component(C.Brain, { id = BRAIN.KNIGHT })
+        :component(C.Boss, {})
+
+    -- Wave 35 mini: the Archmage — a caster that never lets you settle:
+    -- arcane fans, a blink-then-volley reposition, mirror-image acolytes
+    -- (spaced) and, once hurt, slow homing orbs that stack the air.
+    mod:enemy("archmage", "Archmage", {
+        weight = 0,
+        sprite = "assets/sprite/Sorcerer_LVL4",
+        scale = 2.2,
+    })
+        :component(Health, boss_health(1800))
+        :component(Speed, speed(70))
+        :component(C.Touch, { hearts = 2 })
+        :component(Radius, { value = 22 })
+        :component(XpReward, xp(60))
+        :component(C.Brain, { id = BRAIN.ARCHMAGE })
+        :component(C.Boss, {})
+
+    -- Wave 45 mini: the Mimic King — the greed fight. Wide coin sprays, a
+    -- chomp lunge, sleeper Mimic adds (spaced), and once hurt it salts the
+    -- ground with FOOL'S GOLD: fake XP orbs that bite when reached for.
+    mod:enemy("mimic_king", "Mimic King", {
+        weight = 0,
+        sprite = "assets/sprite/Mimic_LVL4",
+        scale = 2.4,
+    })
+        :component(Health, boss_health(2600))
+        :component(Speed, speed(100))
+        :component(C.Touch, { hearts = 2 })
+        :component(Radius, { value = 26 })
+        :component(XpReward, xp(90))
+        :component(C.Lunge, { range = 420, windup = 0.6, speed = 560,
+                              duration = 0.5, cooldown = 9999, timer = 9999 })
+        :component(C.Brain, { id = BRAIN.MIMIC })
         :component(C.Boss, {})
 
     -- Ground hazards the planter bosses drop (weight 0, spawned by
@@ -406,11 +489,16 @@ return function(mod, C, BRAIN)
         [10] = "core:boss",
         [15] = "core:frog_prince",
         [20] = "core:bomb_lord",
+        [25] = "core:knight_commander",
         [30] = "core:vampire_lord",
+        [35] = "core:archmage",
         [40] = "core:elder_ent",
+        [45] = "core:mimic_king",
         [50] = "core:gamemaster",
     }
-    local MINI_ROTATION = { "core:rhino_charger", "core:frog_prince", "core:miniboss" }
+    -- Past the scripted table (> 50): rotate the named minis.
+    local MINI_ROTATION = { "core:rhino_charger", "core:frog_prince",
+                            "core:knight_commander", "core:archmage", "core:mimic_king" }
     mod:subscribe("on_wave_start", function(wave)
         if wave % 5 ~= 0 then return end
         local is_boss = wave % 10 == 0

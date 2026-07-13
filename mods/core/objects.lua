@@ -127,6 +127,33 @@ return function(mod, C)
             value_text = function() return "dash boosts fire rate" end,
         })
 
+    -- Epic: a periodic shock ring from your body — damage keys off your
+    -- weapon, so the passive keeps pace with the build (static_sys).
+    mod:object("static_charge", "Static Charge",
+        function(e) e:set(C.Static, {}) end,
+        {
+            rarity = "epic",
+            value_text = function() return "periodic shock ring" end,
+        })
+
+    -- Epic: kills refund dash cooldown — the aggression flywheel (kill to
+    -- move, move to kill). Hooked in the scoreboard credit path.
+    mod:object("hunter", "Hunter's Instinct",
+        function(e) e:set(C.Hunter, {}) end,
+        {
+            rarity = "epic",
+            value_text = function() return "kills refund dash" end,
+        })
+
+    -- Legendary: losing a heart bursts a friendly ring from the hit — the
+    -- swarm that tagged you pays for it.
+    mod:object("reactive", "Reactive Plating",
+        function(e) e:set(C.Reactive, {}) end,
+        {
+            rarity = "legendary",
+            value_text = function() return "lost hearts bite back" end,
+        })
+
     ------------------------------------------------------------ bullet barrels
     -- Extra bullets are a chest DECISION now (the Split Shot upgrade is gone).
     mod:object("split_barrel", "Split Barrel",
@@ -177,6 +204,19 @@ return function(mod, C)
         {
             rarity = "legendary",
             value_text = function() return "x2 DMG, 1 max heart" end,
+        })
+    mod:object("heavy_rounds", "Heavy Rounds",
+        function(e)
+            local w = e:get(C.Weapon)
+            if w then
+                w.damage = w.damage * 2
+                w.cooldown_max = w.cooldown_max * 1.55
+                w.bullet_speed = w.bullet_speed * 0.75
+            end
+        end,
+        {
+            rarity = "legendary",
+            value_text = function() return "x2 DMG, slower gun" end,
         })
     mod:object("lead_plates", "Lead Plates",
         function(e)

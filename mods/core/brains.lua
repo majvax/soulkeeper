@@ -24,6 +24,9 @@ return function(mod, C)
         VAMPIRE = 5,
         ENT = 6,
         GAMEMASTER = 7,
+        KNIGHT = 8,   -- @25 Knight Commander
+        ARCHMAGE = 9, -- @35 Archmage
+        MIMIC = 10,   -- @45 Mimic King
     }
 
     ------------------------------------------------------------------ helpers
@@ -328,6 +331,122 @@ return function(mod, C)
                           local b = spawn_bullet(arena.cx, arena.cy - arena.h + s * spacing,
                               dir * 240, 0)
                           hostile(b, 1, arena.w / 240, 7)
+                      end
+                  end
+              end },
+        },
+    }
+
+    -- @25 Knight Commander: shield charges across the field, aimed sword
+    -- waves, squire rallies (spaced — summons breathe), and below half a
+    -- close-range shield slam with shortened charge tells.
+    BRAINS[BRAIN.KNIGHT] = {
+        phases = { 0.5 },
+        on_phase = function(boss)
+            local l = boss:get(C.Lunge)
+            if l then l.windup = 0.45 end -- rage: the charge tell shortens
+        end,
+        moves = {
+            { name = "shield_charge", windup = 0, cooldown = 2.4, weight = 3,
+              fn = function(boss) poke(boss, C.Lunge) end },
+            { name = "sword_wave", windup = 0.5, cooldown = 2.0, fx = 1,
+              fn = function(boss) cone_at(boss, 4, 0.9, 280, 1, 3, 1.6) end },
+            { name = "rally", windup = 0.4, cooldown = 7.0, fx = 1,
+              fn = function(boss)
+                  local ep = boss:get(Position)
+                  for i = 1, 3 do
+                      local a = math.random() * 2 * math.pi
+                      local squire = spawn_enemy(ep.x + math.cos(a) * 120,
+                          ep.y + math.sin(a) * 120, "core:squire")
+                      if squire then squire:set(C.NoLoot, {}) end
+                  end
+              end },
+            { name = "shield_slam", windup = 0.5, cooldown = 2.2, phase = 2, fx = 1,
+              weight = function(boss) -- only worth it with someone in reach
+                  local ep = boss:get(Position)
+                  local _, d2 = nearest_player(ep.x, ep.y)
+                  return (d2 and d2 < 240 * 240) and 4 or 0
+              end,
+              fn = function(boss) shock(boss, 12, 320, 1, 3, 0.35) end },
+        },
+    }
+
+    -- @35 Archmage: a caster that never lets you settle — arcane fans, a
+    -- blink-then-volley reposition, mirror-image acolytes (spaced), and once
+    -- hurt slow homing orbs that stack the air until you cull them.
+    BRAINS[BRAIN.ARCHMAGE] = {
+        phases = { 0.55 },
+        moves = {
+            { name = "arcane_fan", windup = 0.5, cooldown = 1.9, weight = 3, fx = 1,
+              fn = function(boss) cone_at(boss, 5, 0.9, 240, 1, 4, 1.8) end },
+            { name = "blink_volley", windup = 0.45, cooldown = 2.6, fx = 1,
+              fn = function(boss)
+                  local p = random_player()
+                  if not p then return end
+                  local pp = p:get(Position)
+                  local a = math.random() * 2 * math.pi
+                  local ep = boss:get(Position)
+                  ep.x, ep.y = pp.x + math.cos(a) * 350, pp.y + math.sin(a) * 350
+                  cone_at(boss, 3, 0.35, 300, 1, 4, 1.6) -- tight burst on arrival
+              end },
+            { name = "mirror_images", windup = 0.5, cooldown = 8.0, fx = 1,
+              fn = function(boss)
+                  local ep = boss:get(Position)
+                  for i = 1, 2 do
+                      local a = math.random() * 2 * math.pi
+                      local image = spawn_enemy(ep.x + math.cos(a) * 140,
+                          ep.y + math.sin(a) * 140, "core:acolyte")
+                      if image then image:set(C.NoLoot, {}) end
+                  end
+              end },
+            { name = "chase_orbs", windup = 0.6, cooldown = 3.2, phase = 2, fx = 1,
+              fn = function(boss)
+                  local ep = boss:get(Position)
+                  for i = 1, 3 do
+                      local a = (i / 3) * 2 * math.pi
+                      local b = spawn_bullet(ep.x, ep.y, math.cos(a) * 170, math.sin(a) * 170)
+                      hostile(b, 1, 4.0, 6)
+                      b:set(C.Homing, { turn = 1.6 })
+                  end
+              end },
+        },
+    }
+
+    -- @45 Mimic King: the greed fight — wide coin sprays, a chomp lunge,
+    -- sleeper Mimic adds (spaced), and below 45% it salts the ground with
+    -- FOOL'S GOLD: fake XP orbs that bite anyone who reaches for them.
+    BRAINS[BRAIN.MIMIC] = {
+        phases = { 0.45 },
+        on_phase = function(boss)
+            local l = boss:get(C.Lunge)
+            if l then l.windup = 0.4 end -- hungrier chomps
+        end,
+        moves = {
+            { name = "coin_spray", windup = 0.45, cooldown = 1.8, weight = 3, fx = 1,
+              fn = function(boss) cone_at(boss, 6, 1.4, 260, 1, 5, 1.5) end },
+            { name = "chomp", windup = 0, cooldown = 2.6, weight = 2,
+              fn = function(boss) poke(boss, C.Lunge) end },
+            { name = "spawn_mimics", windup = 0.5, cooldown = 8.0, fx = 1,
+              fn = function(boss)
+                  local ep = boss:get(Position)
+                  for i = 1, 2 do
+                      local a = math.random() * 2 * math.pi
+                      local add = spawn_enemy(ep.x + math.cos(a) * 160,
+                          ep.y + math.sin(a) * 160, "core:mimic")
+                      if add then add:set(C.NoLoot, {}) end
+                  end
+              end },
+            { name = "fools_gold", windup = 0.6, cooldown = 3.4, phase = 2, fx = 1,
+              fn = function()
+                  for _, p in ipairs(live_players()) do
+                      local pp = p:get(Position)
+                      for i = 1, 2 do
+                          local a = math.random() * 2 * math.pi
+                          local r = 60 + math.random() * 90
+                          local lure = spawn_entity(pp.x + math.cos(a) * r,
+                              pp.y + math.sin(a) * r)
+                          lure:get(Render).kind = KIND.orb
+                          lure:set(C.FoolsGold, {})
                       end
                   end
               end },

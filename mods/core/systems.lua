@@ -39,6 +39,20 @@ return function(mod, C)
         if not h then return false end
         h.current = math.floor(h.current - hearts)
         p:set(C.IFrames, {}) -- 1 s of invulnerability (component default)
+        -- Reactive Plating: the lost heart bites back — a friendly burst from
+        -- the hit. This is THE player-damage site, so every hit source counts.
+        if p:has(C.Reactive) then
+            local ra = p:get(C.Reactive)
+            local pp = p:get(Position)
+            local pid = p:id()
+            local n = math.floor(ra.bullets)
+            for i = 1, n do
+                local a = (i / n) * 2 * math.pi
+                local b = spawn_bullet(pp.x, pp.y, math.cos(a) * ra.bullet_speed,
+                    math.sin(a) * ra.bullet_speed)
+                b:set(C.Bullet, { damage = ra.damage, lifetime = ra.lifetime, owner = pid })
+            end
+        end
         return true
     end
 
@@ -47,9 +61,16 @@ return function(mod, C)
     -- to ticks). Shown on the game-over screen.
     local function credit(p, damage, killed)
         local rs = p:get(RunStats)
-        if not rs then return end
-        rs.damage = rs.damage + damage
-        if killed then rs.kills = math.floor(rs.kills + 1) end
+        if rs then
+            rs.damage = rs.damage + damage
+            if killed then rs.kills = math.floor(rs.kills + 1) end
+        end
+        -- Hunter's Instinct: every kill YOU land refunds dash cooldown. Riding
+        -- the credit path covers every damage source (bullets/orbit/aura/dash).
+        if killed and p:has(C.Hunter) then
+            local d = p:get(Dash)
+            if d then d.cooldown = math.max(0, d.cooldown - p:get(C.Hunter).refund) end
+        end
     end
     local function credit_owner(owner_id, damage, killed)
         if owner_id == 0 then return end
@@ -149,7 +170,10 @@ return function(mod, C)
                             bounces = w.bounces,
                             leech = leech,
                             owner = pid,
+                            cull = w.cull,         -- Reaper execute threshold
+                            volatile = w.volatile, -- Volatile Rounds kill-burst
                         })
+                        if w.bullet_radius > 4 then b:get(Radius).value = w.bullet_radius end
                         if is_crit then b:get(Render).variant = 2 end -- orange
                     end
                 end
@@ -197,13 +221,41 @@ return function(mod, C)
                         if dx * dx + dy * dy < hit * hit then
                             local h = e:get(Health)
                             local was_alive = h.current > 0
-                            h.current = h.current - bullet.damage
+                            -- Shieldbearer plate: flat reduction per bullet, floored
+                            -- at 1 (chip damage always lands — never immune).
+                            local dmg = bullet.damage
+                            if e:has(C.Armor) then
+                                dmg = math.max(1, dmg - e:get(C.Armor).flat)
+                            end
+                            h.current = h.current - dmg
+                            -- Reaper: a hit that leaves non-boss trash under the
+                            -- execute threshold finishes it outright.
+                            if h.current > 0 and bullet.cull > 0
+                                and h.current < bullet.cull * h.max
+                                and not e:has(C.Boss) then
+                                h.current = 0
+                            end
                             -- Floating number; crit bullets were tagged variant 2 at fire time.
-                            world:damage_number(ep.x, ep.y, bullet.damage,
+                            world:damage_number(ep.x, ep.y, dmg,
                                 b:get(Render).variant == 2 and 1 or 0)
                             -- Corpse overlaps (death system runs at 30 Hz) don't pad stats.
                             if was_alive then
-                                credit_owner(bullet.owner, bullet.damage, h.current <= 0)
+                                credit_owner(bullet.owner, dmg, h.current <= 0)
+                            end
+                            -- Volatile Rounds: the killing bullet detonates a small
+                            -- friendly burst at the victim. Burst bullets carry
+                            -- volatile = 0 — no chain reactions.
+                            if was_alive and h.current <= 0 and bullet.volatile > 0 then
+                                for k = 1, 6 do
+                                    local a = (k / 6) * 2 * math.pi
+                                    local vb = spawn_bullet(ep.x, ep.y,
+                                        math.cos(a) * 280, math.sin(a) * 280)
+                                    vb:set(C.Bullet, {
+                                        damage = bullet.volatile,
+                                        lifetime = 0.4,
+                                        owner = bullet.owner,
+                                    })
+                                end
                             end
                             -- Kill-heal (Leech): the shooter's chance rides the
                             -- bullet; the heart goes to the nearest live player.
@@ -597,6 +649,8 @@ return function(mod, C)
             })
             b:get(Render).variant = math.floor(r.variant)
             if r.bullet_radius > 0 then b:get(Radius).value = r.bullet_radius end
+            -- Homing shot (the Acolyte's orb): the bullet steers after you.
+            if r.homing > 0 then b:set(C.Homing, { turn = r.homing }) end
         end
         return true
     end
@@ -655,6 +709,53 @@ return function(mod, C)
                     e:get(Speed).value = 0
                     e:get(Render).fx = 3
                 end
+            end
+        end
+    end)
+
+    -- Ambusher (the Mimic): inert until a player closes within trigger range,
+    -- then a ONE-WAY wake — Speed snaps on and the reveal flashes the ATK
+    -- clip. 10 Hz: the trigger radius dwarfs per-100 ms movement.
+    mod:system("ambush_sys", { phase = "update", rate = 10, stagger = 0.3 }, function(dt)
+        for e in world:each(C.Ambush, Position, Enemy) do
+            local am = e:get(C.Ambush)
+            if am.awake == 0 then
+                local ep = e:get(Position)
+                local _, d2 = nearest_player(ep.x, ep.y)
+                if d2 < am.trigger * am.trigger then
+                    am.awake = 1
+                    e:get(Speed).value = am.wake_speed
+                    am.anim = 0.5
+                    e:get(Render).fx = 1
+                end
+            elseif am.anim > 0 then
+                am.anim = am.anim - dt
+                if am.anim <= 0 then e:get(Render).fx = 0 end
+            end
+        end
+    end)
+
+    -- Fool's gold (the Mimic King): a fake orb that pops into a hostile burst
+    -- when reached for — or when its fuse gives up on you. 20 Hz: the 60 px
+    -- trigger sits just past the 45 px pickup radius, so it fires in reach.
+    mod:system("fools_gold_sys", { phase = "update", rate = 20, stagger = 0.42 }, function(dt)
+        for g in world:each(C.FoolsGold, Position) do
+            local fg = g:get(C.FoolsGold)
+            fg.fuse = fg.fuse - dt
+            local gp = g:get(Position)
+            local _, d2 = nearest_player(gp.x, gp.y)
+            if fg.fuse <= 0 or d2 < fg.trigger * fg.trigger then
+                if d2 < fg.trigger * fg.trigger then -- reached for: it bites
+                    local n = math.floor(fg.bullets)
+                    for i = 1, n do
+                        local a = (i / n) * 2 * math.pi
+                        local b = spawn_bullet(gp.x, gp.y, math.cos(a) * fg.bullet_speed,
+                            math.sin(a) * fg.bullet_speed)
+                        b:set(C.Bullet, { damage = fg.damage, hostile = 1, lifetime = 0.5 })
+                        b:get(Render).variant = 1
+                    end
+                end
+                g:destroy() -- an expired fuse just fizzles the lure
             end
         end
     end)
@@ -871,13 +972,17 @@ return function(mod, C)
     end)
 
     -- Orbiting Blades: spin the phase, damage enemies at each blade point.
-    -- 20 Hz: dps scales by the accumulated dt. The networked phase is what
-    -- the client draws, so the cut and the visual agree.
-    mod:system("orbit_sys", { phase = "update", rate = 20, stagger = 0.8 }, function(dt)
+    -- 60 Hz: the networked phase is what the client draws — at 20 Hz it
+    -- stepped visibly under 60 Hz snapshots (user: "laggy"). ≤4 players x ≤8
+    -- blades keeps the walk trivial. Cut damage scales with Weapon.damage so
+    -- the blades stay lethal against wave-compounded health.
+    mod:system("orbit_sys", { phase = "update", rate = 60, stagger = 0.8 }, function(dt)
         for p in world:each(C.Orbit, Position, Player) do
             local o = p:get(C.Orbit)
             o.phase = o.phase + dt * o.spin
             local pp = p:get(Position)
+            local w = p:get(C.Weapon)
+            local dps = o.dps + 0.7 * (w and w.damage or 0)
             local n = math.floor(o.count)
             for i = 1, n do
                 local a = o.phase + (i / n) * 2 * math.pi
@@ -889,10 +994,10 @@ return function(mod, C)
                     if dx * dx + dy * dy < 26 * 26 then
                         local h = e:get(Health)
                         local was_alive = h.current > 0
-                        h.current = h.current - o.dps * dt
+                        h.current = h.current - dps * dt
                         -- No floating numbers for aura ticks (spam), but the
                         -- damage still counts on the scoreboard.
-                        if was_alive then credit(p, o.dps * dt, h.current <= 0) end
+                        if was_alive then credit(p, dps * dt, h.current <= 0) end
                     end
                 end
             end
@@ -920,6 +1025,30 @@ return function(mod, C)
                 local w = p:get(C.Weapon)
                 local c = p:get(C.Crit)
                 if w and c then c.chance = math.min(1.0, 0.08 * w.pierce) end
+            end
+        end
+    end)
+
+    -- Static Charge: a periodic friendly shock ring from the player, damage
+    -- keyed to the CURRENT weapon so the object keeps pace with the build.
+    -- 10 Hz: the cooldown is seconds; the timer uses the accumulated dt.
+    mod:system("static_sys", { phase = "update", rate = 10, stagger = 0.58 }, function(dt)
+        for p in world:each(C.Static, Position, Player) do
+            local st = p:get(C.Static)
+            st.timer = st.timer - dt
+            if st.timer <= 0 then
+                st.timer = st.cooldown
+                local pp = p:get(Position)
+                local w = p:get(C.Weapon)
+                local damage = 0.5 * (w and w.damage or 10)
+                local pid = p:id()
+                local n = math.floor(st.bullets)
+                for i = 1, n do
+                    local a = (i / n) * 2 * math.pi
+                    local b = spawn_bullet(pp.x, pp.y, math.cos(a) * st.bullet_speed,
+                        math.sin(a) * st.bullet_speed)
+                    b:set(C.Bullet, { damage = damage, lifetime = st.lifetime, owner = pid })
+                end
             end
         end
     end)
@@ -1190,13 +1319,20 @@ return function(mod, C)
 
     -- Damage aura (Onion): hurt enemies inside any player's aura.
     -- 20 Hz: damage scales by the accumulated dt, so DPS is unchanged.
+    -- The burn scales with Weapon.damage — a flat 25/s was irrelevant against
+    -- wave-30 health pools; now the aura grows with the build. Kills count on
+    -- the scoreboard (and feed Hunter's Instinct) like the blades'.
     mod:system("aura_sys", { phase = "update", rate = 20, stagger = 0.5 }, function(dt)
         for p in world:each(C.Aura, Position, Player) do
             local a = p:get(C.Aura)
             local pp = p:get(Position)
+            local w = p:get(C.Weapon)
+            local dps = a.per_second + 0.6 * (w and w.damage or 0)
             for e in world:nearby(pp.x, pp.y, a.radius, Enemy, Health) do
                 local h = e:get(Health)
-                h.current = h.current - a.per_second * dt
+                local was_alive = h.current > 0
+                h.current = h.current - dps * dt
+                if was_alive then credit(p, dps * dt, h.current <= 0) end
             end
         end
     end)

@@ -68,6 +68,33 @@ return function(mod, C)
             available = function(e) return e:has(C.Aura) end,
         })
 
+    -- Orbit lanes (only offered once you own the Blades — like AOE Zone).
+    -- Both are HARD-capped: spin at 6 rad/s (past that a blade's per-tick
+    -- travel outruns its 26 px hit radius and enemies slip between cuts),
+    -- count at 8 (a solid ring stops being a pattern).
+    mod:upgrade("bladespin", "Blade Dance", { 0.4, 0.6, 0.9, 1.3, 1.8 },
+        function(e, _, amount)
+            local o = e:get(C.Orbit)
+            if o then o.spin = math.min(6.0, o.spin + amount) end
+        end,
+        {
+            value_text = function(amount) return "+" .. amount .. " BLADE SPEED" end,
+            available = function(e)
+                return e:has(C.Orbit) and e:get(C.Orbit).spin < 6.0
+            end,
+        })
+    mod:upgrade("bladecount", "Extra Blade", { 0, 0, 1, 1, 2 },
+        function(e, _, amount)
+            local o = e:get(C.Orbit)
+            if o then o.count = math.min(8, math.floor(o.count + amount)) end
+        end,
+        {
+            value_format = "+{} BLADE",
+            available = function(e)
+                return e:has(C.Orbit) and e:get(C.Orbit).count < 8
+            end,
+        })
+
     mod:upgrade("bulletspeed", "Bullet Velocity", { 40, 70, 110, 160, 250 },
         function(e, _, amount)
             local w = e:get(C.Weapon)
@@ -76,6 +103,34 @@ return function(mod, C)
         { value_format = "+{} BULLET SPD" })
 
     -- (Long Barrel / range is gone: base Weapon.lifetime carries the reach now.)
+
+    -- Heavy Caliber: fatter bullets (a bigger hitbox) — the forgiveness lane.
+    mod:upgrade("bulletsize", "Heavy Caliber", { 1, 2, 3, 4, 6 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.bullet_radius = w.bullet_radius + amount end
+        end,
+        { value_format = "+{} BULLET SIZE" })
+
+    -- Reaper: hits that leave non-boss trash under the threshold finish it.
+    -- Rare+ — an anti-tank lane against wave-compounded health pools.
+    mod:upgrade("cull", "Reaper", { 0, 0, 0.03, 0.05, 0.08 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.cull = w.cull + amount end
+        end,
+        { value_text = function(amount)
+            return "+" .. math.floor(amount * 100 + 0.5) .. "% EXECUTE"
+        end })
+
+    -- Volatile Rounds: killing bullets detonate a small friendly burst at the
+    -- victim. Epic+ — the crowd-clear lane.
+    mod:upgrade("volatile", "Volatile Rounds", { 0, 0, 0, 25, 45 },
+        function(e, _, amount)
+            local w = e:get(C.Weapon)
+            if w then w.volatile = w.volatile + amount end
+        end,
+        { value_format = "+{} BLAST DMG" })
 
     mod:upgrade("critchance", "Keen Eye", { 0.02, 0.04, 0.07, 0.11, 0.18 },
         function(e, _, amount)

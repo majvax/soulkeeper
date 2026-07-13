@@ -202,12 +202,19 @@ int main()
         local boss = spawn_enemy(100, 0, "core:gamemaster")
         boss:get(C.Summon).timer = 0
     )");
-    step(1.5f); // the player stands inside blink range
-    check(lua_bool(R"(
-        local n = 0
-        for e in world:each(Enemy) do n = n + 1 end
-        return n > 1
-    )"), "game master summoned adds");
+    // Poll per tick: a pool-3 roll can hand out three bomber elites, and all
+    // three can rush the adjacent player and self-detonate before a single
+    // end-of-window count (a rare all-bombers flake).
+    bool gm_adds = false;
+    for (int i = 0; i < 180; ++i) { // 1.5 s — the player stands inside blink range
+        world.step(1.0f / 120.0f);
+        gm_adds = gm_adds || lua_bool(R"(
+            local n = 0
+            for e in world:each(Enemy) do n = n + 1 end
+            return n > 1
+        )");
+    }
+    check(gm_adds, "game master summoned adds");
     check(lua_bool(R"(
         local C = import("core")
         for e in world:each(C.Summon, Position) do
@@ -968,6 +975,416 @@ int main()
         for heart in world:each(C.Heal) do return false end
         return true
     )"), "dead summons drop neither XP nor hearts");
+    reset();
+
+    // --- Scenario 45: @25 Knight Commander — milestone + rally ---------------
+    host.events().emit("on_wave_start", 25);
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do return b:get(C.Brain).id == 8 end
+        return false
+    )"), "wave 25 spawns the Knight Commander");
+    lua.script(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do -- force the rally move (a brain poke)
+            local brain = b:get(C.Brain)
+            brain.move = 3
+            brain.winding = 0.05
+        end
+    )");
+    step(0.4f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local squires = 0
+        for e in world:each(Enemy, C.NoLoot) do squires = squires + 1 end
+        return squires == 3
+    )"), "the rally raised three loot-free squires");
+    reset();
+
+    // --- Scenario 46: @35 Archmage — milestone + chase orbs ------------------
+    host.events().emit("on_wave_start", 35);
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do return b:get(C.Brain).id == 9 end
+        return false
+    )"), "wave 35 spawns the Archmage");
+    lua.script(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do
+            local brain = b:get(C.Brain)
+            brain.move = 4 -- chase_orbs (phase-gated in play; forced here)
+            brain.winding = 0.05
+        end
+    )");
+    step(0.4f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Bullet, C.Homing) do
+            return b:get(C.Bullet).hostile == 1
+        end
+        return false
+    )"), "the archmage's orbs are hostile and they steer");
+    reset();
+
+    // --- Scenario 47: @45 Mimic King — milestone + fool's gold ---------------
+    host.events().emit("on_wave_start", 45);
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do return b:get(C.Brain).id == 10 end
+        return false
+    )"), "wave 45 spawns the Mimic King");
+    lua.script(R"(
+        local C = import("core")
+        for b in world:each(C.Brain) do
+            local brain = b:get(C.Brain)
+            brain.move = 4 -- fool's gold
+            brain.winding = 0.05
+        end
+    )");
+    step(0.4f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local lures = 0
+        for g in world:each(C.FoolsGold) do lures = lures + 1 end
+        return lures == 2 -- two per live player, one player here
+    )"), "fool's gold salts two lures around the player");
+    lua.script(R"(
+        local C = import("core")
+        for g in world:each(C.FoolsGold, Position) do -- reach for ONE lure
+            local gp = g:get(Position)
+            for p in world:each(Player, Position) do
+                local pp = p:get(Position)
+                gp.x, gp.y = pp.x, pp.y
+            end
+            break
+        end
+    )");
+    step(0.15f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local lures = 0
+        for g in world:each(C.FoolsGold) do lures = lures + 1 end
+        if lures ~= 1 then return false end
+        for b in world:each(C.Bullet) do
+            if b:get(C.Bullet).hostile == 1 then return true end
+        end
+        return false
+    )"), "a reached-for lure pops into a hostile bite");
+    reset();
+
+    // --- Scenario 48: Shieldbearer armor — flat reduction, floor 1 -----------
+    lua.script(R"(
+        local C = import("core")
+        local sb = spawn_enemy(500, 0, "core:shieldbearer")
+        sb:get(Speed).value = 0 -- park it for a clean before/after read
+        _M = sb:get(Health).max
+        _F = sb:get(C.Armor).flat
+        local b = spawn_bullet(500, 0, 0, 0)
+        b:set(C.Bullet, { damage = 10 })
+    )");
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for sb in world:each(C.Armor, Health) do
+            local loss = _M - sb:get(Health).current
+            local want = math.max(1, 10 - _F)
+            if math.abs(loss - want) > 0.01 then return false end
+            -- chip shot: damage below the plate still lands 1
+            local b = spawn_bullet(sb:get(Position).x, sb:get(Position).y, 0, 0)
+            b:set(C.Bullet, { damage = 1 })
+            _M = sb:get(Health).current
+            return true
+        end
+        return false
+    )"), "armor shaves flat damage off the bullet");
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for sb in world:each(C.Armor, Health) do
+            return math.abs((_M - sb:get(Health).current) - 1) < 0.01
+        end
+        return false
+    )"), "chip damage floors at 1 - armor never means immune");
+    reset();
+
+    // --- Scenario 49: Acolyte — its orb homes ---------------------------------
+    lua.script(R"(spawn_enemy(300, 0, "core:acolyte"))");
+    step(2.4f); // spawn grace 1.0 + windup 0.7, fired well within this
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Bullet, C.Homing) do
+            return b:get(C.Bullet).hostile == 1
+        end
+        return false
+    )"), "the acolyte's orb carries homing");
+    reset();
+
+    // --- Scenario 50: Mimic — inert until approached --------------------------
+    lua.script(R"(spawn_enemy(400, 0, "core:mimic"))");
+    step(0.4f);
+    const bool mimic_asleep = lua_bool(R"(
+        local C = import("core")
+        for m in world:each(C.Ambush, Speed) do
+            return m:get(Speed).value == 0 and m:get(C.Ambush).awake == 0
+        end
+        return false
+    )");
+    lua.script(R"(
+        for p in world:each(Player, Position) do p:get(Position).x = 300 end
+    )");
+    step(0.3f); // 100 px away — inside the 150 px trigger
+    check(mimic_asleep && lua_bool(R"(
+        local C = import("core")
+        for m in world:each(C.Ambush, Speed) do
+            return m:get(Speed).value > 0 and m:get(C.Ambush).awake == 1
+        end
+        return false
+    )"), "the mimic sleeps at range and wakes one-way in reach");
+    reset();
+
+    // --- Scenario 51: Static Charge — a periodic owner-stamped ring -----------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do p:set(C.Static, {}) end
+    )");
+    step(3.3f); // first ring at the 3.0 s cooldown
+    check(lua_bool(R"(
+        local C = import("core")
+        for p in world:each(Player) do
+            for b in world:each(C.Bullet) do
+                local bullet = b:get(C.Bullet)
+                if bullet.hostile == 0 and bullet.owner == p:id() then return true end
+            end
+        end
+        return false
+    )"), "static charge fires an owner-stamped friendly ring");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(C.Static) do p:remove(C.Static) end
+    )");
+    reset();
+
+    // --- Scenario 52: Hunter's Instinct — kills refund dash cooldown ----------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, Dash) do
+            p:set(C.Hunter, {})
+            local d = p:get(Dash)
+            d.charges = 0
+            d.cooldown = 2.0
+            local e = spawn_enemy(300, 0, "core:bandit")
+            local b = spawn_bullet(300, 0, 0, 0)
+            b:set(C.Bullet, { damage = 100000, owner = p:id() })
+        end
+    )");
+    step(0.1f);
+    check(lua_bool(R"(
+        for p in world:each(Player, Dash) do
+            return p:get(Dash).cooldown < 1.6 -- 2.0 - 0.5 refund (- ticked time)
+        end
+    )"), "a kill refunds dash cooldown through hunter's instinct");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(C.Hunter, Dash) do
+            p:remove(C.Hunter)
+            local d = p:get(Dash)
+            d.charges = d.max_charges
+            d.cooldown = 0
+        end
+    )");
+    reset();
+
+    // --- Scenario 53: Reactive Plating — a lost heart bites back --------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, Position) do
+            p:set(C.Reactive, {})
+            local pp = p:get(Position)
+            local b = spawn_bullet(pp.x, pp.y, 0, 0)
+            b:set(C.Bullet, { damage = 1, hostile = 1 })
+        end
+    )");
+    step(0.1f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local burst = 0
+        for b in world:each(C.Bullet) do
+            if b:get(C.Bullet).hostile == 0 then burst = burst + 1 end
+        end
+        for p in world:each(Player, Hearts) do
+            return burst == 10 and p:get(Hearts).current < p:get(Hearts).max
+        end
+        return false
+    )"), "losing a heart bursts the reactive ring");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(C.Reactive) do p:remove(C.Reactive) end
+    )");
+    reset();
+
+    // --- Scenario 54: Heavy Caliber — the hitbox rides the weapon stat --------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon, AimState) do
+            p:get(C.Weapon).bullet_radius = 9
+            local a = p:get(AimState)
+            a.firing, a.dx, a.dy = 1, 1, 0
+        end
+    )");
+    step(0.05f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for b in world:each(C.Bullet, Radius) do
+            if b:get(C.Bullet).hostile == 0 then return b:get(Radius).value == 9 end
+        end
+        return false
+    )"), "heavy caliber fires fatter bullets");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon, AimState) do
+            p:get(C.Weapon).bullet_radius = 4
+            p:get(AimState).firing = 0
+        end
+    )");
+    reset();
+
+    // --- Scenario 55: Reaper — executes trash, spares bosses -------------------
+    lua.script(R"(
+        local C = import("core")
+        local e = spawn_enemy(400, 0, "core:bandit")
+        e:get(Speed).value = 0
+        local m = e:get(Health).max
+        local b = spawn_bullet(400, 0, 0, 0)
+        b:set(C.Bullet, { damage = m - 0.5, cull = 0.1 }) -- leaves 0.5 < 10%
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        for e in world:each(Enemy) do return false end
+        return true
+    )"), "reaper executes trash left under the threshold");
+    reset();
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(400, 0, "core:miniboss")
+        boss:get(Speed).value = 0
+        local m = boss:get(Health).max
+        local b = spawn_bullet(400, 0, 0, 0)
+        b:set(C.Bullet, { damage = m - 0.5, cull = 0.99 })
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for boss in world:each(C.Boss, Health) do
+            return boss:get(Health).current > 0 -- hurt to a sliver, never culled
+        end
+        return false
+    )"), "reaper never executes a boss");
+    reset();
+
+    // --- Scenario 56: Volatile Rounds — kill-burst, no chains ------------------
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do
+            local e = spawn_enemy(400, 0, "core:bandit")
+            local b = spawn_bullet(400, 0, 0, 0)
+            b:set(C.Bullet, { damage = 100000, volatile = 30, owner = p:id() })
+        end
+    )");
+    step(0.05f);
+    check(lua_bool(R"(
+        local C = import("core")
+        local burst, clean = 0, true
+        for b in world:each(C.Bullet) do
+            local bullet = b:get(C.Bullet)
+            if bullet.hostile == 0 and bullet.damage == 30 then
+                burst = burst + 1
+                if bullet.volatile ~= 0 then clean = false end
+            end
+        end
+        return burst == 6 and clean
+    )"), "a volatile kill bursts six chain-free bullets");
+    reset();
+
+    // --- Scenario 57: Onion + Blades scale with the weapon ---------------------
+    // Target = the Goldhorn (fat health pool): base aura/blade numbers can't
+    // meaningfully dent it in the window, so the measured damage IS the scaling.
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon) do
+            p:set(C.Aura, { radius = 120, per_second = 25 })
+            p:get(C.Weapon).damage = 1000 -- aura dps becomes 25 + 600
+            local e = spawn_enemy(60, 0, "core:brute_gold")
+            e:get(Speed).value = 0
+            _M = e:get(Health).max
+        end
+    )");
+    step(0.5f);
+    check(lua_bool(R"(
+        for e in world:each(Enemy, Health) do
+            return _M - e:get(Health).current > 200 -- base 25/s tops out ~13
+        end
+        return true -- burned clean through: scaled beyond doubt
+    )"), "the onion aura scales with weapon damage");
+    reset();
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player) do
+            p:remove(C.Aura)
+            p:set(C.Orbit, {})
+            local e = spawn_enemy(95, 0, "core:brute_gold") -- parked ON the blade ring
+            e:get(Speed).value = 0
+            _M = e:get(Health).max
+        end
+    )");
+    step(1.0f); // a full sweep guarantees a blade pass (2.5 rad > the 2.09 gap)
+    check(lua_bool(R"(
+        for e in world:each(Enemy, Health) do
+            return _M - e:get(Health).current > 50 -- base 70/s per pass tops ~15
+        end
+        return true
+    )"), "the orbiting blades scale with weapon damage");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(Player, C.Weapon) do p:get(C.Weapon).damage = 10 end
+    )");
+    reset();
+
+    // --- Scenario 58: the orbit upgrade lanes gate + cap ------------------------
+    // (the player still owns C.Orbit from scenario 57)
+    check(lua_bool(R"(
+        for p in world:each(Player) do
+            local spin, count = false, false
+            for _, entry in ipairs(world:offerable(p)) do
+                if entry.id == "core:bladespin" then spin = true end
+                if entry.id == "core:bladecount" then count = true end
+            end
+            return spin and count
+        end
+    )"), "blade lanes join the pool once you own the blades");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(C.Orbit) do
+            local o = p:get(C.Orbit)
+            o.spin, o.count = 6.0, 8 -- both hard caps reached
+        end
+    )");
+    check(lua_bool(R"(
+        for p in world:each(Player) do
+            for _, entry in ipairs(world:offerable(p)) do
+                if entry.id == "core:bladespin" or entry.id == "core:bladecount" then
+                    return false
+                end
+            end
+            return true
+        end
+    )"), "capped blade lanes leave the pool");
+    lua.script(R"(
+        local C = import("core")
+        for p in world:each(C.Orbit) do p:remove(C.Orbit) end
+    )");
     reset();
 
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------

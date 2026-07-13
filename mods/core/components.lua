@@ -21,6 +21,9 @@ return function(mod)
         pierce = 0,      -- extra enemies each bullet punches through
         bounces = 0,     -- ricochets toward the next enemy after a hit
         mirror = 0,      -- 1 = the whole volley also fires BACKWARD (Mirror Barrel)
+        bullet_radius = 4, -- bullet hitbox px (Heavy Caliber grows it — forgiveness lane)
+        cull = 0,        -- execute threshold: non-boss enemies below cull*max die (Reaper)
+        volatile = 0,    -- kill-burst damage riding each bullet (Volatile Rounds)
     }, { networked = true })
     C.Crit = mod:component("crit", { chance = 0.05, multiplier = 1.5 }, { networked = true })
 
@@ -35,6 +38,8 @@ return function(mod)
         leech = 0,   -- shooter's kill-heal chance, carried by the bullet
         hit_cd = 0,  -- short immunity after a pierce so one enemy isn't hit twice
         owner = 0,   -- shooter's entity id (p:id()) for the run-stats scoreboard
+        cull = 0,    -- shooter's execute threshold (Reaper), carried by the bullet
+        volatile = 0, -- kill-burst damage (Volatile Rounds); burst bullets carry 0 — no chains
     })
 
     -- Contact damage an enemy deals: whole HEARTS per hit.
@@ -70,6 +75,7 @@ return function(mod)
         spread = 0,        -- total fan angle in radians (volley > 1)
         variant = 1,       -- bullet visual: 1 = red, 3 = heavy (Cyclop)
         bullet_radius = 0, -- override the bullet hitbox (0 = default)
+        homing = 0,        -- > 0: each shot STEERS (C.Homing turn rate — the Acolyte's orb)
     })
     -- Suicide bomber: within `trigger` px of a player it stops, lights the
     -- fuse (fx=3 telegraph) and detonates into a ring of hostile bullets.
@@ -193,6 +199,32 @@ return function(mod)
     -- Elites always pay out a healing heart on death (death system checks it).
     C.EliteDrop = mod:component("elitedrop", {})
 
+    -- Flat reduction against every BULLET hit (floor 1 — never immune). The
+    -- Shieldbearer: a walking DPS check that pierce/crit builds shred and
+    -- pea-shooter builds bounce off. Contact tech (orbit/aura/dash) ignores it.
+    C.Armor = mod:component("armor", { flat = 5 })
+
+    -- Ambusher (the Mimic): spawns INERT (Speed 0 — reads as a prop) and wakes
+    -- ONE-WAY when a player closes within `trigger` px: Speed jumps to
+    -- `wake_speed` and the ATK clip flashes the reveal.
+    C.Ambush = mod:component("ambush", {
+        trigger = 150,
+        wake_speed = 250,
+        awake = 0, -- internal one-way latch
+        anim = 0,  -- reveal-flash window left (drives Render.fx)
+    })
+
+    -- Fool's gold (the Mimic King): a FAKE XP orb (Render.kind = orb, but no
+    -- C.Xp — magnets ignore it, THE tell) that pops into a hostile burst when
+    -- a player reaches for it or the fuse runs out.
+    C.FoolsGold = mod:component("foolsgold", {
+        fuse = 6.0,
+        trigger = 60, -- just past the 45 px pickup reach: it pops in your face
+        bullets = 8,
+        bullet_speed = 240,
+        damage = 1,
+    })
+
     -- Summoner boss: every `cooldown` s it calls `count` minions to its side
     -- (ATK clip via fx=1), and BLINKS away from any player that closes within
     -- `blink_range` — you kill it at range or chase it forever.
@@ -258,12 +290,14 @@ return function(mod)
 
     -- Orbiting Blades (object): `count` blades circle the player at `radius`,
     -- dealing dps on contact. The server spins `phase`; it's networked so the
-    -- client draws the blades exactly where they cut.
+    -- client draws the blades exactly where they cut. Contact damage scales
+    -- with Weapon.damage (orbit_sys) so the blades stay lethal late-game;
+    -- Blade Dance / Extra Blade upgrades grow spin/count up to hard caps.
     C.Orbit = mod:component("orbit", {
         count = 3,
-        radius = 70,
-        dps = 70,   -- fodder crossing the ring dies mid-crossing
-        spin = 2.5, -- rad/s
+        radius = 95, -- arm's length: blades cut AHEAD of the body, not on it
+        dps = 70,    -- base; + 0.7 x Weapon.damage per second at the cut
+        spin = 2.5,  -- rad/s (capped at 6 — per-tick travel must stay under the hit radius)
         phase = 0,
     }, { networked = true })
 
@@ -277,6 +311,29 @@ return function(mod)
     -- Lucky Clover (object): shifts this player's level-up rarity roll upward
     -- (levelup.lua multiplies tier weights by 1 + bonus * (tier - 1)).
     C.Luck = mod:component("luck", { bonus = 0 })
+
+    -- Static Charge (object): a periodic friendly shock ring from the player,
+    -- damage keyed to Weapon.damage (static_sys) — a passive that keeps pace.
+    C.Static = mod:component("static", {
+        cooldown = 3.0,
+        timer = 3.0,
+        bullets = 8,
+        bullet_speed = 300,
+        lifetime = 0.5, -- ~150 px reach: a personal-space zap, not artillery
+    })
+
+    -- Hunter's Instinct (object): every kill you land shaves `refund` seconds
+    -- off your dash cooldown (hooked in the scoreboard credit path).
+    C.Hunter = mod:component("hunter", { refund = 0.5 })
+
+    -- Reactive Plating (object): LOSING a heart bursts a friendly ring —
+    -- hooked in hurt_player, the single site where players take damage.
+    C.Reactive = mod:component("reactive", {
+        bullets = 10,
+        bullet_speed = 320,
+        damage = 25,
+        lifetime = 0.45,
+    })
 
     -- Adrenaline Core (object): finishing a dash boosts fire rate for a burst.
     C.Overcharge = mod:component("overcharge", {

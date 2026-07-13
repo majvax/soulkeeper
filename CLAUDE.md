@@ -143,8 +143,12 @@ Lobby + host-start + reconnect · waves (25s) with Lua-defined archetypes (~15 i
 telegraph, dies in a hostile bullet ring — kill it early to defuse), **Berserker** (`C.Lunge`
 telegraph→locked-line dash, motion-phase lockstep with targeting), **Slinger/Vampire/Cyclop/Ent**
 (all ranged attacks now **telegraph** `windup` s on fx=3 Prepare, then fire; `C.Ranged` grew
-`volley/spread/variant/bullet_radius` — Ent fans 3, Cyclop snipes a heavy variant-3 bullet),
-**Slasher**, wave-banded **Brute/Silverback/Goldhorn** Rhino tiers · HP scaling is **compound
+`volley/spread/variant/bullet_radius/homing` — Ent fans 3, Cyclop snipes a heavy variant-3
+bullet, the **Acolyte** casts a slow HOMING variant-6 orb), **Slasher**, **Squire** (fast light
+melee), **Shieldbearer** (`C.Armor{flat}`: flat reduction per BULLET hit, floor 1 — a walking
+DPS check), **Mimic** (`C.Ambush`: spawns Speed-0 inert, one-way WAKE when a player closes
+within `trigger` — `ambush_sys`), wave-banded **Brute/Silverback/Goldhorn** Rhino tiers ·
+HP scaling is **compound
 +8%/wave × (1 + 0.5·(TOTAL players − 1))** — downed players still count; bosses steeper:
 **+10%/wave × (1 + 0.7·per extra player)** (`health`/`boss_health` in enemies.lua, resolved at
 spawn in the sim VM) · manual-aim projectiles (knockback REMOVED after playtest — base
@@ -173,7 +177,14 @@ blink range, the flee-blink only punishes divers) ·
 player) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink, 5 moves:
 `C.Barrage` rotating CROSS lances + ELITE summons `pool=3` + channeled SPIRAL burst +
 simultaneous LANCE RAIN at every player + <35% CHECKMATE WALL — takes center, sweeps a
-gap-2-slot bullet wall across half the arena); 25/35/45 rotate the minis; every %10 wave is
+gap-2-slot bullet wall across half the arena); the 25/35/45 minis are REAL KITS too (roam
+free, no arena): **@25 Knight Commander** (Knight_LVL4: shield charges + aimed sword waves +
+squire rallies (7 s — summons stay spaced) + <50% close-range shield slam) · **@35 Archmage**
+(Sorcerer_LVL4: arcane fans + BLINK-then-volley reposition + mirror-image acolytes + <55%
+slow homing chase orbs) · **@45 Mimic King** (Mimic_LVL4: wide coin sprays + chomp lunge +
+sleeper Mimic adds + <45% FOOL'S GOLD — fake XP orbs (`C.FoolsGold`, Render orb but no C.Xp
+so magnets ignore them = the tell) that pop a hostile ring when reached for, `fools_gold_sys`);
+every %10 wave is
 an ARENA (1920×1080: client wall = the def's `arena {960,540}` opt, sim clamp = the dedicated
 `C.Arena{cx,cy,w,h,pinned}` comp — decoupled from C.Nova; the BEARER clamps to a 90 px INSET
 rect AND `pinned` tracks the clamp actively holding it: pinned > 1.2 s (wall-hugging player) →
@@ -195,15 +206,29 @@ level-up upgrades keep the weighted rarity-first roll with down-then-up tier fal
 with **5 rarity tiers** (grey/green/blue/purple/gold); the **XP cost curve is Lua policy too**
 (`mod:xp_curve`, linear engine fallback — core uses a QUADRATIC `5+3L+0.8L²`: linear cost vs
 wave-growing income was a level-112-by-wave-32 runaway) — all content in `mods/core/` Lua
-(**17 stat upgrades**, deliberately UNCAPPED (all-in builds are strategy; only Greed stops at
-+150%, an economy valve) incl. Piercing Rounds (`hit_cd` guards double-hits), Ricochet re-aim,
-Magnet `C.Magnet`, Leech kill-heal riding bullets + **18 objects**:
-**Onion**/**Frost Belt**/**Shockwave Dash**/**Crystal Ball**/**Orbiting Blades** (`C.Orbit`,
-server-spun networked phase = client draw = hitbox)/**Spiked Armor**/**Phoenix Feather** (cheat
+(**22 stat upgrades**, deliberately UNCAPPED (all-in builds are strategy; exceptions: Greed
+stops at +150% (economy valve) and the Orbit lanes **Blade Dance/Extra Blade** hard-cap at
+spin 6 rad/s / 8 blades (past that a blade's per-tick travel outruns its hit radius) — both
+gated on owning the Blades like AOE Zone) incl. Piercing Rounds (`hit_cd` guards double-hits),
+Ricochet re-aim, Magnet `C.Magnet`, Leech kill-heal riding bullets, **Heavy Caliber**
+(`Weapon.bullet_radius` — fatter hitbox), **Reaper** (`Weapon.cull`: hits that leave NON-boss
+trash under the threshold execute it; explicitly skips `C.Boss`), **Volatile Rounds**
+(`Weapon.volatile`: killing bullets burst 6 friendly bullets at the victim; burst carries
+volatile 0 — no chains) + **22 objects**:
+**Onion** (aura dps = `per_second + 0.6×Weapon.damage` — scales with the build, credits the
+scoreboard)/**Frost Belt**/**Shockwave Dash**/**Crystal Ball**/**Orbiting Blades** (`C.Orbit`,
+server-spun networked phase = client draw = hitbox; `orbit_sys` at 60 Hz — 20 Hz stepped
+visibly under 60 Hz snapshots; cut dps = `dps + 0.7×Weapon.damage`, radius 95)/**Spiked
+Armor**/**Phoenix Feather** (cheat
 death once)/**Lucky Clover**/**Adrenaline Core** (post-dash fire-rate)/**Split Barrel** (+2
-bullets)/**Mirror Barrel** (`Weapon.mirror`: the volley fires backward too) · CURSED objects
+bullets)/**Mirror Barrel** (`Weapon.mirror`: the volley fires backward too)/**Static Charge**
+(`C.Static`: periodic friendly ring, damage = 50% of live Weapon.damage)/**Hunter's Instinct**
+(`C.Hunter`: kills refund 0.5 s dash cooldown — hooked in the `credit` path so bullets/orbit/
+aura/dash kills all count)/**Reactive Plating** (`C.Reactive`: losing a heart bursts a friendly
+ring — hooked in `hurt_player`, THE single player-damage site) · CURSED objects
 show their price (**Auto Target** = auto-aim −30% DMG, **Berserker Sigil** +60% DMG −1 heart,
-**Glass Cannon** ×2 DMG at 1 heart, **Lead Plates** +2 hearts −25% SPD) · IDENTITY objects
+**Glass Cannon** ×2 DMG at 1 heart, **Lead Plates** +2 hearts −25% SPD, **Heavy Rounds** ×2
+DMG but +55% fire cooldown −25% bullet speed) · IDENTITY objects
 transform a playstyle and BLOCK an upgrade lane forever via its `available` (`C.Goliath` +3
 hearts/speed clamped 200/no Swift Boots, `C.David` +54% fire rate/3 hearts max/no Vitality,
 `C.Executioner` crit chance = 8%×pierce/no Keen Eye — the 2 Hz `identity_sys` enforces the live
@@ -235,13 +260,17 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (65 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (87 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
-phases/forced moves; build line in its header — needs `-freflection -fcontracts` + the sol2
+phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/
+upgrade lanes and the weapon-scaled aura/blades; build line in its header — needs
+`-freflection -fcontracts` + the sol2
 defines; LuaHost must outlive the World. Boss scenarios fire PARKED mechanics
 deterministically by zeroing `comp.timer` (a brain poke) or force a brain move via
-`brain.move = i; brain.winding = 0.05` — never wait on autonomous picks, they're jittered).
+`brain.move = i; brain.winding = 0.05` — never wait on autonomous picks, they're jittered;
+one-shot state checks that a spawn pool or drop roll can erase (bomber elites self-detonate)
+must POLL per sim tick, not read once at window end).
 
 ## Dev workflow & gotchas
 - Build: `cmake -S . -B build && cmake --build build -j 1` → `bin/client`, `bin/server`.
