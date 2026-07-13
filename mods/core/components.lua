@@ -16,8 +16,7 @@ return function(mod)
         cooldown = 0,
         bullet_speed = 550,
         damage = 10,
-        lifetime = 1.2,
-        knockback = 8,   -- px shove per hit (copied onto each bullet)
+        lifetime = 1.5,  -- base reach ~825 px (the range upgrade is gone: this IS the range)
         projectiles = 1, -- bullets per trigger pull (a fan when > 1)
         pierce = 0,      -- extra enemies each bullet punches through
         bounces = 0,     -- ricochets toward the next enemy after a hit
@@ -31,7 +30,6 @@ return function(mod)
         damage = 10,
         lifetime = 1.2,
         hostile = 0,
-        knockback = 0,
         pierce = 0,  -- hits left to punch through (fly on, don't die)
         bounces = 0, -- ricochets left (re-aim at the next enemy on hit)
         leech = 0,   -- shooter's kill-heal chance, carried by the bullet
@@ -47,7 +45,9 @@ return function(mod)
 
     -- Drops.
     C.Xp = mod:component("xp", { value = 1 })      -- orb: team XP on pickup
-    C.Heal = mod:component("heal", { amount = 1 }) -- heart: +hearts while hurt
+    -- Heart pickup: +hearts while hurt; fades after ttl (heal_decay) so late
+    -- waves can't carpet the floor into an unkillable reserve.
+    C.Heal = mod:component("heal", { amount = 1, ttl = 25 })
 
     -- Objects.
     C.Aura = mod:component("aura", { radius = 120, per_second = 25 }, { networked = true })
@@ -303,12 +303,21 @@ return function(mod)
 
     -- Arena confinement (sim side; the CLIENT keys its wall/prediction off
     -- the archetype's `arena` opt): players and the bearer stay inside the
-    -- fixed rect. Center = spawn point (set by the milestone hook).
+    -- fixed rect. Center = spawn point (set by the milestone hook). The
+    -- bearer clamps to a 90 px INSET rect, and `pinned` accumulates while the
+    -- clamp is actively holding it — pinned too long (wall-hugging player)
+    -- means it TELEPORTS to a random arena point instead of grinding.
     C.Arena = mod:component("arena", {
         cx = 0,
         cy = 0,
         w = 960, -- half extents (1920x1080 full)
         h = 540,
+        pinned = 0, -- internal: seconds the clamp has been holding the bearer
     })
+
+    -- Boss-SPAWNED minions/hazards (summons, tossed kegs, planted brambles):
+    -- they die without paying XP or heart rolls — boss adds are pressure, not
+    -- a loot fountain that trivializes the fight.
+    C.NoLoot = mod:component("noloot", {})
     return C
 end

@@ -147,8 +147,8 @@ telegraph→locked-line dash, motion-phase lockstep with targeting), **Slinger/V
 **Slasher**, wave-banded **Brute/Silverback/Goldhorn** Rhino tiers · HP scaling is **compound
 +8%/wave × (1 + 0.5·(TOTAL players − 1))** — downed players still count; bosses steeper:
 **+10%/wave × (1 + 0.7·per extra player)** (`health`/`boss_health` in enemies.lua, resolved at
-spawn in the sim VM) · manual-aim projectiles with **knockback** (`Weapon.knockback` rides each
-bullet) ·
+spawn in the sim VM) · manual-aim projectiles (knockback REMOVED after playtest — base
+`Weapon.lifetime` 1.5 s carries the reach, the range upgrade is gone too) ·
 **scripted boss ladder to wave 50, each boss a UNIQUE kit driven by a BRAIN**
 (`mods/core/brains.lua`: the fight director — every milestone boss carries `C.Brain{id}`, its
 mechanic comps are PARKED in the def (`cooldown/timer 9999`) and brain MOVES fire them by
@@ -156,14 +156,18 @@ zeroing the timer ("poke"); moves = weighted-random picks, **never the same twic
 cooldowns jittered ×0.75–1.25 and tightened by health-gated PHASES (`phases` thresholds +
 one-time `on_phase` escalations); windup>0 moves telegraph fx=3 with Speed parked, channeled
 moves run `during(boss,brain,dt)`; continuous mechanics (sprinkler/regen/blink-evasion) stay
-ambient, TRASH archetypes stay brainless self-firing. Kits, still no cross-boss recycling:
+ambient, TRASH archetypes stay brainless self-firing; everything a boss SPAWNS (summons,
+kegs, brambles) carries `C.NoLoot` — dies without XP orbs or heart rolls, so add spam is
+pressure, never a loot fountain. Kits, still no cross-boss recycling:
 **@5 Rhino Charger** (`C.Lunge` charges + close-range STOMP shock; <50% shorter tells) ·
 **@10 Frog King** (`C.Nova` rings HIS alone w/ rage densify + arena HOPS reposition the rings +
 <50% aimed spit cone, variant 8) · **@15 Frog Prince** (`C.Lunge` LEAP-slam + spit arc + <60%
 chained DOUBLE leap; <40% bigger landing ring) · **@20 Bomb Lord** (all ground: `C.Planter`
 carpet BATCHES + `C.Toss` pre-lit kegs + homing ROLLER keg (mine w/ Speed) + <60% keg CAGE
 ringing a player; <30% faster fuses) · **@30 Vampire Lord** (`C.BoltCaster` homing bolts + bat
-`C.Summon{pool=2}` (lore) + <50% BLINK-STRIKE beside a random player + `C.Regen` DPS check) ·
+`C.Summon{pool=2}` (lore) + <50% BLINK-STRIKE beside a random player + `C.Regen` DPS check;
+a PARKED `C.Ranged{standoff=380}` makes him a true kiter — he never walks into his own
+blink range, the flee-blink only punishes divers) ·
 **@40 Elder Ent** (ambient `C.Sprinkler` streams that REVERSE direction when hurt +
 `C.SeedLauncher` seed fans (`volley`, phase 2 = 3) + root snares: `core:bramble` under every
 player) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink, 5 moves:
@@ -171,7 +175,10 @@ player) · **@50 GAME MASTER finale = the WIN** (`WIN_WAVE=50`; Speed 0 + blink,
 simultaneous LANCE RAIN at every player + <35% CHECKMATE WALL — takes center, sweeps a
 gap-2-slot bullet wall across half the arena); 25/35/45 rotate the minis; every %10 wave is
 an ARENA (1920×1080: client wall = the def's `arena {960,540}` opt, sim clamp = the dedicated
-`C.Arena{cx,cy,w,h}` comp — decoupled from C.Nova; `WaveHold` freezes the wave clock); all carry
+`C.Arena{cx,cy,w,h,pinned}` comp — decoupled from C.Nova; the BEARER clamps to a 90 px INSET
+rect AND `pinned` tracks the clamp actively holding it: pinned > 1.2 s (wall-hugging player) →
+the boss TELEPORTS to a random arena point instead of grinding; `WaveHold` freezes the wave
+clock); all carry
 `C.Boss` — death system keys **loot CHEST** + guaranteed drops/team-revive/win on it; client
 draws a **top-center boss HP bar** + shakes on boss fx) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
 held (`sprites.hpp` discovers ATK/Fire, Charge_RunLoop/Dash/Jump_Full, Prepare/Charge_Begin
@@ -181,14 +188,16 @@ IN LUA (`mod:level_offer(player, level, ctx)` + `world:offerable` entries carry
 `kind = upgrade|object`; core rolls **upgrades-only on level-ups, objects-only on chests** —
 **objects come exclusively from boss chests** (`KIND.chest` drop on `C.Boss` death → pickup calls
 `world:open_chest()` → the ChestOpen mailbox triggers one offer round for EVERYONE — the co-op
-fairness fix); rarity-first roll falls back down then UP a tier (an epic-only object pool must
-fill on a common roll); **Crystal Ball** = +1 card, **Lucky Clover** `C.Luck` tilts tier weights)
+fairness fix); **chest objects roll UNIFORMLY** (every object same rate — the old rarity-first
+roll made epic/legendary objects near-mythical; the card frame shows the object's home tier),
+level-up upgrades keep the weighted rarity-first roll with down-then-up tier fallback;
+**Crystal Ball** = +1 card, **Lucky Clover** `C.Luck` tilts tier weights — upgrades only now)
 with **5 rarity tiers** (grey/green/blue/purple/gold); the **XP cost curve is Lua policy too**
 (`mod:xp_curve`, linear engine fallback — core uses a QUADRATIC `5+3L+0.8L²`: linear cost vs
 wave-growing income was a level-112-by-wave-32 runaway) — all content in `mods/core/` Lua
-(**19 stat upgrades**, deliberately UNCAPPED (all-in builds are strategy; only Greed stops at
+(**17 stat upgrades**, deliberately UNCAPPED (all-in builds are strategy; only Greed stops at
 +150%, an economy valve) incl. Piercing Rounds (`hit_cd` guards double-hits), Ricochet re-aim,
-Heavy Impact, Magnet `C.Magnet`, Leech kill-heal riding bullets + **18 objects**:
+Magnet `C.Magnet`, Leech kill-heal riding bullets + **18 objects**:
 **Onion**/**Frost Belt**/**Shockwave Dash**/**Crystal Ball**/**Orbiting Blades** (`C.Orbit`,
 server-spun networked phase = client draw = hitbox)/**Spiked Armor**/**Phoenix Feather** (cheat
 death once)/**Lucky Clover**/**Adrenaline Core** (post-dash fire-rate)/**Split Barrel** (+2
@@ -199,7 +208,9 @@ transform a playstyle and BLOCK an upgrade lane forever via its `available` (`C.
 hearts/speed clamped 200/no Swift Boots, `C.David` +54% fire rate/3 hearts max/no Vitality,
 `C.Executioner` crit chance = 8%×pierce/no Keen Eye — the 2 Hz `identity_sys` enforces the live
 rules)) · **heart life** (3 hearts, 1 s i-frames, rare heart drops heal; hearts only magnetize
-toward HURT players — no banked reserve trains) · **dash on LSHIFT**
+toward HURT players, drops are SUPPRESSED when ≥3 `C.Heal` sit within 240 px (boss payouts
+exempt) and unclaimed hearts FADE after `C.Heal.ttl` 25 s (`heal_decay`) — no banked reserve
+trains or heart carpets) · **dash on LSHIFT**
 (predicted; Shockwave makes it damage) · **crit** · co-op **downed → proximity revive** (3 s arc
 via `mod:draw`+`ctx:arc`, boss kills revive everyone) · **off-screen pointers on a fixed-radius
 ring around the player** (NOT screen-edge — user call): teammates green/red-when-down + name,

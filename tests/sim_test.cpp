@@ -840,6 +840,118 @@ int main()
     )"), "the forced cage move ringed the player with lit kegs");
     reset();
 
+    // --- Scenario 39: the boss clamps to an INSET arena rect -----------------
+    // Chasing a wall-hugger must not grind the boss into the wall: players
+    // clamp to the full rect, the arena BEARER stops 90 px short.
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(700, 0, "core:bomb_lord")
+        boss:get(Position).x = 2000
+        for p in world:each(Player, Position) do p:get(Position).x = 2000 end
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for boss in world:each(C.Arena, Position) do
+            local bx = boss:get(Position).x
+            for p in world:each(Player, Position) do
+                return bx <= 960 - 90 + 1 and p:get(Position).x > 950
+            end
+        end
+        return false
+    )"), "the boss stops 90 px short of the wall players can hug");
+    reset();
+
+    // --- Scenario 40: heart drops are SUPPRESSED in a stocked area ----------
+    lua.script(R"(
+        local C = import("core")
+        for i = 1, 3 do
+            local heart = spawn_entity(500 + i * 10, 500)
+            heart:get(Render).kind = KIND.heart
+            heart:set(C.Heal, {})
+        end
+        local elite = spawn_enemy(500, 500, "core:bandit")
+        elite:set(C.EliteDrop, {}) -- guaranteed drop... unless the area is stocked
+        elite:get(Health).current = 0
+    )");
+    step(0.2f); // death system pays out (or, here, doesn't)
+    check(lua_bool(R"(
+        local C = import("core")
+        local n = 0
+        for h in world:each(C.Heal) do n = n + 1 end
+        return n == 3
+    )"), "no 4th heart drops where 3 already sit");
+    reset();
+
+    // --- Scenario 41: hearts go stale (heal_decay TTL) ----------------------
+    lua.script(R"(
+        local C = import("core")
+        local heart = spawn_entity(600, 0) -- out of full-HP pickup reach anyway
+        heart:get(Render).kind = KIND.heart
+        heart:set(C.Heal, { ttl = 1.5 }) -- short clock for the test
+    )");
+    step(2.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for h in world:each(C.Heal) do return false end
+        return true
+    )"), "an unclaimed heart despawns after its ttl");
+    reset();
+
+    // --- Scenario 42: a PINNED boss teleports off the wall -------------------
+    // The inset alone is still a wall — held against it by a wall-hugging
+    // player for > 1.2 s, the boss must randomize its position instead.
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(700, 0, "core:bomb_lord")
+        boss:get(Position).x = 2000
+        for p in world:each(Player, Position) do p:get(Position).x = 2000 end
+    )");
+    step(1.8f); // clamp holds it at 870 while it chases; tp fires at ~1.25 s
+    check(lua_bool(R"(
+        local C = import("core")
+        for boss in world:each(C.Arena, Position) do
+            return boss:get(Position).x < 800 -- teleported well off the wall
+        end
+        return false
+    )"), "a wall-pinned boss teleports to a random arena point");
+    reset();
+
+    // --- Scenario 43: the Vampire Lord KITES (standoff, no walk-up-blink) ---
+    lua.script(R"(spawn_enemy(600, 0, "core:vampire_lord"))");
+    step(3.2f); // walks 600 -> its 380 px standoff, then HOLDS
+    check(lua_bool(R"(
+        local C = import("core")
+        for v in world:each(C.BoltCaster, Position) do
+            local x = v:get(Position).x
+            return x > 340 and x < 460 -- approached, then held the ring
+        end
+        return false
+    )"), "vampire holds his standoff instead of walking into blink range");
+    reset();
+
+    // --- Scenario 44: boss-summoned minions pay NO loot ----------------------
+    lua.script(R"(
+        local C = import("core")
+        local boss = spawn_enemy(900, 900, "core:gamemaster")
+        boss:get(C.Summon).timer = 0
+    )");
+    step(0.4f); // adds spawn (ELITE pool — normally guaranteed heart drops)
+    lua.script(R"(
+        local C = import("core")
+        for e in world:each(Enemy, Health) do
+            if not e:has(C.Brain) then e:get(Health).current = 0 end
+        end
+    )");
+    step(0.3f); // death system consumes them
+    check(lua_bool(R"(
+        local C = import("core")
+        for orb in world:each(C.Xp) do return false end
+        for heart in world:each(C.Heal) do return false end
+        return true
+    )"), "dead summons drop neither XP nor hearts");
+    reset();
+
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------
     float solo_hp = 0.0f;
     lua.script(R"(

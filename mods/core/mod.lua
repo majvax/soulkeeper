@@ -119,8 +119,7 @@ function main()
             hud:text(string.format("DMG        %.0f", w.damage))
             hud:text(string.format("Fire rate  %.0f ms", w.cooldown_max * 1000))
             hud:text(string.format("Bullet spd %.0f", w.bullet_speed))
-            hud:text(string.format("Range      %.2f s", w.lifetime))
-            hud:text(string.format("Knockback  %.0f", w.knockback))
+            -- (Range + knockback stats retired: lifetime is fixed, shove is gone.)
             -- Build extras: only shown once a card actually granted them.
             if w.projectiles > 1 then hud:text(string.format("Bullets    x%d", w.projectiles)) end
             if w.pierce > 0 then hud:text(string.format("Pierce     %d", w.pierce)) end

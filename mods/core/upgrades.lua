@@ -20,7 +20,13 @@ return function(mod, C)
             local w = e:get(C.Weapon)
             if w then w.cooldown_max = math.max(MIN_COOLDOWN, w.cooldown_max - amount) end
         end,
-        { value_text = function(amount) return "-" .. math.floor(amount * 1000 + 0.5) .. "ms CD" end })
+        {
+            value_text = function(amount) return "-" .. math.floor(amount * 1000 + 0.5) .. "ms CD" end,
+            available = function(e)
+                return e:get(C.Weapon).cooldown_max > MIN_COOLDOWN
+            end
+
+        })
 
     mod:upgrade("movespeed", "Swift Boots", { 15, 25, 40, 60, 90 },
         function(e, _, amount)
@@ -43,7 +49,8 @@ return function(mod, C)
             if s then s.value = s.value + 0.20 * amount end
         end,
         {
-            value_format = "+{} MAX HEART", sprite = "assets/icons/hearth.png",
+            value_format = "+{} MAX HEART",
+            sprite = "assets/icons/hearth.png",
             available = function(e) return not e:has(C.David) end, -- David stays glassy
         })
 
@@ -68,13 +75,7 @@ return function(mod, C)
         end,
         { value_format = "+{} BULLET SPD" })
 
-    mod:upgrade("range", "Long Barrel", { 0.10, 0.18, 0.28, 0.42, 0.65 },
-        function(e, _, amount)
-            local w = e:get(C.Weapon)
-            if w then w.lifetime = w.lifetime + amount end
-        end,
-        { value_text = function(amount) return "+" .. math.floor(amount * 100 + 0.5) / 100 .. "s RANGE" end
-        })
+    -- (Long Barrel / range is gone: base Weapon.lifetime carries the reach now.)
 
     mod:upgrade("critchance", "Keen Eye", { 0.02, 0.04, 0.07, 0.11, 0.18 },
         function(e, _, amount)
@@ -133,14 +134,6 @@ return function(mod, C)
             if w then w.bounces = math.floor(w.bounces + amount) end
         end,
         { value_format = "+{} BOUNCE" })
-
-    -- Heavy Impact: harder knockback keeps the horde off you.
-    mod:upgrade("knockback", "Heavy Impact", { 4, 7, 11, 16, 24 },
-        function(e, _, amount)
-            local w = e:get(C.Weapon)
-            if w then w.knockback = w.knockback + amount end
-        end,
-        { value_format = "+{} KNOCKBACK" })
 
     -- Magnet: drops fly to you from farther away.
     mod:upgrade("magnet", "Magnet", { 20, 35, 55, 80, 120 },

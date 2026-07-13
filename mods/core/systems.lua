@@ -145,7 +145,6 @@ return function(mod, C)
                         b:set(C.Bullet, {
                             damage = damage,
                             lifetime = w.lifetime,
-                            knockback = w.knockback,
                             pierce = w.pierce,
                             bounces = w.bounces,
                             leech = leech,
@@ -215,16 +214,6 @@ return function(mod, C)
                                     local hearts = p:get(Hearts)
                                     hearts.current = math.floor(
                                         math.min(hearts.max, hearts.current + 1))
-                                end
-                            end
-                            -- Impact shove along the bullet's flight (game feel +
-                            -- kiting room). Bosses don't budge.
-                            if bullet.knockback > 0 and not e:has(C.Boss) and not e:has(C.Nova) then
-                                local v = b:get(Velocity)
-                                local len = math.sqrt(v.dx * v.dx + v.dy * v.dy)
-                                if len > 0 then
-                                    ep.x = ep.x + v.dx / len * bullet.knockback
-                                    ep.y = ep.y + v.dy / len * bullet.knockback
                                 end
                             end
                             if bullet.pierce > 0 then
@@ -455,15 +444,28 @@ return function(mod, C)
         for e in world:each(Enemy, Health, Position) do
             if e:get(Health).current <= 0 then
                 local ep = e:get(Position)
+                -- Boss-spawned minions (C.NoLoot) die without paying anything:
+                -- summon spam must be pressure, not an XP/heart fountain.
+                if e:has(C.NoLoot) then goto skip_loot end
+                do -- scope the payout locals so the goto can't jump into them
                 local xp_value = 1
                 if e:has(XpReward) then xp_value = e:get(XpReward).value end
                 local orb = spawn_entity(ep.x, ep.y)
                 orb:get(Render).kind = KIND.orb
                 orb:set(C.Xp, { value = xp_value })
                 if e:has(C.EliteDrop) or math.random() < 0.04 then
-                    local heart = spawn_entity(ep.x + 14, ep.y)
-                    heart:get(Render).kind = KIND.heart
-                    heart:set(C.Heal, {})
+                    -- Late waves kill fast enough to CARPET the map in hearts
+                    -- (an unkillable reserve): suppress the drop when the area
+                    -- is already stocked. Boss payouts skip this cap.
+                    local stocked = 0
+                    for _ in world:nearby(ep.x, ep.y, 240, C.Heal) do
+                        stocked = stocked + 1
+                    end
+                    if stocked < 3 then
+                        local heart = spawn_entity(ep.x + 14, ep.y)
+                        heart:get(Render).kind = KIND.heart
+                        heart:set(C.Heal, {})
+                    end
                 end
                 -- Any milestone boss (C.Boss tag) always pays out: a loot
                 -- CHEST (the only source of objects — walking over it opens
@@ -496,6 +498,8 @@ return function(mod, C)
                 if e:has(C.Boss) then
                     mod:emit("on_boss_kill")
                 end
+                end -- payout scope
+                ::skip_loot::
                 e:destroy()
             end
         end
@@ -550,6 +554,17 @@ return function(mod, C)
 
         if players > 0 and alive == 0 then
             world:end_game(false) -- everyone down at once: defeat
+        end
+    end)
+
+    -- Dropped hearts go STALE: a generous grab window, then they fade — the
+    -- drop cap above bounds density, this bounds time (no permanent heart
+    -- carpets banking an unkillable reserve). 2 Hz + accumulated dt is plenty.
+    mod:system("heal_decay", { phase = "update", rate = 2, stagger = 0.75 }, function(dt)
+        for h in world:each(C.Heal) do
+            local heal = h:get(C.Heal)
+            heal.ttl = heal.ttl - dt
+            if heal.ttl <= 0 then h:destroy() end
         end
     end)
 
@@ -792,8 +807,9 @@ return function(mod, C)
                 local n = math.floor(s.count + world:wave() / 10)
                 for i = 1, n do
                     local a = math.random() * 2 * math.pi
-                    spawn_enemy(ep.x + math.cos(a) * 110, ep.y + math.sin(a) * 110,
+                    local add = spawn_enemy(ep.x + math.cos(a) * 110, ep.y + math.sin(a) * 110,
                         kinds[math.random(#kinds)])
+                    if add then add:set(C.NoLoot, {}) end -- summons pay nothing
                 end
                 s.timer = s.cooldown
                 s.anim = 0.8 -- the ATK clip doubles as the summon cast
@@ -822,17 +838,33 @@ return function(mod, C)
     -- hit-and-run. The client predicts the same clamp (via the archetype's
     -- `arena` opt) so the wall doesn't rubber-band. 60 Hz keeps the overshoot
     -- under ~4 px at run speed.
-    local function rect_clamp(pos, arena)
-        pos.x = math.max(arena.cx - arena.w, math.min(arena.cx + arena.w, pos.x))
-        pos.y = math.max(arena.cy - arena.h, math.min(arena.cy + arena.h, pos.y))
+    local function rect_clamp(pos, arena, margin)
+        pos.x = math.max(arena.cx - arena.w + margin, math.min(arena.cx + arena.w - margin, pos.x))
+        pos.y = math.max(arena.cy - arena.h + margin, math.min(arena.cy + arena.h - margin, pos.y))
     end
     mod:system("arena", { phase = "update", rate = 60, stagger = 0.25 }, function(dt)
         for e in world:each(C.Arena, Position) do
             local arena = e:get(C.Arena)
             if arena.w > 0 then
-                rect_clamp(e:get(Position), arena) -- the boss stays home too
+                -- The boss clamps to an INSET rect (blink pushes can't lodge
+                -- it in the corner) — but an inset is still a wall: if the
+                -- clamp is actively HOLDING it (chasing a wall-hugger), it
+                -- teleports to a random arena point instead of grinding.
+                local ep = e:get(Position)
+                local px, py = ep.x, ep.y
+                rect_clamp(ep, arena, 90)
+                if math.abs(ep.x - px) + math.abs(ep.y - py) > 0.5 then
+                    arena.pinned = arena.pinned + dt
+                    if arena.pinned > 1.2 then
+                        ep.x = arena.cx + (math.random() * 2 - 1) * arena.w * 0.55
+                        ep.y = arena.cy + (math.random() * 2 - 1) * arena.h * 0.55
+                        arena.pinned = 0
+                    end
+                else
+                    arena.pinned = 0
+                end
                 for p in world:each(Player, Position) do
-                    rect_clamp(p:get(Position), arena)
+                    rect_clamp(p:get(Position), arena, 0)
                 end
             end
         end
@@ -923,7 +955,10 @@ return function(mod, C)
                         local r = math.random() * t.scatter
                         local keg = spawn_enemy(pp.x + math.cos(a) * r, pp.y + math.sin(a) * r,
                             "core:mine")
-                        if keg then keg:set(C.Fuse, { timer = t.fuse }) end
+                        if keg then
+                            keg:set(C.Fuse, { timer = t.fuse })
+                            keg:set(C.NoLoot, {})
+                        end
                     end
                 end
                 t.timer = t.cooldown
@@ -1129,7 +1164,8 @@ return function(mod, C)
                         local r = 150 + math.random() * 300
                         x, y = ep.x + math.cos(a) * r, ep.y + math.sin(a) * r
                     end
-                    spawn_enemy(x, y, kind)
+                    local hazard = spawn_enemy(x, y, kind)
+                    if hazard then hazard:set(C.NoLoot, {}) end -- planted, not earned
                 end
                 pl.timer = pl.cooldown
                 pl.anim = 0.6

@@ -75,13 +75,30 @@ return function(mod, C)
         end
 
         local offer = {}
+        if want == "object" and #pool > 0 and pool[1].kind == "object" then
+            -- CHEST rounds: every object drops at the SAME rate (playtest: the
+            -- rarity roll made epic/legendary objects near-mythical — one seen
+            -- per run). Uniform pick; the card frame still shows the object's
+            -- home tier so its class reads at a glance.
+            for _ = 1, cards do
+                if #pool == 0 then break end
+                local idx = math.random(#pool)
+                local home = 1
+                for t, offered in ipairs(pool[idx].tiers) do
+                    if offered then home = t break end
+                end
+                offer[#offer + 1] = { id = pool[idx].id, rarity = home - 1 }
+                table.remove(pool, idx) -- no duplicate cards in one offer
+            end
+            return offer
+        end
         for _ = 1, cards do
             if #pool == 0 then break end
             -- Rarity FIRST, then a uniform pick among content offered at that
             -- tier; no candidates -> fall back a tier (L->E->R->U->C), and if
             -- NOTHING exists at-or-below the roll climb upward instead — an
-            -- objects-only chest pool (epic/legendary) must still fill cards
-            -- on a common roll. Keeps legendaries rare in mixed pools.
+            -- upgrade pool missing low tiers must still fill cards on a common
+            -- roll. Keeps legendaries rare in the level-up pools.
             local tier = roll_tier(luck)
             local candidates = {}
             for t = tier, 1, -1 do

@@ -88,6 +88,7 @@ return function(mod, C)
         local k = spawn_enemy(x, y, "core:mine")
         if not k then return nil end
         k:set(C.Fuse, { timer = fuse })
+        k:set(C.NoLoot, {}) -- boss hazards pay nothing
         if speed and speed > 0 then
             local s = k:get(Speed)
             if s then s.value = speed end
@@ -186,7 +187,7 @@ return function(mod, C)
             end
         end,
         moves = {
-            { name = "toss", windup = 0, cooldown = 2.6, weight = 2,
+            { name = "toss", windup = 0, cooldown = 2.2, weight = 2,
               fn = function(boss) poke(boss, C.Toss) end },
             { name = "carpet", windup = 0, cooldown = 3.2,
               fn = function(boss)
@@ -223,11 +224,11 @@ return function(mod, C)
             if bc then bc.bolts = bc.bolts + 2 end
         end,
         moves = {
-            { name = "bolts", windup = 0, cooldown = 2.4, weight = 2,
+            { name = "bolts", windup = 0, cooldown = 1.7, weight = 2,
               fn = function(boss) poke(boss, C.BoltCaster) end },
             { name = "bats", windup = 0, cooldown = 5.5,
               fn = function(boss) poke(boss, C.Summon) end },
-            { name = "blink_strike", windup = 0.55, cooldown = 3.8, phase = 2, fx = 1,
+            { name = "blink_strike", windup = 0.55, cooldown = 2.6, phase = 2, fx = 1,
               fn = function(boss)
                   local p = random_player()
                   if not p then return end
@@ -252,16 +253,17 @@ return function(mod, C)
             if s and phase >= 3 then s.arms = s.arms + 1 end
         end,
         moves = {
-            { name = "seeds", windup = 0, cooldown = 2.8, weight = 2,
+            { name = "seeds", windup = 0, cooldown = 2.0, weight = 2,
               fn = function(boss) poke(boss, C.SeedLauncher) end },
-            { name = "roots", windup = 0.6, cooldown = 4.0, fx = 1,
+            { name = "roots", windup = 0.6, cooldown = 2.8, fx = 1,
               fn = function()
                   for _, p in ipairs(live_players()) do
                       local pp = p:get(Position)
-                      spawn_enemy(pp.x, pp.y, "core:bramble") -- its arm+fuse = the dodge window
+                      local root = spawn_enemy(pp.x, pp.y, "core:bramble") -- arm+fuse = dodge window
+                      if root then root:set(C.NoLoot, {}) end
                   end
               end },
-            { name = "reverse", windup = 0, cooldown = 3.6, phase = 2,
+            { name = "reverse", windup = 0, cooldown = 3.0, phase = 2,
               fn = function(boss)
                   local s = boss:get(C.Sprinkler)
                   s.angular_vel = -s.angular_vel
@@ -277,11 +279,11 @@ return function(mod, C)
     BRAINS[BRAIN.GAMEMASTER] = {
         phases = { 0.65, 0.35 },
         moves = {
-            { name = "cross", windup = 0, cooldown = 2.4, weight = 2,
+            { name = "cross", windup = 0, cooldown = 1.5, weight = 2,
               fn = function(boss) poke(boss, C.Barrage) end },
             { name = "elites", windup = 0, cooldown = 7.0,
               fn = function(boss) poke(boss, C.Summon) end },
-            { name = "spiral", windup = 0.6, cooldown = 3.8, duration = 1.2,
+            { name = "spiral", windup = 0.6, cooldown = 2.4, duration = 1.2,
               fn = function(_, brain)
                   brain.c1 = math.random() * 2 * math.pi -- arm seed
                   brain.c2 = 0                           -- emission accumulator
@@ -297,7 +299,7 @@ return function(mod, C)
                       brain.c1 = brain.c1 + 2.4 -- golden-ish step: spiral ARMS, not rings
                   end
               end },
-            { name = "lance_rain", windup = 0.55, cooldown = 3.0, phase = 2, fx = 1,
+            { name = "lance_rain", windup = 0.55, cooldown = 1.9, phase = 2, fx = 1,
               fn = function(boss)
                   local ep = boss:get(Position)
                   for _, p in ipairs(live_players()) do -- every player, at once
@@ -312,7 +314,7 @@ return function(mod, C)
                       end
                   end
               end },
-            { name = "checkmate", windup = 0.9, cooldown = 6.5, phase = 3, fx = 1,
+            { name = "checkmate", windup = 0.9, cooldown = 4.5, phase = 3, fx = 1,
               fn = function(boss)
                   local arena = boss:get(C.Arena)
                   local ep = boss:get(Position)

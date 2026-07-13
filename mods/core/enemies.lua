@@ -340,6 +340,10 @@ return function(mod, C, BRAIN)
         :component(Radius, { value = 28 })
         :component(XpReward, xp(100))
         :component(C.BoltCaster, { cooldown = 9999, timer = 9999 })
+        -- Parked C.Ranged = pure STANDOFF: he's a caster, he never walks into
+        -- his own blink range (walk-up-then-flee read wrong). He holds at
+        -- ~380 px casting; the blink only punishes players who dive him.
+        :component(C.Ranged, { standoff = 380, cooldown = 9999, timer = 9999 })
         :component(C.Summon, { pool = 2, cooldown = 9999, timer = 9999, count = 4,
                                blink_range = 200, blink_dist = 320 }) -- blink stays ambient
         :component(C.Brain, { id = BRAIN.VAMPIRE })
