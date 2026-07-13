@@ -166,7 +166,12 @@ public:
         if (!has_player_ && session.has_id()) { spawn_local_player(session.my_net_id()); }
 
         // Open the level-up card scene on the rising edge of a level-up.
-        if (session.leveling() && !level_open_) {
+        // ONLY when we're the top scene: the console (and pause menu) keep our
+        // update running (their update returns Continue) but sit above us, and
+        // a scene pushed now lands ABOVE them — visible-order breaks (the card
+        // is on top for input but the console's render Stop hides it). Waiting
+        // until they're closed makes the transition land cleanly on top.
+        if (session.leveling() && !level_open_ && engine_->scenes().is_top(this)) {
             clear_input(); // hand focus to the card scene
             engine_->audio().play("levelup");
             engine_->scenes().push<LevelUpScene>(engine_);
@@ -176,8 +181,9 @@ public:
         }
 
         // The run ended: overlay the game-over screen (it owns the transition
-        // back to the lobby — our update is blocked while it's on top).
-        if (session.game_over() && !game_over_open_) {
+        // back to the lobby — our update is blocked while it's on top). Same
+        // top-scene gate as the level-up card.
+        if (session.game_over() && !game_over_open_ && engine_->scenes().is_top(this)) {
             clear_input();
             engine_->audio().stop_music(); // the sting owns the soundscape
             engine_->audio().play(session.game_over_stats().won != 0 ? "win" : "defeat");
