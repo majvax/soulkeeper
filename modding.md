@@ -120,7 +120,8 @@ end                                       end
 
 ```
 grid (kernel) → targeting → motion (kernel dash + yours) → shooting → movement (kernel)
-             → projectile → combat → update (default) → pickup → death
+             → separation (kernel: enemy anti-cramming) → projectile → combat
+             → update (default) → pickup → death
 ```
 
 ```lua

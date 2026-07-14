@@ -5,6 +5,7 @@
 #include "shared/system/dash.hpp"
 #include "shared/system/grid.hpp"
 #include "shared/system/movement.hpp"
+#include "shared/system/separation.hpp"
 
 namespace shared {
 
@@ -23,6 +24,7 @@ inline World make_game_world()
     world.add_system(phase::Grid, GridSystem{});         // rebuild the spatial hash
     world.add_system(phase::Motion, DashSystem{});       // dash burst/recharge (prediction-coupled)
     world.add_system(phase::Movement, MovementSystem{}); // integrate velocity
+    world.add_system(phase::Separation, SeparationSystem{}); // enemy anti-cramming
     return world;
 }
 

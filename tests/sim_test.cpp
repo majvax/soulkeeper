@@ -1390,6 +1390,64 @@ int main()
     )");
     reset();
 
+    // --- Scenario 59: enemy separation — a stack fans out into a crowd -------
+    // Down the player so targeting leaves the horde idle (no live target =
+    // velocities stay zero): what spreads them is PURE separation.
+    lua.script(R"(
+        for p in world:each(Player) do p:set(Downed, { respawn_wave = 0 }) end
+        for i = 1, 12 do
+            local e = spawn_enemy(500, 500, "core:bandit")
+            e:get(Position).x, e:get(Position).y = 500, 500 -- exact stack
+        end
+    )");
+    step(1.5f);
+    check(lua_bool(R"(
+        local xs, ys, n = {}, {}, 0
+        for e in world:each(Enemy, Position) do
+            n = n + 1
+            xs[n], ys[n] = e:get(Position).x, e:get(Position).y
+        end
+        if n ~= 12 then return false end
+        for i = 1, n do
+            for j = i + 1, n do
+                local dx, dy = xs[i] - xs[j], ys[i] - ys[j]
+                if dx * dx + dy * dy < 20 * 20 then return false end
+            end
+        end
+        return true
+    )"), "a 12-enemy stack separates into a crowd");
+    reset();
+
+    // --- Scenario 60: separation anchors — planted hazards hold their ground -
+    lua.script(R"(
+        for p in world:each(Player) do p:set(Downed, { respawn_wave = 0 }) end
+        local mine = spawn_enemy(500, 500, "core:mine") -- Speed 0: an anchor
+        mine:get(Position).x, mine:get(Position).y = 500, 500
+        for i = 1, 5 do
+            local e = spawn_enemy(500, 500, "core:bandit")
+            e:get(Position).x, e:get(Position).y = 500, 500
+        end
+    )");
+    step(1.5f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for mine in world:each(C.Bomber, Position) do
+            local mp = mine:get(Position)
+            local dx, dy = mp.x - 500, mp.y - 500
+            if dx * dx + dy * dy > 1 then return false end -- shoved: fail
+        end
+        -- ...while the movers around it spread out.
+        for e in world:each(Enemy, Position, Speed) do
+            if e:get(Speed).value > 0 then
+                local ep = e:get(Position)
+                local dx, dy = ep.x - 500, ep.y - 500
+                if dx * dx + dy * dy < 15 * 15 then return false end
+            end
+        end
+        return true
+    )"), "anchored hazards hold while the crowd around them spreads");
+    reset();
+
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------
     float solo_hp = 0.0f;
     lua.script(R"(

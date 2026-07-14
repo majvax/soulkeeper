@@ -36,11 +36,15 @@ src/
                    #   gameplay(PlayerTag, ObjectInventory, WorldGrid[spatial-hash singleton])
                    #   progression(GameStats{xp,wave}, Downed{respawn_wave}, RunStats{damage,
                    #   kills,downs,revives} — Lua-incremented scoreboard, shipped in GameOver)
-    system/        #   KERNEL systems only: grid (spatial rebuild), dash, movement
+    system/        #   KERNEL systems only: grid (spatial rebuild), dash, movement, separation
+                   #   (enemy anti-cramming: soft pair nudges post-Movement via the WorldGrid;
+                   #   Speed<=0 enemies are ANCHORS — planted kegs, sleeping Mimics, parked/
+                   #   telegraphing bosses hold their ground; mass ∝ radius² so trash can't
+                   #   shove a boss; spacing 1.6x hitbox sum, golden-angle fan on exact stacks)
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
     factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
     sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
-                   #   world.hpp phase constants (grid/targeting/motion/shooting/movement/projectile/combat/update/pickup/death)
+                   #   world.hpp phase constants (grid/targeting/motion/shooting/movement/separation/projectile/combat/update/pickup/death)
     mod/           #   Lua modding layer (SDL-free): component_ref (THE handle type), bindings_table (engine
                    #   dispatch + prelude list), registry (content/enemy defs -> deterministic wire-id),
                    #   lua_host (sol::state, register_mod, import() loader, mod verbs), events (bus),
@@ -82,7 +86,7 @@ modding.md         # the full modding guide (API reference, performance model, i
 
 ## Runtime model (how it actually works)
 - **Server-authoritative; C++ is the engine, Lua is the game.** The kernel pipeline is
-  `Grid → Dash → Movement` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
+  `Grid → Dash → Movement → Separation` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
   slotted into named phases between the kernel systems. Snapshots stream at 60 Hz carrying
   `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
@@ -278,7 +282,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (87 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (89 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/
