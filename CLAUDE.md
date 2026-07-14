@@ -191,7 +191,10 @@ rect AND `pinned` tracks the clamp actively holding it: pinned > 1.2 s (wall-hug
 the boss TELEPORTS to a random arena point instead of grinding; `WaveHold` freezes the wave
 clock); all carry
 `C.Boss` — death system keys **loot CHEST** + guaranteed drops/team-revive/win on it; client
-draws a **top-center boss HP bar** + shakes on boss fx) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
+draws a **top-center boss HP bar** + shakes on boss fx; the bar FLASHES white + a `sting` plays
+when the health byte crosses 50%/25% (the brains escalate around those marks), a boss kill pops
+a full-screen white flash + a big ring, and any enemy jumping >250 px in one snapshot plays the
+`blink` whoosh — covers every boss teleport incl. the anti-pin arena hop) · client **fx vocabulary**: `Render.fx` 1 = ATK once, 2 = charge loop, 3 = telegraph
 held (`sprites.hpp` discovers ATK/Fire, Charge_RunLoop/Dash/Jump_Full, Prepare/Charge_Begin
 clips) · **XP orbs → shared team level pool → synchronized offer scene** (LevelUp msg carries an
 `OfferFlavor` byte: level vs chest — the scene titles TREASURE for chests): the offer is rolled
@@ -243,10 +246,25 @@ arena boss + loot chest gold ·
 **floating damage numbers**: Lua damage sites call `world:damage_number(x,y,amount,kind)` →
 ModState buffer → ONE unreliable `DamageEvents` packet per snapshot tick (cap 48) → client
 FloatNum pool (rise+fade 0.8 s, crits gold/bigger; per-HIT only — aura DoT ticks stay silent) ·
-**boss bullet identity**: `Render.variant` 4 blood bolt / 5 pellet-petal / 6 pulsing seed (despawn
-= green pop + `pop` sound) / 7 lance / 8 frog spit — variants 4/7 draw ORIENTED along motion
-(trail squares behind the head, direction from the interp delta); synthesized `shoot_4..8.wav`
+**boss bullet identity**: `Render.variant` 4 blood bolt / 5 pellet-petal (also the Mimic King's
+coins + fool's-gold bites) / 6 pulsing seed (despawn
+= green pop + `pop` sound) / 7 lance / 8 frog spit / 9 electric zap (Static Charge + Reactive
+Plating rings, flickering cyan) — variants 4/7 draw ORIENTED along motion
+(trail squares behind the head, direction from the interp delta); synthesized `shoot_4..9.wav`
 cast sounds ride the existing `shoot_<variant>` hook ·
+**damage feedback**: losing a heart flashes a red EDGE VIGNETTE (4 gradient quads via
+`SDL_RenderGeometry`) + at exactly 1 heart it pulses continuously with a `heartbeat` thump
+(1.2 s period, update-driven) · **minimap radar** (top-right 180 px, `draw_minimap`): built from
+the render registry — teammates green/red, enemy density dots in radar reach (~1.2k px, cap
+220), boss-sized archetypes (def scale ≥ 2) + chests CLAMP to the rim in gold, arena rect
+drawn when active · **level-up cards ANIMATE** (scene-local `age_` clock: staggered deal-in
+ease, hover grow +6% (hitbox stays the base rect) + border brighten + `click`, pick = white
+flash beat THEN send+pop — input ignored during the beat) ·
+**compact stats HUD**: the panel shows vitals only (wave/level/XP bar, hearts, dash, downed)
+until **CTRL is held** — `hud.detail` on the HudContext, fed by `SDL_GetModState` DELIBERATELY
+(not the event key-set: the panel redraws over the level-up cards where GameScene's events are
+blocked, and card picks are exactly when stats matter); core's mod.lua gates the weapon/crit/
+magnet/greed/leech block on it ·
 **game-over** (all downed = defeat; frozen-world overlay; per-player SCOREBOARD from RunStats
 (kills/dmg/revives; `C.Bullet.owner` = `p:id()` stamps kill credit) + local bests file
 (`SDL_GetPrefPath` records.txt: best wave/wins/runs, "NEW BEST!" flash); host returns everyone

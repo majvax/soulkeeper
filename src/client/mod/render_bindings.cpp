@@ -333,7 +333,9 @@ void install_render_bindings(mod::LuaHost& host)
       "pie", &HudContext::pie,
       // Team run state (read-only), so the stats panel can show the XP bar.
       "level", sol::readonly(&HudContext::level), "wave", sol::readonly(&HudContext::wave), "xp",
-      sol::readonly(&HudContext::xp));
+      sol::readonly(&HudContext::xp),
+      // CTRL held: the panel may expand into its full stat breakdown.
+      "detail", sol::readonly(&HudContext::detail));
 }
 
 void run_object_draws(mod::LuaHost& host, const sol::object& ctx_obj, const DrawView& view)

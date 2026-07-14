@@ -1069,10 +1069,11 @@ int main()
         for g in world:each(C.FoolsGold) do lures = lures + 1 end
         if lures ~= 1 then return false end
         for b in world:each(C.Bullet) do
-            if b:get(C.Bullet).hostile == 1 then return true end
+            -- coin pellets: the Mimic King's palette (variant 5 sound/visual)
+            if b:get(C.Bullet).hostile == 1 then return b:get(Render).variant == 5 end
         end
         return false
-    )"), "a reached-for lure pops into a hostile bite");
+    )"), "a reached-for lure pops into a hostile coin bite");
     reset();
 
     // --- Scenario 48: Shieldbearer armor — flat reduction, floor 1 -----------
@@ -1156,11 +1157,13 @@ int main()
         for p in world:each(Player) do
             for b in world:each(C.Bullet) do
                 local bullet = b:get(C.Bullet)
-                if bullet.hostile == 0 and bullet.owner == p:id() then return true end
+                if bullet.hostile == 0 and bullet.owner == p:id() then
+                    return b:get(Render).variant == 9 -- the electric zap identity
+                end
             end
         end
         return false
-    )"), "static charge fires an owner-stamped friendly ring");
+    )"), "static charge fires an owner-stamped zap ring");
     lua.script(R"(
         local C = import("core")
         for p in world:each(C.Static) do p:remove(C.Static) end

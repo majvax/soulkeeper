@@ -342,6 +342,7 @@ function DrawContext:world_to_screen(wx, wy) end
 ---@field level integer  # team level (read-only), for a stats-panel header
 ---@field wave integer   # current wave (read-only)
 ---@field xp number      # 0..1 progress to the next level (read-only)
+---@field detail boolean # CTRL held (read-only): show the full stat breakdown
 local HudContext = {}
 
 ---Open the hook's panel: fixed, borderless, non-movable, auto-sized. Defaults

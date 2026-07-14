@@ -318,7 +318,9 @@ observes in snapshots — mods get them for free, and can join in two ways:
   `mod:sound` lines. Last registration wins; not part of the plugin hash.
 
 Canonical names: `shoot hit hurt death dash pickup heart levelup select click wave boss downed
-revive defeat win pop` (one-shots; `pop` = the Elder Ent's seed blooming) and `music_lobby
+revive defeat win pop sting heartbeat wake blink` (one-shots; `pop` = the Elder Ent's seed
+blooming, `sting` = a boss crossing a phase threshold, `heartbeat` = the last-heart pulse,
+`wake` = the Mimic's reveal, `blink` = any boss teleport) and `music_lobby
 music_game music_boss` (looping tracks — the engine cross-fades lobby ↔ game ↔ boss-arena
 automatically). Missing files are silent, never fatal. Local volume: console `/volume`, `/sfx`,
 `/music <0..1>` — or the ESC menu's sliders.
@@ -335,7 +337,8 @@ mod:sound("shoot_3", "mods/mymod/sfx/bow.wav")  -- at load
 Core ships `shoot` (player firearm; crits are variant 2 and fall back to it), `shoot_1`
 (hostile bullets — the ranged enemies' arrow whoosh), and one cast sound per boss signature:
 `shoot_4` (vampire bolt thwip), `shoot_5` (sprinkler tick — deliberately tiny/quiet, it fires
-~25×/s), `shoot_6` (seed bloop), `shoot_7` (lance zap), `shoot_8` (frog croak).
+~25×/s), `shoot_6` (seed bloop), `shoot_7` (lance zap), `shoot_8` (frog croak), `shoot_9`
+(electric crackle — Static Charge / Reactive Plating rings).
 
 ### Console commands (`mod:command`)
 
@@ -389,7 +392,8 @@ and draws **topmost** (over the world — enemies/orbs never cover it). The hook
 panel with `begin_panel`/`end_panel` (a pixel-art panel from the widget kit, auto-sized to its
 content, top-left by default). A non-empty `title` draws as an accent heading + divider atop the
 panel (pass `""` for a headless panel). Team run state is on the context: `hud.level`, `hud.wave`, `hud.xp`
-(0..1) — the XP bar lives in the stats panel now. `view:get(H)` reads:
+(0..1) — the XP bar lives in the stats panel now — plus `hud.detail` (true while CTRL is held;
+core gates its full stat breakdown on it so the default panel stays small). `view:get(H)` reads:
 - **networked script components** — mark a stats component `{ networked = true }` to show live
   upgrade values (e.g. `core`'s Weapon/Crit); and
 - the local player's **kernel** handles — `Position`, `Speed`, `Hearts`, `Dash`, `Scale` — which

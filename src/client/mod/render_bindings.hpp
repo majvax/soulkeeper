@@ -110,7 +110,8 @@ struct HudContext
     // show it (the XP bar lives in the stats panel now, not a debug window).
     int level = 1;
     int wave = 1;
-    float xp = 0.0f; // 0..1 progress to the next level
+    float xp = 0.0f;      // 0..1 progress to the next level
+    bool detail = false;  // CTRL held: the HUD shows its full stat breakdown
 
     // Auto-sized panel. Default position is the top-left; pass x/y to override.
     void begin_panel(const std::string& title, sol::optional<float> x, sol::optional<float> y);

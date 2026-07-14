@@ -122,35 +122,43 @@ function main()
             end
         end
 
-        local speed = view:get(Speed)
-        if speed then hud:text(string.format("Speed      %.0f", speed.value)) end
+        -- The full stat breakdown grew to ~15 lines and ate the screen: it now
+        -- lives behind HOLD CTRL (hud.detail, engine-fed). The default panel is
+        -- just the vitals above + a hint. Works over the level-up cards too —
+        -- exactly where the numbers matter.
+        if hud.detail then
+            local speed = view:get(Speed)
+            if speed then hud:text(string.format("Speed      %.0f", speed.value)) end
 
-        local w = view:get(C.Weapon)
-        if w then
-            hud:separator()
-            hud:text_colored(200, 220, 255, "-- Weapon --")
-            hud:text(string.format("DMG        %.0f", w.damage))
-            hud:text(string.format("Fire rate  %.0f ms", w.cooldown_max * 1000))
-            hud:text(string.format("Bullet spd %.0f", w.bullet_speed))
-            -- (Range + knockback stats retired: lifetime is fixed, shove is gone.)
-            -- Build extras: only shown once a card actually granted them.
-            if w.projectiles > 1 then hud:text(string.format("Bullets    x%d", w.projectiles)) end
-            if w.pierce > 0 then hud:text(string.format("Pierce     %d", w.pierce)) end
-            if w.bounces > 0 then hud:text(string.format("Bounce     %d", w.bounces)) end
-        end
-        local c = view:get(C.Crit)
-        if c then
-            hud:text(string.format("Crit       %.0f%% x%.2f", c.chance * 100, c.multiplier))
-        end
-        local m = view:get(C.Magnet)
-        if m and m.radius ~= 130 then hud:text(string.format("Magnet     %.0f", m.radius)) end
-        local g = view:get(C.Greed)
-        if g and g.mult > 1.0 then
-            hud:text(string.format("Greed      +%.0f%% XP", (g.mult - 1) * 100))
-        end
-        local l = view:get(C.Leech)
-        if l and l.chance > 0 then
-            hud:text(string.format("Leech      %.0f%%", l.chance * 100))
+            local w = view:get(C.Weapon)
+            if w then
+                hud:separator()
+                hud:text_colored(200, 220, 255, "-- Weapon --")
+                hud:text(string.format("DMG        %.0f", w.damage))
+                hud:text(string.format("Fire rate  %.0f ms", w.cooldown_max * 1000))
+                hud:text(string.format("Bullet spd %.0f", w.bullet_speed))
+                -- (Range + knockback stats retired: lifetime is fixed, shove is gone.)
+                -- Build extras: only shown once a card actually granted them.
+                if w.projectiles > 1 then hud:text(string.format("Bullets    x%d", w.projectiles)) end
+                if w.pierce > 0 then hud:text(string.format("Pierce     %d", w.pierce)) end
+                if w.bounces > 0 then hud:text(string.format("Bounce     %d", w.bounces)) end
+            end
+            local c = view:get(C.Crit)
+            if c then
+                hud:text(string.format("Crit       %.0f%% x%.2f", c.chance * 100, c.multiplier))
+            end
+            local m = view:get(C.Magnet)
+            if m and m.radius ~= 130 then hud:text(string.format("Magnet     %.0f", m.radius)) end
+            local g = view:get(C.Greed)
+            if g and g.mult > 1.0 then
+                hud:text(string.format("Greed      +%.0f%% XP", (g.mult - 1) * 100))
+            end
+            local l = view:get(C.Leech)
+            if l and l.chance > 0 then
+                hud:text(string.format("Leech      %.0f%%", l.chance * 100))
+            end
+        else
+            hud:text_colored(120, 120, 120, "[CTRL] stats")
         end
 
         hud:end_panel()

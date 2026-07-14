@@ -19,6 +19,7 @@ public:
 
     auto handle_event(const SDL_Event& event) -> Propagation override
     {
+        if (picked_ >= 0) { return Stop; } // the pick flash owns the exit
         const std::size_t count = engine_->session().choices().size();
         if (event.type == SDL_EVENT_KEY_DOWN) {
             // Keys 1..N pick the Nth card (the GAME decides how many, <= 5).
@@ -28,6 +29,11 @@ public:
                 }
             }
         }
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+            const int card = card_at(event.motion.x, event.motion.y);
+            if (card != hovered_ && card >= 0) { engine_->audio().play("click"); }
+            hovered_ = card;
+        }
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
             const int card = card_at(event.button.x, event.button.y);
             if (card >= 0) { pick(static_cast<std::uint8_t>(card)); }
@@ -35,7 +41,18 @@ public:
         return Stop;
     }
 
-    auto update(float) -> Propagation override { return Stop; }
+    auto update(float dt) -> Propagation override
+    {
+        age_ += dt; // drives the deal-in and the pick flash
+        // The pick lands after its flash beat (pops are deferred; guard the
+        // extra update tick between our pop request and its apply).
+        if (picked_ >= 0 && age_ >= pick_done_ && !sent_) {
+            sent_ = true;
+            engine_->session().send_select(static_cast<std::uint8_t>(picked_));
+            engine_->scenes().pop(); // close ourselves
+        }
+        return Stop;
+    }
 
     auto render(float) -> Propagation override
     {
@@ -77,14 +94,36 @@ public:
         }
 
         for (std::size_t i = 0; i < count; ++i) {
-            const SDL_FRect rect = card_rect(i, count, w, h);
+            SDL_FRect rect = card_rect(i, count, w, h);
             const auto rarity = static_cast<mod::Rarity>(choices[i].rarity);
             const mod::ContentDef* def = registry.by_wire(choices[i].id);
             const SDL_Color col = rarity_color(rarity);
 
+            // Deal-in: card i eases up from below after its stagger beat.
+            const float deal = std::clamp((age_ - (static_cast<float>(i) * 0.07f)) / 0.18f,
+                                          0.0f, 1.0f);
+            const float ease = 1.0f - ((1.0f - deal) * (1.0f - deal) * (1.0f - deal));
+            rect.y += (1.0f - ease) * 40.0f;
+            float alpha_mul = ease;
+            // Pick beat: the chosen card holds bright, the others fall away.
+            if (picked_ >= 0 && static_cast<std::size_t>(picked_) != i) {
+                alpha_mul *= std::clamp((pick_done_ - age_) / 0.22f, 0.0f, 1.0f) * 0.6f;
+            }
+            // Hover: grow around the center (hitbox stays the base rect — a
+            // grown card can't steal its neighbor's click).
+            if (picked_ < 0 && hovered_ == static_cast<int>(i)) {
+                const float gw = rect.w * 0.06f;
+                const float gh = rect.h * 0.06f;
+                rect = SDL_FRect{ .x = rect.x - (gw * 0.5f), .y = rect.y - (gh * 0.5f),
+                                  .w = rect.w + gw, .h = rect.h + gh };
+            }
+            const auto a8 = [&](float base) {
+                return static_cast<Uint8>(std::clamp(base * alpha_mul, 0.0f, 255.0f));
+            };
+
             // Card background: a darkened rarity tint (grey / green / yellow).
             SDL_SetRenderDrawColor(r, static_cast<Uint8>(col.r / 3), static_cast<Uint8>(col.g / 3),
-                                   static_cast<Uint8>(col.b / 3), 245);
+                                   static_cast<Uint8>(col.b / 3), a8(245.0f));
             SDL_RenderFillRect(r, &rect);
 
             // Icon: centered in the upper third, its natural size clamped to a
@@ -101,12 +140,18 @@ public:
                     const SDL_FRect dst{ .x = rect.x + ((rect.w - iw) * 0.5f),
                                          .y = rect.y + (rect.h * 0.30f) - (ih * 0.5f),
                                          .w = iw, .h = ih };
+                    SDL_SetTextureAlphaMod(icon, a8(255.0f));
                     SDL_RenderTexture(r, icon, nullptr, &dst);
+                    SDL_SetTextureAlphaMod(icon, 255); // the cache shares textures
                 }
             }
 
-            // Rarity border (thickness scales with the UI).
-            SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
+            // Rarity border (thickness scales with the UI; hover brightens it).
+            const bool hot = picked_ < 0 && hovered_ == static_cast<int>(i);
+            SDL_SetRenderDrawColor(r, hot ? static_cast<Uint8>(std::min(255, col.r + 60)) : col.r,
+                                   hot ? static_cast<Uint8>(std::min(255, col.g + 60)) : col.g,
+                                   hot ? static_cast<Uint8>(std::min(255, col.b + 60)) : col.b,
+                                   a8(255.0f));
             const int thick = std::max(2, static_cast<int>(us));
             for (int b = 0; b < thick; ++b) {
                 const SDL_FRect border{ .x = rect.x - static_cast<float>(b),
@@ -117,11 +162,15 @@ public:
             }
 
             // Uniform sizes (computed above) so every card matches.
-            const client::GuiColor rcol{ col.r, col.g, col.b, 255 };
-            ui.text(rect.x + pad, rect.y + pad, std::to_string(i + 1), client::colors::dim, sub_px);
+            const client::GuiColor rcol{ col.r, col.g, col.b, a8(255.0f) };
+            client::GuiColor dim = client::colors::dim;
+            client::GuiColor body = client::colors::text;
+            dim.a = a8(static_cast<float>(dim.a));
+            body.a = a8(static_cast<float>(body.a));
+            ui.text(rect.x + pad, rect.y + pad, std::to_string(i + 1), dim, sub_px);
             const std::string label = (def != nullptr) ? def->label : "?";
             ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + (rect.h * 0.54f), label,
-                             client::colors::text, label_px);
+                             body, label_px);
             const std::string value = (def != nullptr)
                                         ? def->value_text[static_cast<std::size_t>(rarity)]
                                         : std::string{};
@@ -129,6 +178,13 @@ public:
                              value, rcol, value_px);
             ui.text_centered(rect.x + (rect.w * 0.5f), rect.y + rect.h - (sub_px * 1.8f),
                              rarity_name(rarity), rcol, sub_px);
+
+            // Pick flash: the chosen card whites out over its beat.
+            if (picked_ >= 0 && static_cast<std::size_t>(picked_) == i) {
+                const float f = std::clamp(1.0f - ((pick_done_ - age_) / 0.22f), 0.0f, 1.0f);
+                SDL_SetRenderDrawColor(r, 255, 255, 240, static_cast<Uint8>(f * 210.0f));
+                SDL_RenderFillRect(r, &rect);
+            }
         }
 
         // Keep the stats panel visible + bright OVER our dim overlay — the
@@ -147,8 +203,8 @@ private:
     void pick(std::uint8_t index)
     {
         engine_->audio().play("select");
-        engine_->session().send_select(index);
-        engine_->scenes().pop(); // close ourselves
+        picked_ = index; // the flash beat plays out, then update() sends + pops
+        pick_done_ = age_ + 0.22f;
     }
 
     // Cards are sized as a fraction of the SCREEN, not a multiple of the UI
@@ -208,4 +264,11 @@ private:
     }
 
     client::Textures textures_;
+    // Animation state: a scene-local clock drives the deal-in stagger, the
+    // hover grow and the pick flash (the pick pops AFTER its beat).
+    float age_ = 0.0f;
+    int hovered_ = -1;
+    int picked_ = -1;
+    float pick_done_ = -1.0f;
+    bool sent_ = false;
 };

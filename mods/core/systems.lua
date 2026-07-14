@@ -51,6 +51,7 @@ return function(mod, C)
                 local b = spawn_bullet(pp.x, pp.y, math.cos(a) * ra.bullet_speed,
                     math.sin(a) * ra.bullet_speed)
                 b:set(C.Bullet, { damage = ra.damage, lifetime = ra.lifetime, owner = pid })
+                b:get(Render).variant = 9 -- electric zap (visual + shoot_9 cast sound)
             end
         end
         return true
@@ -752,7 +753,7 @@ return function(mod, C)
                         local b = spawn_bullet(gp.x, gp.y, math.cos(a) * fg.bullet_speed,
                             math.sin(a) * fg.bullet_speed)
                         b:set(C.Bullet, { damage = fg.damage, hostile = 1, lifetime = 0.5 })
-                        b:get(Render).variant = 1
+                        b:get(Render).variant = 5 -- coin pellets: the Mimic King's palette
                     end
                 end
                 g:destroy() -- an expired fuse just fizzles the lure
@@ -1048,6 +1049,7 @@ return function(mod, C)
                     local b = spawn_bullet(pp.x, pp.y, math.cos(a) * st.bullet_speed,
                         math.sin(a) * st.bullet_speed)
                     b:set(C.Bullet, { damage = damage, lifetime = st.lifetime, owner = pid })
+                    b:get(Render).variant = 9 -- electric zap (visual + shoot_9 cast sound)
                 end
             end
         end

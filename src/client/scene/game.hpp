@@ -24,6 +24,7 @@
 #include <imgui.h>
 #include <iterator>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <string>
 #include <utility>
@@ -218,6 +219,19 @@ public:
         anim_time_ += dt;           // shared clock for all animation clips
         time_since_snapshot_ += dt; // drives remote interpolation (alpha toward the newest snapshot)
         shake_amp_ *= std::exp(-9.0f * dt); // camera shake settles in ~0.3 s
+
+        // Last-heart warning: the vignette pulses slowly (drawn in render_game)
+        // and a heartbeat thumps on each pulse — you should FEEL one heart left
+        // without reading the HUD. Silent while downed (0) or safe (>= 2).
+        if (my_health_ == 1 && has_player_ && !session.game_over()) {
+            heartbeat_next_ -= dt;
+            if (heartbeat_next_ <= 0.0f) {
+                engine_->audio().play("heartbeat");
+                heartbeat_next_ = 1.2f;
+            }
+        } else {
+            heartbeat_next_ = 0.0f; // re-arm: the first pulse lands immediately
+        }
         return Continue;
     }
 
@@ -437,6 +451,7 @@ private:
                 if (rec.health < my_health_) {
                     shake_amp_ = 7.0f; // ouch: kick the camera
                     audio.play("hurt");
+                    vignette_until_ = anim_time_ + 0.45f; // red edge flash
                 }
                 my_health_ = rec.health;      // current hearts
                 my_max_hearts_ = rec.variant; // max hearts
@@ -513,10 +528,31 @@ private:
                     rem.dir_x = step_x;
                     rem.dir_y = step_y;
                 }
+                // Teleport tell: an EXISTING enemy jumping this far in one
+                // snapshot blinked (Vampire/Archmage/GM evasion, the anti-pin
+                // arena hop) — a whoosh sells it. Versioned entity ids mean a
+                // reused slot is a NEW entry, never a fake jump.
+                if (rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)
+                    && (step_x * step_x) + (step_y * step_y) > 250.0f * 250.0f) {
+                    audio.play_at("blink", ex, ey, lis_x, lis_y);
+                }
                 pos = { .x = ex, .y = ey };
                 if (rec.health < rem.health) {
                     rem.flash_until = anim_time_ + 0.12f; // hit!
                     audio.play_at("hit", ex, ey, lis_x, lis_y);
+                }
+                // Boss phase escalation: the arena boss's bar crossing a rage
+                // threshold gets a sting + bar flash + rattle — the fight
+                // audibly shifts gears (brains escalate around these marks).
+                if (arena_active_ && rec.id == arena_net_id_) {
+                    const auto crossed = [&](std::uint8_t mark) {
+                        return rem.health > mark && rec.health <= mark;
+                    };
+                    if (crossed(127) || crossed(63)) { // 50% / 25%
+                        bar_flash_until_ = anim_time_ + 0.6f;
+                        shake_amp_ = std::max(shake_amp_, 4.0f);
+                        audio.play("sting");
+                    }
                 }
                 rem.health = rec.health;
                 rem.scale = proto::dequantize_scale(rec.scale_q);
@@ -527,6 +563,15 @@ private:
                     // The arena boss winding up or striking rattles the camera.
                     if (arena_active_ && rec.id == arena_net_id_) {
                         shake_amp_ = std::max(shake_amp_, 5.0f);
+                    }
+                    // The Mimic's reveal: its only fx is the one-way wake — the
+                    // "prop" springing to life deserves its chirp.
+                    if (rec.fx == 1
+                        && rec.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
+                        const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rec.variant);
+                        if (def != nullptr && def->id == "core:mimic") {
+                            audio.play_at("wake", ex, ey, lis_x, lis_y);
+                        }
                     }
                 }
                 rem.fx = rec.fx;
@@ -578,6 +623,13 @@ private:
                 }
                 if (arena_active_ && it->first == arena_net_id_) {
                     arena_active_ = false; // boss down: drop the wall
+                    // The kill deserves a moment: a white screen flash + one
+                    // BIG expanding ring on top of the normal death poof.
+                    boss_flash_until_ = anim_time_ + 0.35f;
+                    shake_amp_ = std::max(shake_amp_, 8.0f);
+                    const Position& pos = registry_.get<Position>(it->second);
+                    poofs_.push_back({ .x = pos.x, .y = pos.y, .t0 = anim_time_,
+                                       .radius = 110.0f, .pickup = false });
                 }
                 registry_.destroy(it->second);
                 it = remotes_.erase(it);
@@ -839,6 +891,32 @@ private:
             }
         }
 
+        // Damage vignette: red edge glow on losing a heart, plus a slow pulse
+        // that never leaves while you sit on your LAST heart. SDL draw — a
+        // modal stacked above (cards/pause) still dims over it.
+        {
+            float strength = 0.0f;
+            if (anim_time_ < vignette_until_) {
+                strength = std::clamp((vignette_until_ - anim_time_) / 0.45f, 0.0f, 1.0f) * 140.0f;
+            }
+            if (my_health_ == 1 && has_player_) { // heartbeat-synced pulse (1.2 s period)
+                const float pulse = 0.5f + (0.5f * std::sin(anim_time_ * (2.0f * std::numbers::pi_v<float> / 1.2f)));
+                strength = std::max(strength, pulse * 60.0f);
+            }
+            if (strength > 2.0f) {
+                draw_vignette(r, ww, wh, static_cast<std::uint8_t>(strength));
+            }
+        }
+
+        // Boss-kill white flash: a short full-screen pop over the world.
+        if (anim_time_ < boss_flash_until_) {
+            const float remain = (boss_flash_until_ - anim_time_) / 0.35f;
+            SDL_SetRenderDrawColor(r, 255, 250, 235,
+                                   static_cast<Uint8>(std::clamp(remain, 0.0f, 1.0f) * 120.0f));
+            const SDL_FRect all{ .x = 0.0f, .y = 0.0f, .w = ww, .h = wh };
+            SDL_RenderFillRect(r, &all);
+        }
+
         // Off-screen pointers: arrows on a FIXED RADIUS ring around the local
         // player (screen-edge arrows sat in peripheral vision and got missed),
         // pointing at teammates (green; red when down — the "go revive" cue),
@@ -891,6 +969,10 @@ private:
         // after the world so nothing walks over it.
         if (overlays && arena_active_) { draw_boss_bar(r, ww); }
 
+        // Minimap radar (top-right): teammates, boss, loot, enemy density —
+        // the map answers "where is everyone" without swinging the camera.
+        if (overlays && has_player_) { draw_minimap(r, ww, t); }
+
         // Plugin HUD hooks (mod:hud) LAST so the stats panel is topmost — the
         // world (enemies, orbs) never draws over it. When we're top, draw it
         // now; either way, publish it as a thunk so a scene stacked above us
@@ -915,6 +997,11 @@ public:
         hud_ctx_.level = static_cast<int>(level_);
         hud_ctx_.wave = static_cast<int>(wave_);
         hud_ctx_.xp = static_cast<float>(xp_frac_) / 255.0f;
+        // HUD verbosity, not gameplay input: a direct modifier query (instead of
+        // the event-driven held-key set) is deliberate — the panel also redraws
+        // over the level-up cards, where our events are blocked, and choosing a
+        // card is exactly when the full stat breakdown matters.
+        hud_ctx_.detail = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
         const client::DrawView view{ .scripts = &engine_->mods().scripts(),
                                      .comps = script_state_for(my_net_id_),
                                      .reg = &registry_,
@@ -1005,6 +1092,11 @@ private:
         } else if (variant == 8) { // Frog King spit: bright-green ring pellet
             SDL_SetRenderDrawColor(r, 110, 225, 90, 255);
             size = 8.0f;
+        } else if (variant == 9) { // electric zap (Static Charge / Reactive Plating)
+            SDL_SetRenderDrawColor(r, 110, 220, 255, 255);
+            square(cx, cy, 8.0f + (2.0f * std::sin(time * 40.0f))); // flicker halo
+            SDL_SetRenderDrawColor(r, 235, 250, 255, 255);
+            size = 4.0f;
         } else {
             SDL_SetRenderDrawColor(r, 250, 230, 120, 255);
         }
@@ -1269,6 +1361,110 @@ private:
         client::run_object_draws(engine_->mods(), ctx_obj_, view);
     }
 
+    // Screen-edge red glow (damage feedback): four gradient quads, outer edge
+    // solid -> inner edge transparent. SDL has no gradient rects; vertex colors
+    // through SDL_RenderGeometry do it in one call per side.
+    static void draw_vignette(SDL_Renderer* r, float ww, float wh, std::uint8_t alpha)
+    {
+        const float bx = ww * 0.14f; // glow depth per side
+        const float by = wh * 0.20f;
+        const SDL_FColor outer{ .r = 0.72f, .g = 0.05f, .b = 0.05f,
+                                .a = static_cast<float>(alpha) / 255.0f };
+        const SDL_FColor inner{ .r = 0.72f, .g = 0.05f, .b = 0.05f, .a = 0.0f };
+        const auto quad = [&](SDL_FPoint p0, SDL_FPoint p1, SDL_FPoint p2, SDL_FPoint p3) {
+            // p0/p1 = the OUTER edge, p2/p3 = the faded inner edge.
+            const SDL_Vertex verts[4] = { { .position = p0, .color = outer, .tex_coord = {} },
+                                          { .position = p1, .color = outer, .tex_coord = {} },
+                                          { .position = p2, .color = inner, .tex_coord = {} },
+                                          { .position = p3, .color = inner, .tex_coord = {} } };
+            constexpr int idx[6] = { 0, 1, 2, 0, 2, 3 };
+            SDL_RenderGeometry(r, nullptr, verts, 4, idx, 6);
+        };
+        quad({ .x = 0, .y = 0 }, { .x = ww, .y = 0 }, { .x = ww, .y = by }, { .x = 0, .y = by });
+        quad({ .x = 0, .y = wh }, { .x = ww, .y = wh }, { .x = ww, .y = wh - by }, { .x = 0, .y = wh - by });
+        quad({ .x = 0, .y = 0 }, { .x = 0, .y = wh }, { .x = bx, .y = wh }, { .x = bx, .y = 0 });
+        quad({ .x = ww, .y = 0 }, { .x = ww, .y = wh }, { .x = ww - bx, .y = wh }, { .x = ww - bx, .y = 0 });
+    }
+
+    // Corner radar built from the same state the renderer already mirrors:
+    // dots in radar range draw in place, mission-critical marks (players,
+    // boss, chest) CLAMP to the rim so their direction always reads.
+    void draw_minimap(SDL_Renderer* r, float ww, float t)
+    {
+        constexpr float size = 180.0f;    // panel px
+        constexpr float scale = 1.0f / 14.0f; // world px per map px (~1.2k px reach)
+        const float mx = ww - size - 14.0f;
+        const float my = 14.0f;
+        const float cx = mx + (size * 0.5f);
+        const float cy = my + (size * 0.5f);
+        SDL_SetRenderDrawColor(r, 14, 12, 12, 190);
+        const SDL_FRect panel{ .x = mx, .y = my, .w = size, .h = size };
+        SDL_RenderFillRect(r, &panel);
+        SDL_SetRenderDrawColor(r, 255, 205, 110, 120); // frame matches the boss bar
+        SDL_RenderRect(r, &panel);
+
+        const auto dot = [&](float map_x, float map_y, float s) {
+            const SDL_FRect d{ .x = map_x - (s * 0.5f), .y = map_y - (s * 0.5f), .w = s, .h = s };
+            SDL_RenderFillRect(r, &d);
+        };
+        constexpr float rim = 5.0f; // clamp inset for edge marks
+        const auto clamp_map = [&](float& map_x, float& map_y) {
+            map_x = std::clamp(map_x, mx + rim, mx + size - rim);
+            map_y = std::clamp(map_y, my + rim, my + size - rim);
+        };
+
+        // Arena rect (relative to me), clipped by the panel bounds.
+        if (arena_active_) {
+            float ax0 = cx + ((arena_cx_ - arena_hw_ - render_x_) * scale);
+            float ay0 = cy + ((arena_cy_ - arena_hh_ - render_y_) * scale);
+            float ax1 = cx + ((arena_cx_ + arena_hw_ - render_x_) * scale);
+            float ay1 = cy + ((arena_cy_ + arena_hh_ - render_y_) * scale);
+            ax0 = std::clamp(ax0, mx, mx + size);
+            ay0 = std::clamp(ay0, my, my + size);
+            ax1 = std::clamp(ax1, mx, mx + size);
+            ay1 = std::clamp(ay1, my, my + size);
+            SDL_SetRenderDrawColor(r, 255, 205, 110, 90);
+            const SDL_FRect arena{ .x = ax0, .y = ay0, .w = ax1 - ax0, .h = ay1 - ay0 };
+            SDL_RenderRect(r, &arena);
+        }
+
+        int enemy_dots = 0;
+        registry_.view<Position, PrevPosition, Remote>().each(
+          [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
+              float map_x = cx + (((prev.x + ((p.x - prev.x) * t)) - render_x_) * scale);
+              float map_y = cy + (((prev.y + ((p.y - prev.y) * t)) - render_y_) * scale);
+              const bool inside = map_x > mx + 2.0f && map_x < mx + size - 2.0f
+                               && map_y > my + 2.0f && map_y < my + size - 2.0f;
+              if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
+                  clamp_map(map_x, map_y);
+                  if (rem.health == 0) { SDL_SetRenderDrawColor(r, 240, 80, 80, 235); }
+                  else { SDL_SetRenderDrawColor(r, 120, 220, 130, 235); }
+                  dot(map_x, map_y, 4.0f);
+              } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Chest)) {
+                  clamp_map(map_x, map_y);
+                  SDL_SetRenderDrawColor(r, 255, 205, 110, 235);
+                  const SDL_FRect c{ .x = map_x - 3.0f, .y = map_y - 3.0f, .w = 6.0f, .h = 6.0f };
+                  SDL_RenderRect(r, &c);
+              } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
+                  // Boss-sized archetypes (the milestone kits all draw >= 2x)
+                  // mark gold and clamp; trash only shows in radar range.
+                  const mod::EnemyDef* def = engine_->mods().enemies().by_wire(rem.variant);
+                  if (def != nullptr && def->scale >= 2.0f) {
+                      clamp_map(map_x, map_y);
+                      SDL_SetRenderDrawColor(r, 255, 205, 110, 235);
+                      dot(map_x, map_y, 5.0f);
+                  } else if (inside && enemy_dots < 220) {
+                      ++enemy_dots;
+                      SDL_SetRenderDrawColor(r, 200, 70, 60, 170);
+                      dot(map_x, map_y, 2.0f);
+                  }
+              }
+          });
+
+        SDL_SetRenderDrawColor(r, 245, 245, 245, 255); // me: center, always
+        dot(cx, cy, 4.0f);
+    }
+
     // Top-center boss health bar while an arena fight is live: name above a
     // wide red bar (SDL rects like health_bar; the gui text draws after the
     // world, so both sit on top of it).
@@ -1294,7 +1490,16 @@ private:
         SDL_SetRenderDrawColor(r, 60, 30, 30, 255);
         const SDL_FRect track{ .x = x, .y = y, .w = bar_w, .h = bar_h };
         SDL_RenderFillRect(r, &track);
-        SDL_SetRenderDrawColor(r, 210, 55, 55, 255);
+        // Phase-threshold flash: the fill lerps to white while the sting rings
+        // (set when the health byte crossed 50% / 25% — the boss shifted gears).
+        if (anim_time_ < bar_flash_until_) {
+            const float f = std::clamp((bar_flash_until_ - anim_time_) / 0.6f, 0.0f, 1.0f);
+            SDL_SetRenderDrawColor(r, static_cast<Uint8>(210.0f + (45.0f * f)),
+                                   static_cast<Uint8>(55.0f + (195.0f * f)),
+                                   static_cast<Uint8>(55.0f + (195.0f * f)), 255);
+        } else {
+            SDL_SetRenderDrawColor(r, 210, 55, 55, 255);
+        }
         const SDL_FRect fill{ .x = x, .y = y, .w = bar_w * frac, .h = bar_h };
         SDL_RenderFillRect(r, &fill);
         SDL_SetRenderDrawColor(r, 255, 205, 110, 255);
@@ -1397,6 +1602,10 @@ private:
     float banner_until_ = -1.0f; // anim_time_ deadline for the "WAVE N" banner
     // Game-feel state (client-only, inferred from snapshot deltas).
     float shake_amp_ = 0.0f;     // camera shake amplitude px (decays in update)
+    float vignette_until_ = -1.0f;   // red edge flash deadline (heart lost)
+    float heartbeat_next_ = 0.0f;    // last-heart thump timer (update)
+    float bar_flash_until_ = -1.0f;  // boss bar white flash (phase threshold)
+    float boss_flash_until_ = -1.0f; // full-screen pop on a boss kill
     std::vector<Poof> poofs_;    // death/pickup bursts (cap 48)
     std::vector<FloatNum> float_nums_; // floating combat numbers (cap 96)
     std::vector<Poof> trail_;    // dash ghost samples (radius unused)
