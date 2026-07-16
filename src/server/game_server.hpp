@@ -145,6 +145,9 @@ private:
     std::unordered_map<std::uint64_t, std::vector<proto::LevelUpChoice>> offered_; // token -> cards (2..5)
     std::unordered_set<std::uint64_t> chosen_;                                   // tokens that already picked this level
     std::mt19937 rng_{ std::random_device{}() };
+    // Per-run terrain seed: rolled at start, zeroed on reset (0 = flat lobby
+    // world). Written into the sim's Terrain singleton and every StateMsg.
+    std::uint32_t world_seed_ = 0;
 };
 
 } // namespace server

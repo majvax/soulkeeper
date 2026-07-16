@@ -352,6 +352,24 @@ return function(mod, C, BRAIN)
         :component(C.Bomber, { trigger = 95, fuse = 0.7, blast_bullets = 14,
                                blast_speed = 220, blast_range = 150 })
 
+    -- Supply dummy (map POI): a harmless destructible the poi_spawner scatters
+    -- around the players — shoot it for its C.CrateLoot payout (orbs/heart).
+    -- Speed 0 = separation/terrain anchor; gentle HP scaling (it should die
+    -- in a burst at any wave, not become a wall).
+    mod:enemy("crate", "Supply Dummy", {
+        weight = 0,
+        sprite = "assets/sprite/Dummy_LVL1",
+        scale = 1.1,
+    })
+        :component(Health, function(wave)
+            local h = 30 * (1.05 ^ (wave - 1))
+            return { current = h, max = h }
+        end)
+        :component(Speed, { value = 0 })
+        :component(Radius, { value = 12 })
+        :component(XpReward, { value = 0 })
+        :component(C.CrateLoot, {})
+
     -- Legacy mini-boss (rotation filler between scripted milestones):
     -- a huge, slow, very tanky bruiser.
     mod:enemy("miniboss", "Mini-Boss", {

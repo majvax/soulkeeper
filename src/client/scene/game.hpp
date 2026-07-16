@@ -12,10 +12,13 @@
 #include "client/trainer.hpp"
 #include "shared/components/combat.hpp"
 #include "shared/components/physics.hpp"
+#include "shared/map/terrain.hpp"
 #include "shared/protocol.hpp"
 #include "shared/snapshot_codec.hpp"
 #include "shared/system/input.hpp"
 #include <algorithm>
+#include <array>
+#include <filesystem>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -87,11 +90,44 @@ struct PlayerAnim
     float death_start = -1.0f; // anim clock at down time, < 0 = alive
 };
 
+// One entry of the per-frame y-sorted world pass: obstacles, enemies and
+// players draw in FEET order so bodies pass behind trees and in front of
+// rocks correctly (the map's z-axis).
+struct WorldItem
+{
+    float key;  // sort key: screen feet y
+    float x, y; // screen position
+    enum : std::uint8_t { Enemy, RemotePlayer, LocalPlayer, Obst } type;
+    const Remote* rem = nullptr;         // Enemy / RemotePlayer
+    shared::map::Obstacle ob{};          // Obst (world coords)
+};
+
 class GameScene : public client::Scene
 {
 public:
     explicit GameScene(client::Engine* engine) : Scene(engine), textures_{ engine->renderer() }
     {
+        // Count the map art variants once: obstacle/deco kinds hash into these
+        // (the sim only knows collider classes; sprites are pure client).
+        // Exact "<prefix>NN.png" match — "stump_" must not swallow "stump_snow_".
+        const auto count_art = [](const std::string& prefix) {
+            int n = 0;
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator("assets/map", ec)) {
+                const std::string name = e.path().filename().string();
+                if (name.starts_with(prefix) && name.size() == prefix.size() + 6) { ++n; }
+            }
+            return n;
+        };
+        art_tree_forest_ = count_art("tree_forest_");
+        art_tree_plain_ = count_art("tree_plain_");
+        art_tree_snow_ = count_art("tree_snow_");
+        art_rocks_ = count_art("rock_");
+        art_bushes_ = count_art("bush_");
+        art_plants_ = count_art("plant_");
+        art_pebbles_ = count_art("pebble_");
+        art_stumps_ = count_art("stump_");
+        art_stump_snow_ = count_art("stump_snow_");
         draw_ctx_.renderer = engine->renderer();
         draw_ctx_.textures = &textures_;
         draw_ctx_.audio = &engine->audio();
@@ -348,6 +384,17 @@ private:
             if (arena_active_) {
                 pos.x = std::clamp(pos.x, arena_cx_ - arena_hw_, arena_cx_ + arena_hw_);
                 pos.y = std::clamp(pos.y, arena_cy_ - arena_hh_, arena_cy_ + arena_hh_);
+            }
+            // Terrain: the SAME deterministic pushout the kernel runs, so
+            // rocks/trunks are solid in the prediction too (no rubber-band).
+            // 12 px = the player's kernel Radius (create_player); the clear
+            // circle mirrors the arena's flattened ground (core's arena system
+            // writes the same diag-radius circle server-side).
+            if (const std::uint32_t seed = engine_->session().world_seed(); seed != 0) {
+                const float clear_r =
+                  arena_active_ ? std::sqrt((arena_hw_ * arena_hw_) + (arena_hh_ * arena_hh_)) : 0.0f;
+                shared::map::resolve_terrain(terrain_cache_, seed, pos.x, pos.y, 12.0f,
+                                             arena_cx_, arena_cy_, clear_r);
             }
             my_moving_ = vel.dx != 0.0f || vel.dy != 0.0f;
         }
@@ -713,7 +760,12 @@ private:
             draw_ctx_.listener_y = me.y;
         }
 
-        draw_background(r, cam_x, cam_y, ww, wh, ox, oy);
+        if (engine_->session().world_seed() != 0) {
+            draw_ground(r, cam_x, cam_y, ww, wh, ox, oy); // biome-tiled chunks
+        } else {
+            draw_background(r, cam_x, cam_y, ww, wh, ox, oy); // flat lobby world
+        }
+        draw_terrain_deco(r, cam_x, cam_y, ww, wh, ox, oy); // flat ground clutter
 
         // Wave banner: big centered "WAVE N", fading out over its last second.
         // Skipped when a modal (console/level-up/game-over) is stacked above —
@@ -811,36 +863,31 @@ private:
                                              oy + prev.y + ((p.y - prev.y) * t) });
               }
           });
+        // ---- the y-sorted world pass -------------------------------------
+        // Ground items (orbs/hearts/chests) draw FLAT first; obstacles +
+        // enemies + players collect into one list sorted by feet-y (bodies
+        // pass BEHIND trees and in front of rocks — the map's z-axis);
+        // projectiles are airborne and draw over everything at the end.
+        world_items_.clear();
+        shots_.clear();
         registry_.view<Position, PrevPosition, Remote>().each(
           [&](core::Entity, const Position& p, const PrevPosition& prev, const Remote& rem) {
               const float x = ox + prev.x + ((p.x - prev.x) * t);
               const float y = oy + prev.y + ((p.y - prev.y) * t);
               if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Enemy)) {
-                  draw_enemy(r, x, y, enemy_tex, rem);
-                  health_bar(r, x, y, rem.health);
+                  world_items_.push_back(WorldItem{
+                    .key = y + 20.0f, .x = x, .y = y, .type = WorldItem::Enemy, .rem = &rem });
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Player)) {
-                  if (overlays) { draw_object_hooks(x, y, script_state_for(rem.net_id)); }
-                  // Same rule as the local player: aim (authoritative) unless
-                  // running with the trigger up, then face movement.
-                  float fdx = rem.aim_x;
-                  float fdy = rem.aim_y;
-                  if (rem.moving && !rem.firing) {
-                      fdx = rem.dir_x;
-                      fdy = rem.dir_y;
-                  }
-                  draw_player(r, x, y,
-                              PlayerAnim{ .dir_x = fdx, .dir_y = fdy, .moving = rem.moving,
-                                          .firing = rem.firing, .death_start = rem.death_start },
-                              rem.net_id, rem.scale, SDL_Color{ 220, 200, 80, 255 });
-                  // No health bar over players — the HUD hearts show life now.
-                  if (overlays) { label(x, y, engine_->session().name_of(rem.net_id)); }
+                  world_items_.push_back(WorldItem{
+                    .key = y + 20.0f, .x = x, .y = y, .type = WorldItem::RemotePlayer, .rem = &rem });
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Projectile)) {
                   float ddx = p.x - prev.x;
                   float ddy = p.y - prev.y;
                   const float dlen = std::sqrt((ddx * ddx) + (ddy * ddy));
-                  ddx = dlen > 0.01f ? ddx / dlen : 1.0f;
-                  ddy = dlen > 0.01f ? ddy / dlen : 0.0f;
-                  draw_projectile(r, x, y, rem.variant, ddx, ddy, anim_time_);
+                  shots_.push_back(Shot{ .x = x, .y = y,
+                                         .dx = dlen > 0.01f ? ddx / dlen : 1.0f,
+                                         .dy = dlen > 0.01f ? ddy / dlen : 0.0f,
+                                         .variant = rem.variant });
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::XpOrb)) {
                   draw_xp_orb(r, x, y);
               } else if (rem.kind == static_cast<std::uint8_t>(proto::EntityKind::Heart)) {
@@ -852,22 +899,88 @@ private:
                   health_bar(r, x, y, rem.health);
               }
           });
-
         if (has_player_) {
-            // Draw at the smoothed render position (matches the camera), not the
-            // raw predicted Position — keeps the local player screen-centered.
-            const float rx = ox + render_x_;
-            const float ry = oy + render_y_;
-            if (overlays) { draw_object_hooks(rx, ry, script_state_for(my_net_id_)); }
-            const float dash_frac = local_dash_.burst_remaining > 0.0f
-                                      ? 1.0f - (local_dash_.burst_remaining / DASH_DURATION)
-                                      : -1.0f;
-            draw_player(r, rx, ry,
-                        PlayerAnim{ .dir_x = my_dir_x_, .dir_y = my_dir_y_, .moving = my_moving_,
-                                    .firing = auth_firing_, .dash_frac = dash_frac,
-                                    .death_start = my_death_start_ },
-                        my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
-            if (overlays) { label(rx, ry, engine_->session().name()); }
+            // Smoothed render position (matches the camera), not the raw
+            // predicted Position — keeps the local player screen-centered.
+            world_items_.push_back(WorldItem{ .key = oy + render_y_ + 20.0f,
+                                              .x = ox + render_x_, .y = oy + render_y_,
+                                              .type = WorldItem::LocalPlayer });
+        }
+        // Obstacles of the visible chunks (a margin for tall canopies), minus
+        // anything on the arena's flattened ground.
+        if (const std::uint32_t seed = engine_->session().world_seed(); seed != 0) {
+            const float clear_r =
+              arena_active_ ? std::sqrt((arena_hw_ * arena_hw_) + (arena_hh_ * arena_hh_)) : 0.0f;
+            const auto c0x = static_cast<std::int32_t>(
+              std::floor((cam_x - (ww * 0.5f) - 200.0f) / shared::map::chunk_size));
+            const auto c1x = static_cast<std::int32_t>(
+              std::floor((cam_x + (ww * 0.5f) + 200.0f) / shared::map::chunk_size));
+            const auto c0y = static_cast<std::int32_t>(
+              std::floor((cam_y - (wh * 0.5f) - 100.0f) / shared::map::chunk_size));
+            const auto c1y = static_cast<std::int32_t>(
+              std::floor((cam_y + (wh * 0.5f) + 320.0f) / shared::map::chunk_size));
+            for (std::int32_t cj = c0y; cj <= c1y; ++cj) {
+                for (std::int32_t ci = c0x; ci <= c1x; ++ci) {
+                    for (const shared::map::Obstacle& ob : terrain_cache_.get(seed, ci, cj)) {
+                        if (clear_r > 0.0f) {
+                            const float dx = ob.x - arena_cx_;
+                            const float dy = ob.y - arena_cy_;
+                            if ((dx * dx) + (dy * dy) < clear_r * clear_r) { continue; }
+                        }
+                        world_items_.push_back(WorldItem{ .key = ob.y + ob.r + oy,
+                                                          .x = ob.x + ox, .y = ob.y + oy,
+                                                          .type = WorldItem::Obst, .ob = ob });
+                    }
+                }
+            }
+        }
+        std::sort(world_items_.begin(), world_items_.end(),
+                  [](const WorldItem& a, const WorldItem& b) { return a.key < b.key; });
+        for (const WorldItem& item : world_items_) {
+            switch (item.type) {
+            case WorldItem::Enemy:
+                draw_enemy(r, item.x, item.y, enemy_tex, *item.rem);
+                health_bar(r, item.x, item.y, item.rem->health);
+                break;
+            case WorldItem::RemotePlayer: {
+                const Remote& rem = *item.rem;
+                if (overlays) { draw_object_hooks(item.x, item.y, script_state_for(rem.net_id)); }
+                // Same rule as the local player: aim (authoritative) unless
+                // running with the trigger up, then face movement.
+                float fdx = rem.aim_x;
+                float fdy = rem.aim_y;
+                if (rem.moving && !rem.firing) {
+                    fdx = rem.dir_x;
+                    fdy = rem.dir_y;
+                }
+                draw_player(r, item.x, item.y,
+                            PlayerAnim{ .dir_x = fdx, .dir_y = fdy, .moving = rem.moving,
+                                        .firing = rem.firing, .death_start = rem.death_start },
+                            rem.net_id, rem.scale, SDL_Color{ 220, 200, 80, 255 });
+                // No health bar over players — the HUD hearts show life now.
+                if (overlays) { label(item.x, item.y, engine_->session().name_of(rem.net_id)); }
+                break;
+            }
+            case WorldItem::LocalPlayer: {
+                if (overlays) { draw_object_hooks(item.x, item.y, script_state_for(my_net_id_)); }
+                const float dash_frac = local_dash_.burst_remaining > 0.0f
+                                          ? 1.0f - (local_dash_.burst_remaining / DASH_DURATION)
+                                          : -1.0f;
+                draw_player(r, item.x, item.y,
+                            PlayerAnim{ .dir_x = my_dir_x_, .dir_y = my_dir_y_, .moving = my_moving_,
+                                        .firing = auth_firing_, .dash_frac = dash_frac,
+                                        .death_start = my_death_start_ },
+                            my_net_id_, my_scale_, SDL_Color{ 80, 220, 100, 255 });
+                if (overlays) { label(item.x, item.y, engine_->session().name()); }
+                break;
+            }
+            case WorldItem::Obst:
+                draw_obstacle(r, item);
+                break;
+            }
+        }
+        for (const Shot& shot : shots_) { // airborne: over rocks AND canopies
+            draw_projectile(r, shot.x, shot.y, shot.variant, shot.dx, shot.dy, anim_time_);
         }
 
         // Floating combat numbers: pixel-font text rising off the hit point,
@@ -1016,18 +1129,364 @@ private:
     {
         SDL_Texture* bg = textures_.get(asset_background);
         if (bg == nullptr) { return; }
+        // Biome tint: per-tile color mod from the seeded region id — three
+        // subtle palettes break the single-tile monotony for free.
+        static constexpr SDL_Color biome_tints[3] = {
+            { .r = 255, .g = 255, .b = 255, .a = 255 }, // neutral
+            { .r = 222, .g = 244, .b = 212, .a = 255 }, // cool green
+            { .r = 248, .g = 232, .b = 200, .a = 255 }, // warm autumn
+        };
+        const std::uint32_t seed = engine_->session().world_seed();
         const int i0 = static_cast<int>(std::floor((cam_x - (ww * 0.5f)) / bg_tile));
         const int i1 = static_cast<int>(std::ceil((cam_x + (ww * 0.5f)) / bg_tile));
         const int j0 = static_cast<int>(std::floor((cam_y - (wh * 0.5f)) / bg_tile));
         const int j1 = static_cast<int>(std::ceil((cam_y + (wh * 0.5f)) / bg_tile));
         for (int j = j0; j <= j1; ++j) {
             for (int i = i0; i <= i1; ++i) {
+                if (seed != 0) {
+                    const SDL_Color tint = biome_tints[shared::map::biome_at(
+                      seed, (static_cast<float>(i) + 0.5f) * bg_tile,
+                      (static_cast<float>(j) + 0.5f) * bg_tile)];
+                    SDL_SetTextureColorMod(bg, tint.r, tint.g, tint.b);
+                }
                 const SDL_FRect dst{ .x = (static_cast<float>(i) * bg_tile) + ox,
                                      .y = (static_cast<float>(j) * bg_tile) + oy,
                                      .w = bg_tile, .h = bg_tile };
                 SDL_RenderTexture(r, bg, nullptr, &dst);
             }
         }
+        SDL_SetTextureColorMod(bg, 255, 255, 255); // the texture cache shares it
+    }
+
+    // ---- biome ground: composited chunk textures --------------------------
+    // Each 512 px chunk composes ONCE into a render-target texture, then draws
+    // as a single quad (4-9/frame). Recipe v5 (prototyped in PIL against the
+    // real assets, constants identical): the ground is the FLOOR TILESET cut
+    // on its true units — grass/dirt/gravel are 16x16 period tiles, snow/sand
+    // each have a light + dark 80x32 shade tile. The chunk samples a MATERIAL
+    // per 16 px sub-cell (warped biome + a low-frequency shade blob), paints
+    // each cell from its tile with the source anchored to WORLD coordinates
+    // (patterns run continuously across cells and chunk borders), and any
+    // material change (biome OR shade) dithers with 4 px squares of both
+    // sides. Accents: dirt specks on grass, gravel specks on snow.
+
+    // Materials: 0 grass, 1 sand light, 2 sand dark, 3 snow light, 4 snow dark.
+    static constexpr const char* mat_paths[5] = {
+        "assets/map/tile_grass.png", "assets/map/tile_sand_a.png", "assets/map/tile_sand_b.png",
+        "assets/map/tile_snow_a.png", "assets/map/tile_snow_b.png",
+    };
+    static constexpr SDL_Color mat_flat[5] = { // fallback if art is missing
+        { .r = 60, .g = 122, .b = 8, .a = 255 },    { .r = 240, .g = 195, .b = 145, .a = 255 },
+        { .r = 227, .g = 168, .b = 106, .a = 255 }, { .r = 231, .g = 235, .b = 245, .a = 255 },
+        { .r = 200, .g = 210, .b = 233, .a = 255 },
+    };
+
+    // Ground material at a world position: forest = grass; plain/snow pick
+    // their light/dark shade tile from a low-frequency noise blob.
+    static std::uint8_t material_at(std::uint32_t seed, float x, float y)
+    {
+        const std::uint8_t biome = shared::map::biome_at(seed, x, y);
+        if (biome == 1) { return 0; }
+        const bool dark = shared::map::vnoise(seed, x, y, 21) > 0.55f;
+        return biome == 2 ? (dark ? 4 : 3) : (dark ? 2 : 1);
+    }
+
+    SDL_Texture* ground_chunk(SDL_Renderer* r, std::int32_t ci, std::int32_t cj,
+                              std::uint32_t seed)
+    {
+        if (ground_seed_ != seed) {
+            ground_cache_.clear();
+            ground_seed_ = seed;
+        }
+        const std::uint64_t key = shared::map::chunk_key(ci, cj);
+        if (const auto it = ground_cache_.find(key); it != ground_cache_.end()) {
+            return it->second.get();
+        }
+        if (ground_cache_.size() > 96) { ground_cache_.clear(); } // ~1 MB each; recompose is cheap
+        const auto side = static_cast<int>(shared::map::chunk_size);
+        SDL_Texture* tex =
+          SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, side, side);
+        if (tex == nullptr) { return nullptr; }
+        SDL_SetRenderTarget(r, tex);
+
+        const float wx0 = static_cast<float>(ci) * shared::map::chunk_size;
+        const float wy0 = static_cast<float>(cj) * shared::map::chunk_size;
+
+        // Deterministic per-chunk stream (compose-time only, cheap).
+        std::uint64_t stream = shared::map::mix(key ^ (static_cast<std::uint64_t>(seed) << 17));
+        const auto next = [&stream] {
+            stream = shared::map::mix(stream);
+            return static_cast<float>(stream >> 40) / static_cast<float>(1ULL << 24);
+        };
+
+        constexpr int cell = 16;
+        constexpr int cells = static_cast<int>(shared::map::chunk_size) / cell; // 32
+        SDL_Texture* mat_tex[5];
+        for (int m = 0; m < 5; ++m) { mat_tex[m] = textures_.get(mat_paths[m]); }
+
+        // Material per sub-cell (sampled at cell centers, in WORLD space).
+        std::array<std::uint8_t, static_cast<std::size_t>(cells * cells)> mat{};
+        for (int j = 0; j < cells; ++j) {
+            for (int i = 0; i < cells; ++i) {
+                mat[static_cast<std::size_t>((j * cells) + i)] = material_at(
+                  seed, wx0 + ((static_cast<float>(i) + 0.5f) * cell),
+                  wy0 + ((static_cast<float>(j) + 0.5f) * cell));
+            }
+        }
+
+        // Paint each cell from its material tile, source anchored to WORLD
+        // coordinates: clip to the cell, draw the grid-aligned tile copies
+        // covering it — patterns continue across cells AND chunk borders.
+        const auto paint = [&](std::uint8_t m, float dx, float dy, float dw, float dh) {
+            const SDL_Rect clip{ .x = static_cast<int>(dx), .y = static_cast<int>(dy),
+                                 .w = static_cast<int>(dw), .h = static_cast<int>(dh) };
+            if (mat_tex[m] == nullptr) {
+                const SDL_Color c = mat_flat[m];
+                SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255);
+                const SDL_FRect fr{ .x = dx, .y = dy, .w = dw, .h = dh };
+                SDL_RenderFillRect(r, &fr);
+                return;
+            }
+            SDL_SetRenderClipRect(r, &clip);
+            float tw = 0.0f;
+            float th = 0.0f;
+            SDL_GetTextureSize(mat_tex[m], &tw, &th);
+            const float world_x = wx0 + dx;
+            const float world_y = wy0 + dy;
+            const float ax = dx - (world_x - (std::floor(world_x / tw) * tw));
+            const float ay = dy - (world_y - (std::floor(world_y / th) * th));
+            for (float ty = ay; ty < dy + dh; ty += th) {
+                for (float tx = ax; tx < dx + dw; tx += tw) {
+                    const SDL_FRect dst{ .x = tx, .y = ty, .w = tw, .h = th };
+                    SDL_RenderTexture(r, mat_tex[m], nullptr, &dst);
+                }
+            }
+            SDL_SetRenderClipRect(r, nullptr);
+        };
+        for (int j = 0; j < cells; ++j) {
+            for (int i = 0; i < cells; ++i) {
+                paint(mat[static_cast<std::size_t>((j * cells) + i)],
+                      static_cast<float>(i * cell), static_cast<float>(j * cell),
+                      static_cast<float>(cell), static_cast<float>(cell));
+            }
+        }
+
+        // Dither along ANY material change (biome or shade): 4 px squares of
+        // both sides scattered around boundary cells. Neighbor cells beyond
+        // the chunk are sampled in world space, so chunk borders dither too.
+        const auto mat_of = [&](int i, int j) {
+            if (i >= 0 && i < cells && j >= 0 && j < cells) {
+                return mat[static_cast<std::size_t>((j * cells) + i)];
+            }
+            return material_at(seed, wx0 + ((static_cast<float>(i) + 0.5f) * cell),
+                               wy0 + ((static_cast<float>(j) + 0.5f) * cell));
+        };
+        const auto square4 = [&](std::uint8_t m, float dx, float dy) {
+            if (dx < 0.0f || dy < 0.0f || dx > shared::map::chunk_size - 4.0f
+                || dy > shared::map::chunk_size - 4.0f) {
+                return; // the neighbor chunk draws its own side of the seam
+            }
+            if (mat_tex[m] == nullptr) {
+                const SDL_Color c = mat_flat[m];
+                SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255);
+                const SDL_FRect fr{ .x = dx, .y = dy, .w = 4.0f, .h = 4.0f };
+                SDL_RenderFillRect(r, &fr);
+                return;
+            }
+            float tw = 0.0f;
+            float th = 0.0f;
+            SDL_GetTextureSize(mat_tex[m], &tw, &th);
+            const SDL_FRect src{ .x = next() * (tw - 4.0f), .y = next() * (th - 4.0f),
+                                 .w = 4.0f, .h = 4.0f };
+            const SDL_FRect dst{ .x = dx, .y = dy, .w = 4.0f, .h = 4.0f };
+            SDL_RenderTexture(r, mat_tex[m], &src, &dst);
+        };
+        for (int j = 0; j < cells; ++j) {
+            for (int i = 0; i < cells; ++i) {
+                const std::uint8_t self = mat[static_cast<std::size_t>((j * cells) + i)];
+                std::uint8_t other = self;
+                for (const auto& [di, dj] : { std::pair{ 1, 0 }, std::pair{ -1, 0 },
+                                              std::pair{ 0, 1 }, std::pair{ 0, -1 } }) {
+                    const std::uint8_t nb = mat_of(i + di, j + dj);
+                    if (nb != self) {
+                        other = nb;
+                        break;
+                    }
+                }
+                if (other == self) { continue; }
+                for (int k = 0; k < 6; ++k) {
+                    square4(next() < 0.5f ? self : other,
+                            static_cast<float>(i * cell) + (next() * 24.0f) - 8.0f,
+                            static_cast<float>(j * cell) + (next() * 24.0f) - 8.0f);
+                }
+            }
+        }
+
+        // Sparse accents: dirt specks on grass, gravel specks on snow.
+        SDL_Texture* dirt = textures_.get("assets/map/tile_dirt.png");
+        SDL_Texture* gravel = textures_.get("assets/map/tile_gravel.png");
+        for (int k = 0; k < 26; ++k) {
+            const float dx = next() * (shared::map::chunk_size - 5.0f);
+            const float dy = next() * (shared::map::chunk_size - 5.0f);
+            const std::uint8_t m = material_at(seed, wx0 + dx, wy0 + dy);
+            SDL_Texture* speck = m == 0 ? dirt : (m >= 3 ? gravel : nullptr);
+            if (speck == nullptr || next() < 0.55f) { continue; }
+            float tw = 0.0f;
+            float th = 0.0f;
+            SDL_GetTextureSize(speck, &tw, &th);
+            const SDL_FRect src{ .x = next() * (tw - 5.0f), .y = next() * (th - 5.0f),
+                                 .w = 5.0f, .h = 5.0f };
+            const SDL_FRect dst{ .x = dx, .y = dy, .w = 5.0f, .h = 5.0f };
+            SDL_RenderTexture(r, speck, &src, &dst);
+        }
+
+        SDL_SetRenderTarget(r, nullptr);
+        SDL_Texture* raw = tex;
+        ground_cache_.emplace(key, client::TexturePtr{ tex });
+        return raw;
+    }
+
+    void draw_ground(SDL_Renderer* r, float cam_x, float cam_y, float ww, float wh, float ox,
+                     float oy)
+    {
+        const std::uint32_t seed = engine_->session().world_seed();
+        const auto c0x = static_cast<std::int32_t>(
+          std::floor((cam_x - (ww * 0.5f)) / shared::map::chunk_size));
+        const auto c1x = static_cast<std::int32_t>(
+          std::floor((cam_x + (ww * 0.5f)) / shared::map::chunk_size));
+        const auto c0y = static_cast<std::int32_t>(
+          std::floor((cam_y - (wh * 0.5f)) / shared::map::chunk_size));
+        const auto c1y = static_cast<std::int32_t>(
+          std::floor((cam_y + (wh * 0.5f)) / shared::map::chunk_size));
+        for (std::int32_t cj = c0y; cj <= c1y; ++cj) {
+            for (std::int32_t ci = c0x; ci <= c1x; ++ci) {
+                SDL_Texture* tex = ground_chunk(r, ci, cj, seed);
+                if (tex == nullptr) { continue; }
+                const SDL_FRect dst{ .x = (static_cast<float>(ci) * shared::map::chunk_size) + ox,
+                                     .y = (static_cast<float>(cj) * shared::map::chunk_size) + oy,
+                                     .w = shared::map::chunk_size, .h = shared::map::chunk_size };
+                SDL_RenderTexture(r, tex, nullptr, &dst);
+            }
+        }
+    }
+
+    // Map art path: "assets/map/<prefix>_<NN>.png", NN in 01..count.
+    static std::string map_path(const char* prefix, std::uint64_t hash, int count)
+    {
+        const int idx = static_cast<int>(hash % static_cast<std::uint64_t>(count)) + 1;
+        return std::string("assets/map/") + prefix + (idx < 10 ? "_0" : "_")
+             + std::to_string(idx) + ".png";
+    }
+
+    static std::uint64_t spot_hash(float x, float y)
+    {
+        return shared::map::mix((static_cast<std::uint64_t>(static_cast<std::int64_t>(x)) << 21)
+                                ^ static_cast<std::uint64_t>(static_cast<std::int64_t>(y)));
+    }
+
+    // Flat ground clutter (plants/pebbles/bushes/stumps) from the seeded deco
+    // field — drawn right over the background, under everything that walks.
+    void draw_terrain_deco(SDL_Renderer* r, float cam_x, float cam_y, float ww, float wh,
+                           float ox, float oy)
+    {
+        const std::uint32_t seed = engine_->session().world_seed();
+        if (seed == 0) { return; }
+        if (deco_seed_ != seed) {
+            deco_cache_.clear();
+            deco_seed_ = seed;
+        }
+        static constexpr const char* prefixes[4] = { "plant", "pebble", "bush", "stump" };
+        const int counts[4] = { art_plants_, art_pebbles_, art_bushes_, art_stumps_ };
+        const auto c0x = static_cast<std::int32_t>(
+          std::floor((cam_x - (ww * 0.5f) - 64.0f) / shared::map::chunk_size));
+        const auto c1x = static_cast<std::int32_t>(
+          std::floor((cam_x + (ww * 0.5f) + 64.0f) / shared::map::chunk_size));
+        const auto c0y = static_cast<std::int32_t>(
+          std::floor((cam_y - (wh * 0.5f) - 64.0f) / shared::map::chunk_size));
+        const auto c1y = static_cast<std::int32_t>(
+          std::floor((cam_y + (wh * 0.5f) + 64.0f) / shared::map::chunk_size));
+        for (std::int32_t cj = c0y; cj <= c1y; ++cj) {
+            for (std::int32_t ci = c0x; ci <= c1x; ++ci) {
+                auto [it, fresh] = deco_cache_.try_emplace(shared::map::chunk_key(ci, cj));
+                if (fresh) { shared::map::deco_in(seed, ci, cj, it->second); }
+                for (const shared::map::Deco& deco : it->second) {
+                    const char* prefix = prefixes[deco.kind];
+                    int count = counts[deco.kind];
+                    // Snowfield stumps wear their frosted variant when we have one.
+                    if (deco.kind == 3 && art_stump_snow_ > 0
+                        && shared::map::biome_at(seed, deco.x, deco.y) == 2) {
+                        prefix = "stump_snow";
+                        count = art_stump_snow_;
+                    }
+                    if (count <= 0) { continue; }
+                    SDL_Texture* tex =
+                      textures_.get(map_path(prefix, spot_hash(deco.x, deco.y), count));
+                    if (tex == nullptr) { continue; }
+                    float tw = 0.0f;
+                    float th = 0.0f;
+                    SDL_GetTextureSize(tex, &tw, &th);
+                    const SDL_FRect dst{ .x = deco.x + ox - (tw * 0.5f),
+                                         .y = deco.y + oy - th, .w = tw, .h = th };
+                    SDL_RenderTexture(r, tex, nullptr, &dst);
+                }
+            }
+        }
+    }
+
+    // One obstacle of the y-sorted pass, bottom-anchored on its collider base.
+    // Tall trees FADE when someone stands behind their canopy — the sorted
+    // list is scanned for entities above (drawn earlier = hidden).
+    void draw_obstacle(SDL_Renderer* r, const WorldItem& item)
+    {
+        const bool tree = item.ob.kind == 0;
+        // Trees wear their BIOME's family: frozen crowns in the snow, greens
+        // in the forest, gold/bare on the plains. Rocks are rocks everywhere.
+        const char* prefix = "rock";
+        int count = art_rocks_;
+        if (tree) {
+            const std::uint8_t biome = shared::map::biome_at(engine_->session().world_seed(),
+                                                             item.ob.x, item.ob.y);
+            if (biome == 2 && art_tree_snow_ > 0) {
+                prefix = "tree_snow";
+                count = art_tree_snow_;
+            } else if (biome == 1 && art_tree_forest_ > 0) {
+                prefix = "tree_forest";
+                count = art_tree_forest_;
+            } else {
+                prefix = "tree_plain";
+                count = art_tree_plain_ > 0 ? art_tree_plain_ : art_tree_forest_;
+                if (art_tree_plain_ <= 0) { prefix = "tree_forest"; }
+            }
+        }
+        SDL_Texture* tex =
+          count > 0 ? textures_.get(map_path(prefix, spot_hash(item.ob.x, item.ob.y), count))
+                    : nullptr;
+        if (tex == nullptr) { // no art: a flat block so the collider still reads
+            SDL_SetRenderDrawColor(r, tree ? 70 : 110, tree ? 110 : 110, tree ? 60 : 115, 255);
+            const float s = item.ob.r * 2.0f;
+            const SDL_FRect dst{ .x = item.x - (s * 0.5f), .y = item.y - (s * 0.5f), .w = s, .h = s };
+            SDL_RenderFillRect(r, &dst);
+            return;
+        }
+        float tw = 0.0f;
+        float th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        const SDL_FRect dst{ .x = item.x - (tw * 0.5f), .y = item.y + item.ob.r - th,
+                             .w = tw, .h = th };
+        std::uint8_t alpha = 255;
+        if (tree && th > 60.0f) {
+            for (const WorldItem& other : world_items_) {
+                if (other.type == WorldItem::Obst || other.key >= item.key) { continue; }
+                if (other.x > dst.x - 4.0f && other.x < dst.x + dst.w + 4.0f && other.y > dst.y
+                    && other.y < dst.y + dst.h) {
+                    alpha = 140; // someone is behind the canopy: show them through
+                    break;
+                }
+            }
+        }
+        SDL_SetTextureAlphaMod(tex, alpha);
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+        SDL_SetTextureAlphaMod(tex, 255); // the texture cache shares handles
     }
 
     static void draw_entity(SDL_Renderer* r, float cx, float cy, SDL_Texture* tex, SDL_Color fallback)
@@ -1563,6 +2022,25 @@ private:
     client::Textures textures_;
     client::SpritePacks packs_{ &textures_ }; // animation packs (Idle/Move strips)
     std::vector<std::pair<float, float>> player_screen_; // per-frame player positions (idle facing)
+    // Terrain (deterministic from session.world_seed()): collision cache for
+    // the prediction, deco cache + art variant counts for the renderer.
+    shared::map::ChunkCache terrain_cache_;
+    std::unordered_map<std::uint64_t, std::vector<shared::map::Deco>> deco_cache_;
+    std::uint32_t deco_seed_ = 0;
+    // Art variant counts per family (scanned once from assets/map).
+    int art_tree_forest_ = 0, art_tree_plain_ = 0, art_tree_snow_ = 0;
+    int art_rocks_ = 0, art_bushes_ = 0;
+    int art_plants_ = 0, art_pebbles_ = 0, art_stumps_ = 0, art_stump_snow_ = 0;
+    // Composited biome ground chunks (render targets), keyed like terrain chunks.
+    std::unordered_map<std::uint64_t, client::TexturePtr> ground_cache_;
+    std::uint32_t ground_seed_ = 0;
+    std::vector<WorldItem> world_items_; // per-frame y-sorted world pass
+    struct Shot
+    {
+        float x, y, dx, dy;
+        std::uint8_t variant;
+    };
+    std::vector<Shot> shots_; // projectiles draw after the sorted pass (airborne)
     client::DrawContext draw_ctx_;  // reused surface for plugin draw hooks
     sol::object ctx_obj_;           // persistent Lua handle to draw_ctx_
     client::HudContext hud_ctx_;    // reused surface for plugin HUD hooks

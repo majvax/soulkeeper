@@ -376,5 +376,9 @@ return function(mod)
     -- they die without paying XP or heart rolls — boss adds are pressure, not
     -- a loot fountain that trivializes the fight.
     C.NoLoot = mod:component("noloot", {})
+
+    -- Supply crate (POI): the death system pays its OWN loot table (orb burst
+    -- or a heart) instead of the standard drop — a map feature worth the walk.
+    C.CrateLoot = mod:component("crateloot", {})
     return C
 end

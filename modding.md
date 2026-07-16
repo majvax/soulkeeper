@@ -120,8 +120,10 @@ end                                       end
 
 ```
 grid (kernel) → targeting → motion (kernel dash + yours) → shooting → movement (kernel)
-             → separation (kernel: enemy anti-cramming) → projectile → combat
-             → update (default) → pickup → death
+             → separation (kernel: enemy anti-cramming) → terrain (kernel: seeded
+             obstacle pushout — the `Terrain` prelude singleton carries the seed and a
+             clear circle mods may write, e.g. core flattens boss arenas) → projectile
+             → combat → update (default) → pickup → death
 ```
 
 ```lua

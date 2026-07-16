@@ -3,15 +3,21 @@
 // world state THROUGH the sim VM (import("core") reaches the mod's handles).
 //
 // Build (from the repo root, after a normal cmake build supplied the deps):
-//   g++ -std=c++26 -O1 -I src -I build/_deps/sol2-src/include -I build/_deps/lua-src \
+//   g++ -std=c++26 -O1 -freflection -fcontracts -DSOL_NO_LUA_HPP=1 -DSOL_SAFE_FUNCTION=1 \
+//       -I src -isystem build/_deps/sol2-src/include -isystem build/_deps/lua-src \
+//       -isystem build/_deps/fmt-src/include \
 //       tests/sim_test.cpp src/shared/mod/lua_host.cpp src/shared/mod/registry.cpp \
-//       src/shared/mod/sim_bindings.cpp build/liblua.a -o /tmp/sim_test
+//       src/shared/mod/sim_bindings.cpp build/liblua.a build/_deps/fmt-build/libfmt.a \
+//       -o /tmp/sim_test
 // Run from the repo root (load_dir("mods") is a relative path).
 #include "shared/factory/player.hpp"
+#include "shared/map/terrain.hpp"
 #include "shared/mod/lua_host.hpp"
 #include "shared/mod/sim_bindings.hpp"
 #include "shared/sim/game_world.hpp"
 #include <cstdio>
+#include <cstdint>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -1446,6 +1452,174 @@ int main()
         end
         return true
     )"), "anchored hazards hold while the crowd around them spreads");
+    reset();
+
+    // --- Scenario 61: terrain — deterministic chunk generation ---------------
+    {
+        std::vector<shared::map::Obstacle> a;
+        std::vector<shared::map::Obstacle> b;
+        std::vector<shared::map::Obstacle> c;
+        for (std::int32_t i = 2; i < 12 && a.empty(); ++i) { // find a populated chunk
+            shared::map::obstacles_in(12345, i, 3, a);
+        }
+        bool same = !a.empty();
+        for (std::int32_t i = 2; i < 12 && b.size() < a.size(); ++i) {
+            shared::map::obstacles_in(12345, i, 3, b);
+            shared::map::obstacles_in(99999, i, 3, c);
+        }
+        same = same && a.size() <= b.size();
+        for (std::size_t i = 0; i < a.size() && same; ++i) {
+            same = a[i].x == b[i].x && a[i].y == b[i].y && a[i].r == b[i].r;
+        }
+        bool differs = a.size() != c.size();
+        for (std::size_t i = 0; i < a.size() && i < c.size() && !differs; ++i) {
+            differs = a[i].x != c[i].x || a[i].y != c[i].y;
+        }
+        check(same, "one seed generates the same chunk twice");
+        check(differs, "another seed generates another world");
+        check([&] { // the spawn neighborhood stays clear
+            std::vector<shared::map::Obstacle> spawn;
+            for (std::int32_t j = -1; j <= 1; ++j) {
+                for (std::int32_t i = -1; i <= 1; ++i) {
+                    shared::map::obstacles_in(12345, i, j, spawn);
+                }
+            }
+            return spawn.empty();
+        }(), "the origin spawn area has no obstacles");
+        check([&] { // biome density: forests grow thicker than plains
+            float sum[3] = { 0.0f, 0.0f, 0.0f };
+            int chunks[3] = { 0, 0, 0 };
+            std::vector<shared::map::Obstacle> tmp;
+            for (std::int32_t j = 2; j < 22; ++j) {
+                for (std::int32_t i = 2; i < 22; ++i) {
+                    const std::uint8_t biome = shared::map::biome_at(
+                      12345, (static_cast<float>(i) + 0.5f) * shared::map::chunk_size,
+                      (static_cast<float>(j) + 0.5f) * shared::map::chunk_size);
+                    tmp.clear();
+                    shared::map::obstacles_in(12345, i, j, tmp);
+                    sum[biome] += static_cast<float>(tmp.size());
+                    ++chunks[biome];
+                }
+            }
+            return chunks[0] > 0 && chunks[1] > 0
+                && (sum[1] / static_cast<float>(chunks[1]))
+                     > (sum[0] / static_cast<float>(chunks[0]));
+        }(), "forest regions are denser than plains");
+    }
+
+    // --- Scenario 62: terrain collision — pushout, and the clear circle ------
+    {
+        // Find a real obstacle of seed 12345 and hand its spot to Lua.
+        std::vector<shared::map::Obstacle> obs;
+        for (std::int32_t i = 2; i < 20 && obs.empty(); ++i) {
+            shared::map::obstacles_in(12345, i, 5, obs);
+        }
+        check(!obs.empty(), "the probe seed has an obstacle to test against");
+        lua["_OX"] = obs[0].x;
+        lua["_OY"] = obs[0].y;
+        lua["_OR"] = obs[0].r;
+        lua.script(R"(
+            for t in world:each(Terrain) do t:get(Terrain).seed = 12345 end
+            for p in world:each(Player, Position) do
+                local pp = p:get(Position)
+                pp.x, pp.y = _OX, _OY -- dead center of the rock
+            end
+        )");
+        step(0.2f);
+        check(lua_bool(R"(
+            for p in world:each(Player, Position) do
+                local pp = p:get(Position)
+                local dx, dy = pp.x - _OX, pp.y - _OY
+                return dx * dx + dy * dy >= _OR * _OR -- ejected past the collider
+            end
+        )"), "a player inside an obstacle is pushed out");
+        lua.script(R"(
+            for p in world:each(Player) do p:set(Downed, { respawn_wave = 0 }) end
+            local e = spawn_enemy(_OX, _OY, "core:bandit")
+            e:get(Position).x, e:get(Position).y = _OX, _OY
+        )");
+        step(0.2f);
+        check(lua_bool(R"(
+            for e in world:each(Enemy, Position) do
+                local ep = e:get(Position)
+                local dx, dy = ep.x - _OX, ep.y - _OY
+                return dx * dx + dy * dy >= _OR * _OR
+            end
+        )"), "an enemy inside an obstacle is pushed out");
+        // Clear circle: a direct resolve check (in the live sim, core's arena
+        // system OWNS the circle and zeroes it whenever no arena is up — the
+        // sim-level behavior is scenario 63's).
+        {
+            shared::map::ChunkCache cache;
+            float px = obs[0].x;
+            float py = obs[0].y;
+            const bool pushed_flat = shared::map::resolve_terrain(
+              cache, 12345, px, py, 12.0f, obs[0].x, obs[0].y, 120.0f);
+            check(!pushed_flat && px == obs[0].x && py == obs[0].y,
+                  "the clear circle flattens obstacles (arena ground)");
+        }
+        lua.script(R"(
+            for t in world:each(Terrain) do
+                local terrain = t:get(Terrain)
+                terrain.seed = 0
+                terrain.clear_r = 0
+            end
+        )");
+        reset();
+    }
+
+    // --- Scenario 63: arena fights write the terrain clear circle ------------
+    lua.script(R"(
+        for t in world:each(Terrain) do
+            local terrain = t:get(Terrain)
+            terrain.seed = 12345
+            terrain.clear_r = 0
+        end
+        spawn_enemy(300, 0, "core:boss") -- Frog King carries C.Arena
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        for t in world:each(Terrain) do return t:get(Terrain).clear_r > 0 end
+    )"), "an arena fight flattens its ground");
+    lua.script(R"(
+        local C = import("core")
+        for b in world:each(C.Boss, Health) do b:get(Health).current = 0 end
+    )");
+    step(0.3f);
+    check(lua_bool(R"(
+        for t in world:each(Terrain) do return t:get(Terrain).clear_r == 0 end
+    )"), "the clearing lifts when the boss dies");
+    lua.script(R"(for t in world:each(Terrain) do t:get(Terrain).seed = 0 end)");
+    reset();
+
+    // --- Scenario 64: supply dummy — its own loot table -----------------------
+    lua.script(R"(
+        local C = import("core")
+        local crate = spawn_enemy(400, 0, "core:crate")
+        crate:get(Health).current = 0
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.CrateLoot) do return false end -- consumed
+        for orb in world:each(C.Xp) do return true end       -- paid orbs...
+        for heart in world:each(C.Heal) do return true end   -- ...or a heart
+        return false
+    )"), "a broken supply dummy pays its loot table");
+    reset();
+
+    // --- Scenario 65: the poi spawner salts the map ---------------------------
+    // POIs are gated to wave >= 2 (which also keeps them out of every other
+    // scenario here — the suite runs at wave 1); cover a full roll interval.
+    lua.script(R"(world:set_wave(2))");
+    step(31.0f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for e in world:each(C.CrateLoot) do return true end
+        for e in world:each(C.Ambush) do return true end -- the 10% mimic roll
+        return false
+    )"), "the poi spawner placed a crate (or its mimic trap)");
+    lua.script(R"(world:set_wave(1))");
     reset();
 
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------

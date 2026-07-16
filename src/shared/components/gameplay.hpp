@@ -17,6 +17,19 @@ struct WorldGrid
     core::SpatialGrid grid{ 128.0f };
 };
 
+// Singleton: the deterministic-terrain parameters. `seed` is rolled per run
+// by the server and shipped in StateMsg (the client derives the SAME world
+// for prediction + drawing). The clear circle disables obstacles inside it —
+// core's arena system writes it over boss arenas so fights get flat ground.
+// Prelude-exposed (engine_components) so Lua owns the clearing policy.
+struct Terrain
+{
+    std::uint32_t seed = 0;
+    float clear_x = 0.0f;
+    float clear_y = 0.0f;
+    float clear_r = 0.0f;
+};
+
 // Which objects a player already owns, indexed by content wire id. The engine
 // uses this to enforce "each object obtainable once" (independent of any
 // component an object happens to grant). 256 = the uint8 wire-id range.

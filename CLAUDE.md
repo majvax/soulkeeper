@@ -40,11 +40,18 @@ src/
                    #   (enemy anti-cramming: soft pair nudges post-Movement via the WorldGrid;
                    #   Speed<=0 enemies are ANCHORS — planted kegs, sleeping Mimics, parked/
                    #   telegraphing bosses hold their ground; mass ∝ radius² so trash can't
-                   #   shove a boss; spacing 1.6x hitbox sum, golden-angle fan on exact stacks)
+                   #   shove a boss; spacing 1.6x hitbox sum, golden-angle fan on exact stacks),
+                   #   terrain (players+enemies HARD-pushout vs the seeded obstacle field;
+                   #   bullets/orbs untouched — shots fly over rocks by design)
+    map/           #   terrain.hpp: THE deterministic world generator (pure splitmix64 of
+                   #   (seed, chunk) — server & client derive the SAME obstacles/deco/biomes,
+                   #   zero net traffic; 512px chunks, 0-2 colliders each (tree trunk r 9-12 /
+                   #   rock r 13-20), origin ±1 chunk stays EMPTY (spawn), ChunkCache memoizes,
+                   #   resolve_terrain skips a CLEAR CIRCLE (arena flattening))
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
     factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
     sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
-                   #   world.hpp phase constants (grid/targeting/motion/shooting/movement/separation/projectile/combat/update/pickup/death)
+                   #   world.hpp phase constants (grid/targeting/motion/shooting/movement/separation/terrain/projectile/combat/update/pickup/death)
     mod/           #   Lua modding layer (SDL-free): component_ref (THE handle type), bindings_table (engine
                    #   dispatch + prelude list), registry (content/enemy defs -> deterministic wire-id),
                    #   lua_host (sol::state, register_mod, import() loader, mod verbs), events (bus),
@@ -86,7 +93,7 @@ modding.md         # the full modding guide (API reference, performance model, i
 
 ## Runtime model (how it actually works)
 - **Server-authoritative; C++ is the engine, Lua is the game.** The kernel pipeline is
-  `Grid → Dash → Movement → Separation` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
+  `Grid → Dash → Movement → Separation → Terrain` at 120 Hz; **every game rule** (targeting, shooting, bullets, contact
   damage + i-frames, deaths/drops/respawns, pickups, auras) is a Lua system in `mods/core/`
   slotted into named phases between the kernel systems. Snapshots stream at 60 Hz carrying
   `Render{kind,variant}` bytes (Lua-controlled visuals); entries are **packed + quantized**
@@ -269,6 +276,46 @@ until **CTRL is held** — `hud.detail` on the HudContext, fed by `SDL_GetModSta
 (not the event key-set: the panel redraws over the level-up cards where GameScene's events are
 blocked, and card picks are exactly when stats matter); core's mod.lua gates the weapon/crit/
 magnet/greed/leech block on it ·
+**THE MAP** (per-run seeded world — `world_seed` rides `StateMsg` (protocol 14, 0 = flat
+lobby), rolled in `on_start`/zeroed in `reset_run`; `shared/map/terrain.hpp` generates
+obstacles/deco/biomes DETERMINISTICALLY on both sides, zero net traffic): **obstacles with
+collision** (tree trunks + rocks; kernel `TerrainSystem` hard-pushes players+enemies, the
+client prediction runs the SAME resolve so walls never rubber-band; bullets FLY OVER — cover
+camping is a non-mechanic; enemies slide around rocks naturally) · **arena flattening** (the
+`Terrain` prelude singleton's clear circle: core's arena system writes the rect's diag
+radius over boss fights + the client hides those obstacles — choreography gets flat ground) ·
+**y-sorted world pass** (obstacles + enemies + players draw in feet order — bodies pass
+BEHIND canopies/in front of rocks; ground items flat below, projectiles airborne on top;
+a tree FADES to ~55% alpha when someone stands behind its canopy) ·
+**BIOMES** (`biome_at`, 0=PLAIN/1=FOREST/2=SNOW: 5120px cells DOMAIN-WARPED by `vnoise`
+(bilinear value noise, 1024px lattice, ±700px warp) — regions are BIG (dozens of seconds
+between crossings) with meandering organic borders, never square): each 512px chunk
+composes ONCE into a render-target texture (`ground_chunk`, cache cap 96, cleared on seed
+change; seed 0 = legacy flat lobby bg) then draws as one quad (4-9/frame). Ground recipe v5
+(each round PROTOTYPED VISUALLY in PIL first; v1 strips banded, v2 color-graded
+background.png "looked the same all the time"): the FLOOR TILESET cut on its TRUE units —
+grass/dirt/gravel are 16x16 PERIOD tiles (found by autocorrelation of the cross cells'
+solid arms), snow/sand are each TWO 80x32 shade tiles (the old banding = cutting across
+the light/dark pair); `material_at` picks per 16px sub-cell (warped biome + a
+low-frequency `vnoise` shade blob for light/dark patchiness), cells paint via
+SDL_SetRenderClipRect with tile sources anchored to WORLD coords (patterns run continuously
+across cells and chunk borders); ANY material change (biome OR shade) dithers with 4px
+squares of both sides; sparse dirt-on-grass / gravel-on-snow specks; the GENERATOR is
+biome-aware too (forest 1-4 obstacles/chunk tree_p .85 — reads as WOODS; plain 0-1 open,
+snow 0-2 rock-leaning + deco weights per biome — shared header,
+so sim collision matches) and trees wear their region's FAMILY (`tree_forest/plain/snow_NN`
+— the frozen crowns live only in snowfields; snow stumps frost too); water tiles exist in
+the pack but are DEFERRED (imply collision + shorelines) · art =
+`assets/map/` (auto-sliced from the natural half of the old Environment pack via
+alpha-island segmentation + hue classification: 20 forest/27 plain/4 snow trees, 6 rocks,
+23 bushes, 60 plants, 27 pebbles, 6+2 stumps, 8 ground patches, 5 base tiles +
+`_src/` originals; the sim only knows COLLIDER CLASSES — the client hashes the obstacle
+position for the sprite variant and bottom-anchors it on the collider base) · **points of
+interest**: `poi_spawner` (wave ≥ 2, every 20-30 s, cap 6, paused during arenas) drops a
+**Supply Dummy** (`core:crate`, Dummy_LVL1 pack, Speed-0 anchor, no touch) 500-800 px from a
+random live player — its `C.CrateLoot` death payout (60% 3-orb burst / 30% heart (area cap
+applies) / 10% 5-orb jackpot) replaces the standard drop — and **~10% of rolls place a
+core:mimic instead** (the POI that bites) ·
 **game-over** (all downed = defeat; frozen-world overlay; per-player SCOREBOARD from RunStats
 (kills/dmg/revives; `C.Bullet.owner` = `p:id()` stamps kill credit) + local bests file
 (`SDL_GetPrefPath` records.txt: best wave/wins/runs, "NEW BEST!" flash); host returns everyone
@@ -282,7 +329,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (89 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (101 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/
@@ -322,6 +369,7 @@ must POLL per sim tick, not read once at window end).
   - Client smoke → `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software SDL_AUDIO_DRIVER=dummy ./bin/client …`.
 - **Kill leftover procs with `pkill -x server` / `pkill -x client`** — `pkill -f bin/server` also
   matches (and kills) the invoking shell.
+- **Commits: NO `Co-Authored-By` trailer** (overrides the default Claude Code behavior).
 
 ## Known-next / deferred
 - Unlockable starting loadouts / lobby character select, gated on the run-stats records (the

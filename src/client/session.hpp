@@ -104,6 +104,8 @@ public:
     [[nodiscard]] const std::vector<RosterRow>& roster() const noexcept { return roster_; }
     [[nodiscard]] bool leveling() const noexcept { return leveling_; }
     [[nodiscard]] bool game_over() const noexcept { return game_over_; }
+    // Deterministic terrain seed for this run (prediction + rendering).
+    [[nodiscard]] std::uint32_t world_seed() const noexcept { return world_seed_; }
     [[nodiscard]] const proto::GameOverMsg& game_over_stats() const noexcept { return go_stats_; }
     [[nodiscard]] const std::vector<proto::GameOverEntry>& game_over_entries() const noexcept
     {
@@ -228,6 +230,7 @@ private:
         } else if (type == proto::MsgType::State) {
             if (const auto msg = reader.get<proto::StateMsg>()) {
                 state_ = static_cast<proto::GameState>(msg->state);
+                world_seed_ = msg->world_seed; // this run's deterministic terrain
                 // Back in the lobby => the game-over screen is over.
                 if (state_ == proto::GameState::Lobby) { game_over_ = false; }
             }
@@ -310,6 +313,7 @@ private:
     float reconnect_timer_ = 0.0f;
 
     proto::GameState state_ = proto::GameState::Lobby;
+    std::uint32_t world_seed_ = 0; // this run's terrain seed (0 = flat)
     bool is_host_ = false;
     bool has_id_ = false;
     std::uint32_t my_net_id_ = 0;

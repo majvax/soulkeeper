@@ -500,6 +500,34 @@ return function(mod, C)
                 -- Boss-spawned minions (C.NoLoot) die without paying anything:
                 -- summon spam must be pressure, not an XP/heart fountain.
                 if e:has(C.NoLoot) then goto skip_loot end
+                -- Supply crate (map POI): its OWN payout table replaces the
+                -- standard drop — 60% a 3-orb burst / 30% a heart (the area
+                -- cap still applies) / 10% a 5-orb jackpot.
+                if e:has(C.CrateLoot) then
+                    do
+                        local roll = math.random()
+                        local orbs = roll < 0.60 and 3 or (roll >= 0.90 and 5 or 0)
+                        for i = 1, orbs do
+                            local a = (i / orbs) * 2 * math.pi
+                            local orb = spawn_entity(ep.x + math.cos(a) * 18,
+                                                     ep.y + math.sin(a) * 18)
+                            orb:get(Render).kind = KIND.orb
+                            orb:set(C.Xp, { value = 2 })
+                        end
+                        if orbs == 0 then
+                            local stocked = 0
+                            for _ in world:nearby(ep.x, ep.y, 240, C.Heal) do
+                                stocked = stocked + 1
+                            end
+                            if stocked < 3 then
+                                local heart = spawn_entity(ep.x, ep.y)
+                                heart:get(Render).kind = KIND.heart
+                                heart:set(C.Heal, {})
+                            end
+                        end
+                    end
+                    goto skip_loot
+                end
                 do -- scope the payout locals so the goto can't jump into them
                 local xp_value = 1
                 if e:has(XpReward) then xp_value = e:get(XpReward).value end
@@ -608,6 +636,33 @@ return function(mod, C)
         if players > 0 and alive == 0 then
             world:end_game(false) -- everyone down at once: defeat
         end
+    end)
+
+    -- Points of interest: every ~20-30 s, drop a supply dummy 500-800 px from
+    -- a random live player — the infinite plane gets things worth walking to.
+    -- ~10% of the rolls place a MIMIC instead (the sleeping ambusher): the POI
+    -- that bites back. Skipped during arena fights (the entrance sweep would
+    -- eat it) and capped so the map never turns into a loot farm.
+    local poi_timer = 12.0 -- lands early in wave 2: teach the habit
+    mod:system("poi_spawner", { phase = "update", rate = 1, stagger = 0.12 }, function(dt)
+        if world:wave() < 2 then return end -- wave 1 is the learn-the-map minute
+        poi_timer = poi_timer - dt
+        if poi_timer > 0 then return end
+        for _ in world:each(WaveHold) do return end -- arena fight: hold the roll
+        poi_timer = 20 + math.random() * 10
+        local crates = 0
+        for _ in world:each(C.CrateLoot) do crates = crates + 1 end
+        if crates >= 6 then return end
+        local players = {}
+        for p in world:each(Player, Position) do
+            if not p:has(Downed) then players[#players + 1] = p end
+        end
+        if #players == 0 then return end
+        local pp = players[math.random(#players)]:get(Position)
+        local a = math.random() * 2 * math.pi
+        local r = 500 + math.random() * 300
+        spawn_enemy(pp.x + math.cos(a) * r, pp.y + math.sin(a) * r,
+                    math.random() < 0.10 and "core:mimic" or "core:crate")
     end)
 
     -- Dropped hearts go STALE: a generous grab window, then they fade — the
@@ -945,6 +1000,29 @@ return function(mod, C)
         pos.y = math.max(arena.cy - arena.h + margin, math.min(arena.cy + arena.h - margin, pos.y))
     end
     mod:system("arena", { phase = "update", rate = 60, stagger = 0.25 }, function(dt)
+        -- Terrain clearing: while an arena fight is live, the kernel Terrain
+        -- singleton's clear circle covers the whole rect (diag radius — the
+        -- SAME formula the client mirrors) so charges/walls/rings fight on
+        -- flat ground. Reset when no arena bearer lives.
+        local arena_live = false
+        for e in world:each(C.Arena, Position) do
+            local arena = e:get(C.Arena)
+            if arena.w > 0 then
+                arena_live = true
+                for t in world:each(Terrain) do
+                    local terrain = t:get(Terrain)
+                    terrain.clear_x = arena.cx
+                    terrain.clear_y = arena.cy
+                    terrain.clear_r = math.sqrt(arena.w * arena.w + arena.h * arena.h)
+                end
+            end
+        end
+        if not arena_live then
+            for t in world:each(Terrain) do
+                local terrain = t:get(Terrain)
+                if terrain.clear_r > 0 then terrain.clear_r = 0 end
+            end
+        end
         for e in world:each(C.Arena, Position) do
             local arena = e:get(C.Arena)
             if arena.w > 0 then

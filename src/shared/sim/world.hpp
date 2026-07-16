@@ -14,6 +14,7 @@ inline constexpr int Motion = 150;    // kernel dash + mod "motion": velocity tw
 inline constexpr int Shooting = 200;  // mod "shooting": spawn bullets
 inline constexpr int Movement = 300;  // kernel: integrate velocity
 inline constexpr int Separation = 350; // kernel: enemy anti-cramming nudge
+inline constexpr int Terrain = 360;    // kernel: seeded-obstacle collision
 inline constexpr int Projectile = 400; // mod "projectile": bullet flight/hits
 inline constexpr int Combat = 500;    // mod "combat": contact damage
 inline constexpr int Update = 550;    // mod "update" (default): general logic

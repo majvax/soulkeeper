@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 13;
+inline constexpr std::uint16_t protocol_version = 14;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -179,7 +179,11 @@ struct Welcome
 
 struct StateMsg
 {
-    std::uint8_t state; // proto::GameState
+    std::uint8_t state;      // proto::GameState
+    // Per-run terrain seed (meaningful while Playing; 0 = flat world). The
+    // client derives the SAME deterministic obstacle field for prediction and
+    // rendering — static terrain never rides snapshots.
+    std::uint32_t world_seed = 0;
 };
 
 // The run ended (broadcast reliable). The sim freezes on the final frame; the

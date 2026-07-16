@@ -6,6 +6,7 @@
 #include "shared/system/grid.hpp"
 #include "shared/system/movement.hpp"
 #include "shared/system/separation.hpp"
+#include "shared/system/terrain.hpp"
 
 namespace shared {
 
@@ -20,11 +21,13 @@ inline World make_game_world()
     const core::Entity stats = world.registry().create();
     world.registry().assign(stats, GameStats{ .xp = 0, .wave = 1 });
     world.registry().assign(stats, WorldGrid{});
+    world.registry().assign(stats, Terrain{}); // seed 0 = flat world until the server rolls one
 
     world.add_system(phase::Grid, GridSystem{});         // rebuild the spatial hash
     world.add_system(phase::Motion, DashSystem{});       // dash burst/recharge (prediction-coupled)
     world.add_system(phase::Movement, MovementSystem{}); // integrate velocity
     world.add_system(phase::Separation, SeparationSystem{}); // enemy anti-cramming
+    world.add_system(phase::Terrain, TerrainSystem{});   // seeded-obstacle collision
     return world;
 }
 

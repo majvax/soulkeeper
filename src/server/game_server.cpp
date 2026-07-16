@@ -383,11 +383,18 @@ void GameServer::on_start(std::uint32_t peer_id)
     const auto it = peer_token_.find(peer_id);
     if (it == peer_token_.end() || it->second != host_token_ || state_ != proto::GameState::Lobby) { return; }
     state_ = proto::GameState::Playing;
+    // Roll this run's world: the seed deterministically generates the whole
+    // obstacle field on both sides (never 0 — that means "flat").
+    world_seed_ = rng_() | 1U;
+    world_.registry().view<Terrain>().each([&](core::Entity, Terrain& terrain) {
+        terrain = Terrain{ .seed = world_seed_ };
+    });
     proto::ByteWriter writer;
     writer.put(proto::MsgType::State);
-    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_),
+                                .world_seed = world_seed_ });
     server_.broadcast(writer.bytes(), true);
-    spdlog::info("host started the game");
+    spdlog::info("host started the game (world seed {})", world_seed_);
 }
 
 void GameServer::on_input(std::uint32_t peer_id, proto::ByteReader& reader)
@@ -593,6 +600,8 @@ void GameServer::reset_run()
     registry.view<GameStats>().each([&](core::Entity, GameStats& stats) {
         stats = GameStats{ .xp = 0, .wave = 1 };
     });
+    world_seed_ = 0; // lobby = flat world; the next start rolls a fresh one
+    registry.view<Terrain>().each([&](core::Entity, Terrain& terrain) { terrain = Terrain{}; });
     run_over_entries_.clear(); // the old scoreboard dies with the run
 
     for (auto& [token, session] : sessions_) {
@@ -629,7 +638,8 @@ void GameServer::reset_run()
     state_ = proto::GameState::Lobby;
     proto::ByteWriter state;
     state.put(proto::MsgType::State);
-    state.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    state.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_),
+                                .world_seed = world_seed_ });
     server_.broadcast(state.bytes(), true);
     broadcast_roster();
     spdlog::info("run reset: back to lobby");
@@ -655,7 +665,8 @@ void GameServer::send_state(std::uint32_t peer_id)
 {
     proto::ByteWriter writer;
     writer.put(proto::MsgType::State);
-    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_) });
+    writer.put(proto::StateMsg{ .state = static_cast<std::uint8_t>(state_),
+                                .world_seed = world_seed_ });
     server_.send(peer_id, writer.bytes(), true);
 }
 

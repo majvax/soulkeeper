@@ -82,6 +82,12 @@
 ---@field downs integer    # times this player went down
 ---@field revives integer  # teammates picked back up
 
+---@class TerrainFields
+---@field seed integer    # per-run world seed (server-rolled; 0 = flat world). Read-only for mods.
+---@field clear_x number  # obstacle-free circle center (arena flattening)
+---@field clear_y number
+---@field clear_r number  # 0 = nothing cleared; core's arena writes the rect's diag radius
+
 -- The kernel prelude (same handles in both VMs). Each carries its field shape so
 -- e:get(Handle) autocompletes (Enemy/Player are membership-only tags: no fields).
 ---@type PositionFields
@@ -116,6 +122,8 @@ Scale = nil
 WaveHold = nil -- membership-only tag: freezes the wave clock + spawning while any entity carries it (put it ON a boss)
 ---@type RunStatsFields
 RunStats = nil -- per-player run scoreboard: mods increment it, the server ships it in GameOver (never snapshotted)
+---@type TerrainFields
+Terrain = nil -- SINGLETON: deterministic-terrain params (seed + the arena clear circle mods may write)
 
 ---Render.kind values for Lua-spawned drawables.
 ---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }
