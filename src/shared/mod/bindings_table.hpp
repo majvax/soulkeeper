@@ -58,7 +58,7 @@ consteval auto engine_components()
         EngineComponent{ ^^Downed, "Downed" },     EngineComponent{ ^^EnemyTag, "Enemy" },
         EngineComponent{ ^^PlayerTag, "Player" },  EngineComponent{ ^^Scale, "Scale" },
         EngineComponent{ ^^WaveHold, "WaveHold" }, EngineComponent{ ^^RunStats, "RunStats" },
-        EngineComponent{ ^^Terrain, "Terrain" },
+        EngineComponent{ ^^Terrain, "Terrain" },   EngineComponent{ ^^Flying, "Flying" },
     };
 }
 

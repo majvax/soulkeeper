@@ -315,9 +315,15 @@ long bone-dry stretches) × a radial ramp (spawn ±1200 px stays dry), plain+for
 (no ice art for snow); water is a HARD WALL for players AND enemies incl. dash —
 `resolve_terrain` ejects downhill on the field gradient (1 step when walking in; spawned-
 in-water entities walk out to shore over ≤48 steps), bullets/orbs fly over as usual;
-ENEMIES SKIRT ponds (`steer_shore` in the terrain phase: probe-ahead along velocity, wet →
-slide along the shore tangent toward the velocity's lean, hash-stable side when dead-on —
-no far-shore pinning; players get no such help, walls are walls under manual control); the
+GROUND enemies SKIRT ponds (`steer_around_water` in the terrain phase: probe-ahead along
+velocity, wet → ROTATE the velocity to the nearest dry heading, whiskers ±35°..±175°,
+preferred side = the shore-tangent lean w/ hash-stable pick when dead-on — walkers arc
+around the shoreline FACING where they walk; the v1 position-slide moonwalked and could
+pin in concave bays; players get no such help, walls are walls under manual control);
+**FLYING enemies cross** — kernel `Flying` tag (prelude handle, enemy def opt
+`flying = true`): the terrain pass skips the bearer entirely (water AND obstacle
+colliders, like bullets) — the Scout monsterfly + its elite fly, which is also the
+Vampire Lord's bat-swarm summon pool crossing on the wing; the
 generator drops obstacles/deco landing wet (shared header = sim & render lockstep);
 materials 5/6 = `tile_water_a/b` (16x16 ripple period tiles cut IN PHASE from the sheet's
 two cross shades — the shade blob gives calm/ripple patchiness) + material 7 = muddy
@@ -348,7 +354,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (110 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (111 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/

@@ -124,6 +124,8 @@ WaveHold = nil -- membership-only tag: freezes the wave clock + spawning while a
 RunStats = nil -- per-player run scoreboard: mods increment it, the server ships it in GameOver (never snapshotted)
 ---@type TerrainFields
 Terrain = nil -- SINGLETON: deterministic-terrain params (seed + the arena clear circle mods may write)
+---@type Component
+Flying = nil -- membership-only tag: the terrain pass skips the bearer — flies over water AND obstacle colliders (enemy def opt `flying = true`)
 
 ---Render.kind values for Lua-spawned drawables.
 ---@type { mover: integer, player: integer, enemy: integer, bullet: integer, orb: integer, heart: integer }

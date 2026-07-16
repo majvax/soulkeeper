@@ -122,9 +122,10 @@ end                                       end
 grid (kernel) → targeting → motion (kernel dash + yours) → shooting → movement (kernel)
              → separation (kernel: enemy anti-cramming) → terrain (kernel: seeded
              obstacle pushout + water ponds, a hard wall for players AND enemies;
-             blocked enemies skirt the shoreline instead of grinding on it — the
-             `Terrain` prelude singleton carries the seed and a clear circle mods
-             may write, e.g. core flattens boss arenas dry) → projectile
+             blocked walkers steer around the shoreline, `Flying` bearers skip the
+             pass entirely (enemy def opt `flying = true`) — the `Terrain` prelude
+             singleton carries the seed and a clear circle mods may write, e.g.
+             core flattens boss arenas dry) → projectile
              → combat → update (default) → pickup → death
 ```
 
@@ -228,7 +229,9 @@ mod:enemy("slinger", "Slinger", {
 ```
 
 Every enemy needs at least `Health` and `Radius` (the server warns otherwise). `on_spawn` in opts
-remains the escape hatch for dynamic per-spawn logic.
+remains the escape hatch for dynamic per-spawn logic. An airborne archetype adds
+`:component(Flying, {})` — the kernel terrain pass then skips it entirely (it crosses water
+and obstacle colliders the way bullets do).
 
 **Boss brains (a core PATTERN, not engine API).** Core's milestone bosses aren't cooldown
 loops: each carries `C.Brain{id}` and its mechanic components are PARKED in the def

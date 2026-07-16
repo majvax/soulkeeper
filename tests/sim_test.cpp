@@ -1748,6 +1748,26 @@ int main()
         const float moved_y = std::abs(lua["_EY"].get<float>() - wy);
         check(enemy_dry && (moved_x > 40.0f || moved_y > 40.0f),
               "a blocked enemy skirts the pond instead of grinding the shore");
+        // A FLYING enemy takes the straight line: the scout must be seen OVER
+        // the water at some tick (exactly what walkers may never do).
+        lua.script(R"(
+            for e in world:each(Enemy) do e:destroy() end
+            local e = spawn_enemy(_WEST, _WY, "core:scout")
+            e:get(Position).x, e:get(Position).y = _WEST, _WY
+        )");
+        bool flew_over = false;
+        for (int i = 0; i < 360 && !flew_over; ++i) {
+            world.step(1.0f / 120.0f);
+            lua.script(R"(
+                for e in world:each(Enemy, Position) do
+                    local ep = e:get(Position)
+                    _EX, _EY = ep.x, ep.y
+                end
+            )");
+            flew_over = shared::map::water_at(12345, lua["_EX"].get<float>(),
+                                              lua["_EY"].get<float>());
+        }
+        check(flew_over, "a flying enemy crosses the pond");
         lua.script(R"(for t in world:each(Terrain) do t:get(Terrain).seed = 0 end)");
         reset();
     }

@@ -78,6 +78,7 @@ return function(mod, C, BRAIN)
             if a.lunge then b:component(C.Lunge, a.lunge) end
             if a.armor then b:component(C.Armor, a.armor) end
             if a.ambush then b:component(C.Ambush, a.ambush) end
+            if a.flying then b:component(Flying, {}) end -- crosses water + colliders
         end
         apply(mod:enemy(a.id, a.label, {
             weight = a.weight, sprite = a.sprite, scale = a.scale, tint = a.tint,
@@ -108,11 +109,12 @@ return function(mod, C, BRAIN)
         weight = function(wave) return math.max(0, wave - 8) * 1.2 end,
         hp = 45, speed = 135, touch = 1, radius = 10, xp = 2,
     }
-    register {
+    register { -- the monsterfly IS airborne: ponds and rocks mean nothing to it
         id = "scout", label = "Scout",
         sprite = "assets/sprite/Monsterfly_01", scale = 0.8,
         weight = function(wave) return math.max(0, wave - 1) * 1.5 end,
         hp = 10, speed = 200, touch = 1, radius = 8, xp = 1,
+        flying = true,
     }
     register {
         id = "mushroom", label = "Mushroom",

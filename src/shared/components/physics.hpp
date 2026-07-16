@@ -17,3 +17,10 @@ struct Speed
 {
     float value = 0.0f;
 }; // movement speed magnitude in pixels/second
+
+// Airborne mover: the terrain pass skips it entirely — flies over water AND
+// obstacle colliders (like bullets already do). An enemy def opts in with
+// `flying = true`; the client draws nothing special, the sprite carries it.
+struct Flying
+{
+};

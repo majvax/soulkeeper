@@ -11,12 +11,14 @@
 // (no tags): shots fly over obstacles, drops can't get stuck in them.
 // Enemies steering into a rock slide around it (radial pushout + targeting's
 // velocity keeps pointing at the player); a pond in the way gets SKIRTED
-// (steer_shore slides them along the shoreline instead of grinding head-on
-// against the water wall — players get no such help, walls are walls).
+// (steer_around_water turns the walk direction to a dry heading — they arc
+// around the shoreline facing where they walk; players get no such help,
+// walls are walls). FLYING enemies skip the whole pass: they cross water and
+// obstacle colliders alike, the way bullets already do.
 class TerrainSystem
 {
 public:
-    void operator()(core::Registry& registry, float dt)
+    void operator()(core::Registry& registry, float /*dt*/)
     {
         const Terrain* terrain = nullptr;
         registry.view<Terrain>().each(
@@ -32,14 +34,13 @@ public:
               resolve(pos, radius);
           });
         registry.view<EnemyTag, Position, Velocity, Radius>().each(
-          [&](core::Entity entity, const EnemyTag&, Position& pos, const Velocity& vel,
+          [&](core::Entity entity, const EnemyTag&, Position& pos, Velocity& vel,
               const Radius& radius) {
+              if (registry.has<Flying>(entity)) { return; } // airborne: no walls
               resolve(pos, radius);
-              if (shared::map::steer_shore(terrain->seed, pos.x, pos.y, vel.dx, vel.dy,
-                                           radius.value, dt, entity, terrain->clear_x,
-                                           terrain->clear_y, terrain->clear_r)) {
-                  resolve(pos, radius); // the slide must not cut a curved shore
-              }
+              shared::map::steer_around_water(terrain->seed, pos.x, pos.y, vel.dx, vel.dy,
+                                              radius.value, entity, terrain->clear_x,
+                                              terrain->clear_y, terrain->clear_r);
           });
     }
 

@@ -300,44 +300,66 @@ inline bool resolve_terrain(ChunkCache& cache, std::uint32_t seed, float& x, flo
     return pushed;
 }
 
-// Shore steering for straight-line walkers (the sim's ENEMIES): when the walk
-// direction dives into a pond just ahead, slide along the shore tangent
-// instead of grinding on the shoreline — the walker rounds the rim until the
-// straight line clears. The side follows the velocity's tangential lean; a
-// dead-on approach picks a stable side from `who` (no per-tick flip-flop).
-// Players are NOT steered — under manual control a wall is just a wall.
-inline bool steer_shore(std::uint32_t seed, float& x, float& y, float vx, float vy,
-                        float radius, float dt, std::uint32_t who, float clear_x = 0.0f,
-                        float clear_y = 0.0f, float clear_r = 0.0f)
+// Water whisker steering for straight-line walkers (the sim's GROUND
+// enemies): when the walk direction dives into a pond just ahead, ROTATE the
+// velocity to the nearest dry heading — walkers arc around the shoreline
+// facing where they walk. (v1 slid the POSITION along the shore tangent: it
+// read as a moonwalk and could still pin in concave bays; turning the walk
+// direction can't.) The turn side follows the velocity's lean along the
+// shore, hash-stable from `who` when dead-on, and the whiskers widen to a
+// near-reverse — on land some heading is always dry. Targeting re-aims at
+// the player a few times a second, so the arc straightens the moment the
+// line clears. Players are NOT steered — a wall is a wall under manual
+// control. Fliers never call this (they cross).
+inline bool steer_around_water(std::uint32_t seed, float x, float y, float& vx, float& vy,
+                               float radius, std::uint32_t who, float clear_x = 0.0f,
+                               float clear_y = 0.0f, float clear_r = 0.0f)
 {
     const float sp2 = (vx * vx) + (vy * vy);
     if (sp2 < 1.0f) { return false; } // parked anchors don't steer
     const float sp = std::sqrt(sp2);
-    const float look = radius + 28.0f;
-    const float px = x + (vx / sp * look);
-    const float py = y + (vy / sp * look);
-    if (clear_r > 0.0f) { // arena ground is dry by decree — nothing to skirt
-        const float cx = px - clear_x;
-        const float cy = py - clear_y;
-        if ((cx * cx) + (cy * cy) < clear_r * clear_r) { return false; }
-    }
-    if (!water_at(seed, px, py)) { return false; }
+    const float look = radius + 44.0f;
+    const auto dry = [&](float hx, float hy) { // unit heading: is `look` ahead dry?
+        const float px = x + (hx * look);
+        const float py = y + (hy * look);
+        if (clear_r > 0.0f) { // arena ground is dry by decree
+            const float cx = px - clear_x;
+            const float cy = py - clear_y;
+            if ((cx * cx) + (cy * cy) < clear_r * clear_r) { return true; }
+        }
+        return !water_at(seed, px, py);
+    };
+    const float hx = vx / sp;
+    const float hy = vy / sp;
+    if (dry(hx, hy)) { return false; }
+    // Preferred turn side = the shore tangent the heading already leans
+    // toward (field gradient sampled at the blocked probe).
+    const float bx = x + (hx * look);
+    const float by = y + (hy * look);
     const float eps = 12.0f;
-    const float gx = water_field(seed, px + eps, py) - water_field(seed, px - eps, py);
-    const float gy = water_field(seed, px, py + eps) - water_field(seed, px, py - eps);
-    float tx = -gy; // shore tangent = perpendicular to the field gradient
-    float ty = gx;
-    const float tlen = std::sqrt((tx * tx) + (ty * ty));
-    if (tlen < 1e-6f) { return false; }
-    tx /= tlen;
-    ty /= tlen;
-    const float lean = (vx * tx) + (vy * ty);
-    const float side = (lean > -0.15f * sp && lean < 0.15f * sp)
-                         ? ((mix(who) & 1U) != 0U ? 1.0f : -1.0f)
-                         : (lean >= 0.0f ? 1.0f : -1.0f);
-    x += tx * side * sp * dt;
-    y += ty * side * sp * dt;
-    return true;
+    const float gx = water_field(seed, bx + eps, by) - water_field(seed, bx - eps, by);
+    const float gy = water_field(seed, bx, by + eps) - water_field(seed, bx, by - eps);
+    const float glen = std::sqrt((gx * gx) + (gy * gy));
+    float lean = 0.0f;
+    if (glen > 1e-6f) { lean = ((hx * -gy) + (hy * gx)) / glen; }
+    const float side = (lean > 0.05f || lean < -0.05f)
+                         ? (lean >= 0.0f ? 1.0f : -1.0f)
+                         : ((mix(who) & 1U) != 0U ? 1.0f : -1.0f);
+    for (float deg = 35.0f; deg <= 176.0f; deg += 35.0f) {
+        for (const float sgn : { side, -side }) {
+            const float ang = deg * 0.017453293f * sgn;
+            const float ca = std::cos(ang);
+            const float sa = std::sin(ang);
+            const float rx = (hx * ca) - (hy * sa);
+            const float ry = (hx * sa) + (hy * ca);
+            if (dry(rx, ry)) {
+                vx = rx * sp;
+                vy = ry * sp;
+                return true;
+            }
+        }
+    }
+    return false; // fully ringed (not possible on land) — the eject still walls
 }
 
 } // namespace shared::map
