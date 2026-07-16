@@ -922,6 +922,7 @@ private:
             for (std::int32_t cj = c0y; cj <= c1y; ++cj) {
                 for (std::int32_t ci = c0x; ci <= c1x; ++ci) {
                     for (const shared::map::Obstacle& ob : terrain_cache_.get(seed, ci, cj)) {
+                        if (ob.kind == 2) { continue; } // ponds are GROUND, not sprites
                         if (clear_r > 0.0f) {
                             const float dx = ob.x - arena_cx_;
                             const float dy = ob.y - arena_cy_;
@@ -1186,11 +1187,11 @@ private:
         { .r = 62, .g = 138, .b = 202, .a = 255 },  { .r = 150, .g = 120, .b = 80, .a = 255 },
     };
 
-    // Ground material at a world position: ponds first (their light/dark
-    // ripple shade reuses the same blob as sand/snow, ringed by a muddy shore
-    // band), then forest = grass; plain/snow pick their light/dark shade tile.
-    // The clear circle (ccr > 0) suppresses water — arena chunks compose the
-    // biome floor where the sim also skips the water wall.
+    // Ground material at a world position: the chunk's pond disc first (its
+    // light/dark ripple shade reuses the same blob as sand/snow, ringed by a
+    // muddy shore band), then forest = grass; plain/snow pick their light/dark
+    // shade tile. The clear circle (ccr > 0) suppresses water — arena chunks
+    // compose the biome floor where the sim also skips the water wall.
     static std::uint8_t material_at(std::uint32_t seed, float x, float y, float ccx = 0.0f,
                                     float ccy = 0.0f, float ccr = 0.0f)
     {
@@ -1198,9 +1199,16 @@ private:
           ccr > 0.0f && ((x - ccx) * (x - ccx)) + ((y - ccy) * (y - ccy)) < ccr * ccr;
         const bool dark = shared::map::vnoise(seed, x, y, 21) > 0.55f;
         if (!cleared) {
-            const float water = shared::map::water_field(seed, x, y);
-            if (water > shared::map::water_threshold) { return dark ? 6 : 5; }
-            if (water > shared::map::water_threshold - 0.03f) { return 7; }
+            const shared::map::Pond pond = shared::map::pond_in(
+              seed, static_cast<std::int32_t>(std::floor(x / shared::map::chunk_size)),
+              static_cast<std::int32_t>(std::floor(y / shared::map::chunk_size)));
+            if (pond.r > 0.0f) {
+                const float d2 =
+                  ((x - pond.x) * (x - pond.x)) + ((y - pond.y) * (y - pond.y));
+                if (d2 < pond.r * pond.r) { return dark ? 6 : 5; }
+                const float shore = pond.r + 14.0f;
+                if (d2 < shore * shore) { return 7; }
+            }
         }
         const std::uint8_t biome = shared::map::biome_at(seed, x, y);
         if (biome == 1) { return 0; }

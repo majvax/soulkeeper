@@ -47,8 +47,8 @@ src/
                    #   (seed, chunk) — server & client derive the SAME obstacles/deco/biomes,
                    #   zero net traffic; 512px chunks, 0-2 colliders each (tree trunk r 9-12 /
                    #   rock r 13-20), origin ±1 chunk stays EMPTY (spawn), ChunkCache memoizes,
-                   #   resolve_terrain skips a CLEAR CIRCLE (arena flattening) and hard-
-                   #   ejects out of water_at ponds (gradient descent to shore))
+                   #   ponds = CIRCULAR kind-2 obstacles (convex: no steering pockets),
+                   #   resolve_terrain skips a CLEAR CIRCLE (arena flattening))
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
     factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
     sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
@@ -308,29 +308,28 @@ pieces/chunk, plain 3-9 tufts+flowers, snow 1-5 sparse; pond rims grow SHORE REE
 extra deco rolls that only stick in the band just above the waterline) — shared header,
 so sim collision matches) and trees wear their region's FAMILY (`tree_forest/plain/snow_NN`
 — the frozen crowns live only in snowfields; snow stumps frost too) · **WATER** (shipped):
-`water_field/water_at` in the shared header — pond-scale blobs (~150-400 px: NO kiting
-loops or dash-escape islands, a deliberate design call) = high-threshold 410px-feature
-`vnoise` × a very-low-freq WETLAND mask (ponds cluster in districts, ~1.5-3% coverage,
-long bone-dry stretches) × a radial ramp (spawn ±1200 px stays dry), plain+forest only
-(no ice art for snow); water is a HARD WALL for players AND enemies incl. dash —
-`resolve_terrain` ejects downhill on the field gradient (1 step when walking in; spawned-
-in-water entities walk out to shore over ≤48 steps), bullets/orbs fly over as usual;
-GROUND enemies SKIRT ponds (`steer_around_water` in the terrain phase: probe-ahead along
-velocity, wet → ROTATE the velocity to the nearest dry heading, whiskers ±35°..±175°,
-preferred side = the shore-tangent lean w/ hash-stable pick when dead-on — walkers arc
-around the shoreline FACING where they walk; the v1 position-slide moonwalked and could
-pin in concave bays; players get no such help, walls are walls under manual control);
-**FLYING enemies cross** — kernel `Flying` tag (prelude handle, enemy def opt
-`flying = true`): the terrain pass skips the bearer entirely (water AND obstacle
-colliders, like bullets) — the Scout monsterfly + its elite fly, which is also the
-Vampire Lord's bat-swarm summon pool crossing on the wing; the
-generator drops obstacles/deco landing wet (shared header = sim & render lockstep);
-materials 5/6 = `tile_water_a/b` (16x16 ripple period tiles cut IN PHASE from the sheet's
-two cross shades — the shade blob gives calm/ripple patchiness) + material 7 = muddy
-`tile_dirt` SHORE band (field within 0.03 of threshold), the standard 4px dither blends
-land→shore→water; boss arenas stay dry BOTH sides: the sim's clear circle skips the water
-eject and arena-touched chunks compose a water-suppressed VARIANT into a separate cache
-(originals return untouched when the wall drops) · art =
+ponds are CIRCLES by design (`pond_in/water_at` in the shared header, 0-1 per chunk,
+r 80-200, CONTAINED in its chunk so ponds never merge) — v1 grew organic noise-blobs and
+organic means CONCAVE: walkers pocketed in L-corners no matter how the reactive steering
+was tuned; a circle is convex = provably pocket-free, and it collides EXACTLY like a rock
+(the pond is a **kind-2 Obstacle** through the SAME `resolve_terrain` pushout — no special
+water collision path at all; the client draws it as GROUND, not a sprite). A very-low-freq
+WETLAND gate clusters ponds in districts (~2% coverage, long dry stretches, denser when
+wetter), plain+forest only, spawn ±2 chunks dry; HARD WALL for players AND enemies incl.
+dash, bullets/orbs fly over; GROUND enemies take the EXACT TANGENT around a blocking disc
+(`steer_around_water`: heading's ray cuts a pond within ~220 px → rotate velocity onto
+the graze tangent (asin(reach/d)), side = the side the ray already passes the center on,
+hash-stable when dead-on — smooth arcs, facing follows the walk; players are never
+steered); **FLYING enemies cross** — kernel `Flying` tag (prelude handle, enemy def opt
+`flying = true`) skips the terrain pass entirely (water AND colliders, like bullets) —
+the Scout monsterfly + elite fly (also the Vampire Lord's bat-swarm summon pool);
+trees/rocks/deco keep off the pond + shore band, a scattered REED RING (7-12 tufts) hugs
+each rim; materials 5/6 = `tile_water_a/b` (16x16 ripple period tiles cut IN PHASE from
+the sheet's two cross shades — the shade blob gives calm/ripple patchiness) + material 7
+= muddy `tile_dirt` SHORE annulus (r..r+14), the standard 4px dither blends
+land→shore→water; boss arenas stay dry BOTH sides: the clear circle skips pond colliders
+like any obstacle and arena-touched chunks compose a water-suppressed VARIANT into a
+separate cache (originals return untouched when the wall drops) · art =
 `assets/map/` (auto-sliced from the natural half of the old Environment pack via
 alpha-island segmentation + hue classification: 20 forest/27 plain/4 snow trees, 6 rocks,
 23 bushes, 60 plants, 27 pebbles, 6+2 stumps, 8 ground patches, 5 base tiles +

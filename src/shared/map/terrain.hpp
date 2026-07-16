@@ -21,7 +21,7 @@ struct Obstacle
 {
     float x, y;
     float r;
-    std::uint8_t kind; // 0 = tree (trunk), 1 = rock (footprint)
+    std::uint8_t kind; // 0 = tree (trunk), 1 = rock (footprint), 2 = pond (water disc)
 };
 
 // Ground decoration (client-only use, but generated here so it stays seeded):
@@ -95,30 +95,50 @@ inline std::uint8_t biome_at(std::uint32_t seed, float x, float y)
     return static_cast<std::uint8_t>(mix(chunk_key(bx, by) ^ seed) % 3U);
 }
 
-// Pond field in [0, 1): water wherever it crosses water_threshold. PONDS, not
-// lakes — small blobs (~150-400 px) so routing around one is no better than
-// rounding a rock cluster (no kiting loops, no dash-escape islands). Plain +
-// forest only (no ice art for snowfields), and a radial ramp keeps the spawn
-// neighborhood dry. Water is a HARD WALL for players and enemies (resolved
-// below); bullets and orbs fly over like everything else.
-inline constexpr float water_threshold = 0.78f;
-
-inline float water_field(std::uint32_t seed, float x, float y)
+// Pond of one chunk (0 or 1): CIRCULAR by design. The v1 noise-blob field
+// grew organic shapes, and organic means CONCAVE — walkers pocketed in the
+// inner corner of an L-shaped pond no matter how the steering was tuned
+// (reactive steering is memoryless; only convex shorelines are pocket-free).
+// A circle is convex, collides EXACTLY like the rocks (it becomes a kind-2
+// obstacle below), and tangent steering around it provably progresses.
+// Contained in its own chunk (center margin > radius), so ponds never merge
+// into concave unions and a point's water test only needs ITS chunk. The
+// wetland gate (very low-freq noise) keeps ponds clustered in districts;
+// plain + forest only; the spawn neighborhood (±2 chunks) stays dry.
+struct Pond
 {
-    if (biome_at(seed, x, y) == 2) { return 0.0f; } // snowfields stay dry
-    const float d = std::sqrt((x * x) + (y * y));
-    const float ramp = std::fmin(std::fmax((d - 1200.0f) / 600.0f, 0.0f), 1.0f);
-    if (ramp <= 0.0f) { return 0.0f; }
-    // Wetland mask (very low frequency): ponds cluster in districts with long
-    // bone-dry stretches between — not a uniform swamp pepper.
-    const float wet = std::fmin(std::fmax((vnoise(seed, x * 0.6f, y * 0.6f, 37) - 0.50f) / 0.20f, 0.0f), 1.0f);
-    if (wet <= 0.0f) { return 0.0f; }
-    return vnoise(seed, x * 2.5f, y * 2.5f, 31) * wet * ramp; // ~410 px noise features
+    float x = 0.0f, y = 0.0f;
+    float r = 0.0f; // 0 = this chunk has no pond
+};
+
+inline Pond pond_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy)
+{
+    if (cx >= -2 && cx <= 2 && cy >= -2 && cy <= 2) { return {}; } // spawn + margin
+    const float mx = (static_cast<float>(cx) + 0.5f) * chunk_size;
+    const float my = (static_cast<float>(cy) + 0.5f) * chunk_size;
+    if (biome_at(seed, mx, my) == 2) { return {}; } // snowfields stay dry
+    const float wet = vnoise(seed, mx * 0.6f, my * 0.6f, 37);
+    if (wet < 0.58f) { return {}; }                                   // dry district
+    if (roll(seed, cx, cy, 50) > (wet - 0.58f) * 1.4f) { return {}; } // denser when wetter
+    const float r = 80.0f + (roll(seed, cx, cy, 51) * 120.0f);        // 80-200 px
+    const float margin = r + 40.0f; // contained + room for the shore band
+    return Pond{
+        .x = (static_cast<float>(cx) * chunk_size) + margin
+             + (roll(seed, cx, cy, 52) * (chunk_size - (2.0f * margin))),
+        .y = (static_cast<float>(cy) * chunk_size) + margin
+             + (roll(seed, cx, cy, 53) * (chunk_size - (2.0f * margin))),
+        .r = r,
+    };
 }
 
 inline bool water_at(std::uint32_t seed, float x, float y)
 {
-    return water_field(seed, x, y) > water_threshold;
+    const Pond pond = pond_in(seed, static_cast<std::int32_t>(std::floor(x / chunk_size)),
+                              static_cast<std::int32_t>(std::floor(y / chunk_size)));
+    if (pond.r <= 0.0f) { return false; }
+    const float dx = x - pond.x;
+    const float dy = y - pond.y;
+    return (dx * dx) + (dy * dy) < pond.r * pond.r;
 }
 
 // Obstacles of one chunk. The spawn neighborhood (|cx|,|cy| <= 1 — players
@@ -131,6 +151,12 @@ inline void obstacles_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy,
     if (cx >= -1 && cx <= 1 && cy >= -1 && cy <= 1) { return; }
     const float base_x = static_cast<float>(cx) * chunk_size;
     const float base_y = static_cast<float>(cy) * chunk_size;
+    // The pond IS a collider: same hard circle pushout as the rocks, drawn as
+    // water by the client's ground compositor instead of a sprite.
+    const Pond pond = pond_in(seed, cx, cy);
+    if (pond.r > 0.0f) {
+        out.push_back(Obstacle{ .x = pond.x, .y = pond.y, .r = pond.r, .kind = 2 });
+    }
     const std::uint8_t biome =
       biome_at(seed, base_x + (chunk_size * 0.5f), base_y + (chunk_size * 0.5f));
     const float density = roll(seed, cx, cy, 0);
@@ -152,7 +178,12 @@ inline void obstacles_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy,
         const float x = base_x + 40.0f + (roll(seed, cx, cy, salt + 1) * (chunk_size - 80.0f));
         const float y = base_y + 40.0f + (roll(seed, cx, cy, salt + 2) * (chunk_size - 80.0f));
         // nothing grows in (or right at) a pond — margin keeps trunks off the shore band
-        if (water_field(seed, x, y) > water_threshold - 0.02f) { continue; }
+        if (pond.r > 0.0f) {
+            const float dx = x - pond.x;
+            const float dy = y - pond.y;
+            const float keep = pond.r + 26.0f;
+            if ((dx * dx) + (dy * dy) < keep * keep) { continue; }
+        }
         out.push_back(Obstacle{
           .x = x,
           .y = y,
@@ -182,12 +213,17 @@ inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::v
     const int count = biome == 1 ? 5 + static_cast<int>(croll * 8.0f)   // forest 5-12
                     : biome == 2 ? 1 + static_cast<int>(croll * 5.0f)   // snow   1-5
                                  : 3 + static_cast<int>(croll * 7.0f);  // plain  3-9
+    const Pond pond = pond_in(seed, cx, cy);
     for (int i = 0; i < count; ++i) {
         const auto salt = static_cast<std::uint32_t>(101 + (i * 3));
         const float pick = roll(seed, cx, cy, salt);
         const float x = static_cast<float>(cx) * chunk_size + (roll(seed, cx, cy, salt + 1) * chunk_size);
         const float y = static_cast<float>(cy) * chunk_size + (roll(seed, cx, cy, salt + 2) * chunk_size);
-        if (water_at(seed, x, y)) { continue; } // shore deco ok, floating deco not
+        if (pond.r > 0.0f) { // shore deco ok, floating deco not
+            const float dx = x - pond.x;
+            const float dy = y - pond.y;
+            if ((dx * dx) + (dy * dy) < pond.r * pond.r) { continue; }
+        }
         out.push_back(Deco{
           .x = x,
           .y = y,
@@ -197,20 +233,21 @@ inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::v
                                 : std::uint8_t{ 3 },  // stump
         });
     }
-    // Shore reeds: extra rolls that only stick when they land in the band just
-    // above the waterline — pond rims grow lush, dry chunks pay nothing.
-    for (int i = 0; i < 10; ++i) {
-        const auto salt = static_cast<std::uint32_t>(301 + (i * 3));
-        const float x = static_cast<float>(cx) * chunk_size + (roll(seed, cx, cy, salt + 1) * chunk_size);
-        const float y = static_cast<float>(cy) * chunk_size + (roll(seed, cx, cy, salt + 2) * chunk_size);
-        const float f = water_field(seed, x, y);
-        if (f < water_threshold - 0.06f || f >= water_threshold - 0.005f) { continue; }
-        out.push_back(Deco{
-          .x = x,
-          .y = y,
-          .kind = roll(seed, cx, cy, salt) < 0.8f ? std::uint8_t{ 0 }  // reed tuft
-                                                  : std::uint8_t{ 1 }, // wet pebble
-        });
+    // Shore reeds: a scattered ring of tufts (and the odd pebble) hugging the
+    // pond rim — the shoreline reads lush, dry chunks pay nothing.
+    if (pond.r > 0.0f) {
+        const int reeds = 7 + static_cast<int>(roll(seed, cx, cy, 300) * 6.0f); // 7-12
+        for (int i = 0; i < reeds; ++i) {
+            const auto salt = static_cast<std::uint32_t>(301 + (i * 3));
+            const float ang = roll(seed, cx, cy, salt + 1) * 6.2831853f;
+            const float rad = pond.r + 10.0f + (roll(seed, cx, cy, salt + 2) * 22.0f);
+            out.push_back(Deco{
+              .x = pond.x + (std::cos(ang) * rad),
+              .y = pond.y + (std::sin(ang) * rad),
+              .kind = roll(seed, cx, cy, salt) < 0.8f ? std::uint8_t{ 0 }  // reed tuft
+                                                      : std::uint8_t{ 1 }, // wet pebble
+            });
+        }
     }
 }
 
@@ -269,97 +306,79 @@ inline bool resolve_terrain(ChunkCache& cache, std::uint32_t seed, float& x, flo
             }
         }
     }
-    // Water is a hard wall too: eject downhill on the field gradient to the
-    // nearest shore. The normal case is ONE small step (entities move a few
-    // px per tick); the long loop only fires for spawned-in-water entities
-    // (wave offsets, POI crates), and walking them out to the shore is the
-    // behavior we want. Inside the clear circle water is suppressed exactly
-    // like obstacles — boss arenas fight on dry ground.
-    const auto in_clear = [&](float px, float py) {
-        if (clear_r <= 0.0f) { return false; }
-        const float dx = px - clear_x;
-        const float dy = py - clear_y;
-        return (dx * dx) + (dy * dy) < clear_r * clear_r;
-    };
-    if (!in_clear(x, y)) {
-        for (int step = 0; step < 48 && water_at(seed, x, y); ++step) {
-            const float eps = 12.0f;
-            const float gx = water_field(seed, x + eps, y) - water_field(seed, x - eps, y);
-            const float gy = water_field(seed, x, y + eps) - water_field(seed, x, y - eps);
-            const float len = std::sqrt((gx * gx) + (gy * gy));
-            if (len < 1e-6f) { // flat gradient (vnoise saddle): march +X
-                x += 8.0f;
-            } else {
-                x -= gx / len * 8.0f;
-                y -= gy / len * 8.0f;
-            }
-            pushed = true;
-            if (in_clear(x, y)) { break; } // reached arena ground: dry by decree
-        }
-    }
     return pushed;
 }
 
-// Water whisker steering for straight-line walkers (the sim's GROUND
-// enemies): when the walk direction dives into a pond just ahead, ROTATE the
-// velocity to the nearest dry heading — walkers arc around the shoreline
-// facing where they walk. (v1 slid the POSITION along the shore tangent: it
-// read as a moonwalk and could still pin in concave bays; turning the walk
-// direction can't.) The turn side follows the velocity's lean along the
-// shore, hash-stable from `who` when dead-on, and the whiskers widen to a
-// near-reverse — on land some heading is always dry. Targeting re-aims at
-// the player a few times a second, so the arc straightens the moment the
-// line clears. Players are NOT steered — a wall is a wall under manual
-// control. Fliers never call this (they cross).
-inline bool steer_around_water(std::uint32_t seed, float x, float y, float& vx, float& vy,
-                               float radius, std::uint32_t who, float clear_x = 0.0f,
-                               float clear_y = 0.0f, float clear_r = 0.0f)
+// Tangent steering around ponds for the sim's GROUND enemies. Ponds are
+// CIRCLES, so a blocked walk direction has an exact answer: rotate the
+// velocity onto the disc's tangent and skim the shoreline. Convex means no
+// pockets — this provably progresses where the old whiskers oscillated in
+// the L-corners of the noise-blob ponds. The graze side follows the side
+// the heading already passes the center on, hash-stable from `who` when
+// dead-on. Players are NOT steered (a wall is a wall under manual control);
+// fliers never reach this (they skip the terrain pass).
+inline bool steer_around_water(ChunkCache& cache, std::uint32_t seed, float x, float y,
+                               float& vx, float& vy, float radius, std::uint32_t who,
+                               float clear_x = 0.0f, float clear_y = 0.0f,
+                               float clear_r = 0.0f)
 {
     const float sp2 = (vx * vx) + (vy * vy);
     if (sp2 < 1.0f) { return false; } // parked anchors don't steer
     const float sp = std::sqrt(sp2);
-    const float look = radius + 44.0f;
-    const auto dry = [&](float hx, float hy) { // unit heading: is `look` ahead dry?
-        const float px = x + (hx * look);
-        const float py = y + (hy * look);
-        if (clear_r > 0.0f) { // arena ground is dry by decree
-            const float cx = px - clear_x;
-            const float cy = py - clear_y;
-            if ((cx * cx) + (cy * cy) < clear_r * clear_r) { return true; }
-        }
-        return !water_at(seed, px, py);
-    };
     const float hx = vx / sp;
     const float hy = vy / sp;
-    if (dry(hx, hy)) { return false; }
-    // Preferred turn side = the shore tangent the heading already leans
-    // toward (field gradient sampled at the blocked probe).
-    const float bx = x + (hx * look);
-    const float by = y + (hy * look);
-    const float eps = 12.0f;
-    const float gx = water_field(seed, bx + eps, by) - water_field(seed, bx - eps, by);
-    const float gy = water_field(seed, bx, by + eps) - water_field(seed, bx, by - eps);
-    const float glen = std::sqrt((gx * gx) + (gy * gy));
-    float lean = 0.0f;
-    if (glen > 1e-6f) { lean = ((hx * -gy) + (hy * gx)) / glen; }
-    const float side = (lean > 0.05f || lean < -0.05f)
-                         ? (lean >= 0.0f ? 1.0f : -1.0f)
-                         : ((mix(who) & 1U) != 0U ? 1.0f : -1.0f);
-    for (float deg = 35.0f; deg <= 176.0f; deg += 35.0f) {
-        for (const float sgn : { side, -side }) {
-            const float ang = deg * 0.017453293f * sgn;
-            const float ca = std::cos(ang);
-            const float sa = std::sin(ang);
-            const float rx = (hx * ca) - (hy * sa);
-            const float ry = (hx * sa) + (hy * ca);
-            if (dry(rx, ry)) {
-                vx = rx * sp;
-                vy = ry * sp;
-                return true;
+    // Nearest pond whose disc the current heading would cut into.
+    const Obstacle* block = nullptr;
+    float block_gap = 1e9f;
+    float block_reach = 0.0f;
+    const auto ccx = static_cast<std::int32_t>(std::floor(x / chunk_size));
+    const auto ccy = static_cast<std::int32_t>(std::floor(y / chunk_size));
+    for (std::int32_t j = ccy - 1; j <= ccy + 1; ++j) {
+        for (std::int32_t i = ccx - 1; i <= ccx + 1; ++i) {
+            for (const Obstacle& ob : cache.get(seed, i, j)) {
+                if (ob.kind != 2) { continue; }
+                if (clear_r > 0.0f) { // arena water is dry by decree
+                    const float ax = ob.x - clear_x;
+                    const float ay = ob.y - clear_y;
+                    if ((ax * ax) + (ay * ay) < clear_r * clear_r) { continue; }
+                }
+                const float reach = ob.r + radius + 8.0f; // graze radius
+                const float cx = ob.x - x;
+                const float cy = ob.y - y;
+                const float d = std::sqrt((cx * cx) + (cy * cy));
+                if (d - reach > 220.0f) { continue; }         // too far to matter yet
+                if ((hx * cx) + (hy * cy) <= 0.0f) { continue; } // pond is behind
+                const float perp = (hx * cy) - (hy * cx);     // center offset from the ray
+                if (perp >= reach || perp <= -reach) { continue; } // ray misses it
+                if (d - reach < block_gap) {
+                    block_gap = d - reach;
+                    block = &ob;
+                    block_reach = reach;
+                }
             }
         }
     }
-    return false; // fully ringed (not possible on land) — the eject still walls
+    if (block == nullptr) { return false; }
+    const float cx = block->x - x;
+    const float cy = block->y - y;
+    const float d = std::sqrt((cx * cx) + (cy * cy));
+    if (d < 1e-3f) { return false; } // pushout owns this case
+    // Tangent from an external point: rotate unit(center) by ±asin(reach/d).
+    // Sign +asin keeps the center on the RIGHT of travel; pick the side the
+    // heading already favors (sign of the perpendicular offset).
+    const float perp = (hx * cy) - (hy * cx);
+    const float side = (perp < -0.05f * d) ? 1.0f
+                     : (perp > 0.05f * d)  ? -1.0f
+                                           : ((mix(who) & 1U) != 0U ? 1.0f : -1.0f);
+    const float sin_a = std::fmin(block_reach / d, 0.999f);
+    const float cos_a = std::sqrt(1.0f - (sin_a * sin_a));
+    const float ux = cx / d;
+    const float uy = cy / d;
+    const float rx = (ux * cos_a) - (uy * sin_a * side);
+    const float ry = (ux * sin_a * side) + (uy * cos_a);
+    vx = rx * sp;
+    vy = ry * sp;
+    return true;
 }
 
 } // namespace shared::map

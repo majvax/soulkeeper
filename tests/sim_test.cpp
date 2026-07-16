@@ -1594,16 +1594,16 @@ int main()
 
     // --- Scenario 66: water — deterministic ponds, dry spawn, hard walls -----
     {
-        // Find a pond of seed 12345 (scan outward past the spawn ramp).
+        // Find a pond of seed 12345 (scan chunks outward past the spawn area);
+        // the probe point is its exact center — as deep as water gets.
         float wx = 0.0f;
         float wy = 0.0f;
         bool found = false;
-        for (float y = 1600.0f; y < 20000.0f && !found; y += 48.0f) {
-            for (float x = 1600.0f; x < 20000.0f && !found; x += 48.0f) {
-                if (shared::map::water_field(12345, x, y)
-                    > shared::map::water_threshold + 0.015f) { // deep-ish, not shore
-                    wx = x;
-                    wy = y;
+        for (std::int32_t j = 3; j < 40 && !found; ++j) {
+            for (std::int32_t i = 3; i < 40 && !found; ++i) {
+                if (const auto pond = shared::map::pond_in(12345, i, j); pond.r > 0.0f) {
+                    wx = pond.x;
+                    wy = pond.y;
                     found = true;
                 }
             }
@@ -1625,6 +1625,7 @@ int main()
                 }
             }
             for (const auto& ob : obs) {
+                if (ob.kind == 2) { continue; } // the pond collider IS the water
                 if (shared::map::water_at(12345, ob.x, ob.y)) { return false; }
             }
             return !obs.empty();

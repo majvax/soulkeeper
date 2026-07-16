@@ -38,8 +38,8 @@ public:
               const Radius& radius) {
               if (registry.has<Flying>(entity)) { return; } // airborne: no walls
               resolve(pos, radius);
-              shared::map::steer_around_water(terrain->seed, pos.x, pos.y, vel.dx, vel.dy,
-                                              radius.value, entity, terrain->clear_x,
+              shared::map::steer_around_water(cache_, terrain->seed, pos.x, pos.y, vel.dx,
+                                              vel.dy, radius.value, entity, terrain->clear_x,
                                               terrain->clear_y, terrain->clear_r);
           });
     }
