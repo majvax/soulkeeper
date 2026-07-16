@@ -121,8 +121,9 @@ end                                       end
 ```
 grid (kernel) → targeting → motion (kernel dash + yours) → shooting → movement (kernel)
              → separation (kernel: enemy anti-cramming) → terrain (kernel: seeded
-             obstacle pushout + water ponds, a hard wall for players AND enemies —
-             the `Terrain` prelude singleton carries the seed and a clear circle mods
+             obstacle pushout + water ponds, a hard wall for players AND enemies;
+             blocked enemies skirt the shoreline instead of grinding on it — the
+             `Terrain` prelude singleton carries the seed and a clear circle mods
              may write, e.g. core flattens boss arenas dry) → projectile
              → combat → update (default) → pickup → death
 ```

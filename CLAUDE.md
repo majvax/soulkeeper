@@ -303,7 +303,9 @@ SDL_SetRenderClipRect with tile sources anchored to WORLD coords (patterns run c
 across cells and chunk borders); ANY material change (biome OR shade) dithers with 4px
 squares of both sides; sparse dirt-on-grass / gravel-on-snow specks; the GENERATOR is
 biome-aware too (forest 1-4 obstacles/chunk tree_p .85 — reads as WOODS; plain 0-1 open,
-snow 0-2 rock-leaning + deco weights per biome — shared header,
+snow 0-2 rock-leaning + deco weights AND density per biome (forest 5-12 undergrowth
+pieces/chunk, plain 3-9 tufts+flowers, snow 1-5 sparse; pond rims grow SHORE REEDS —
+extra deco rolls that only stick in the band just above the waterline) — shared header,
 so sim collision matches) and trees wear their region's FAMILY (`tree_forest/plain/snow_NN`
 — the frozen crowns live only in snowfields; snow stumps frost too) · **WATER** (shipped):
 `water_field/water_at` in the shared header — pond-scale blobs (~150-400 px: NO kiting
@@ -312,7 +314,10 @@ loops or dash-escape islands, a deliberate design call) = high-threshold 410px-f
 long bone-dry stretches) × a radial ramp (spawn ±1200 px stays dry), plain+forest only
 (no ice art for snow); water is a HARD WALL for players AND enemies incl. dash —
 `resolve_terrain` ejects downhill on the field gradient (1 step when walking in; spawned-
-in-water entities walk out to shore over ≤48 steps), bullets/orbs fly over as usual; the
+in-water entities walk out to shore over ≤48 steps), bullets/orbs fly over as usual;
+ENEMIES SKIRT ponds (`steer_shore` in the terrain phase: probe-ahead along velocity, wet →
+slide along the shore tangent toward the velocity's lean, hash-stable side when dead-on —
+no far-shore pinning; players get no such help, walls are walls under manual control); the
 generator drops obstacles/deco landing wet (shared header = sim & render lockstep);
 materials 5/6 = `tile_water_a/b` (16x16 ripple period tiles cut IN PHASE from the sheet's
 two cross shades — the shade blob gives calm/ripple patchiness) + material 7 = muddy
@@ -343,7 +348,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (109 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (110 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/

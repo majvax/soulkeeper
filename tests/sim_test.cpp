@@ -1711,6 +1711,43 @@ int main()
                                                              wx, wy, 300.0f);
             check(!pushed && px == wx && py == wy, "an arena decree dries the pond");
         }
+        // Shore steering: a walker whose straight line dives into the pond is
+        // slid along the rim (never wet, never pinned) — put the player on the
+        // far shore and let the bandit's own targeting drive it into the water.
+        float west = wx;
+        float east = wx;
+        while (shared::map::water_at(12345, west, wy)) { west -= 8.0f; }
+        while (shared::map::water_at(12345, east, wy)) { east += 8.0f; }
+        lua["_EAST"] = east + 60.0f;
+        lua["_WEST"] = west - 20.0f;
+        lua.script(R"(
+            for e in world:each(Enemy) do e:destroy() end
+            for p in world:each(Player, Position, Velocity) do
+                local pp = p:get(Position)
+                pp.x, pp.y = _EAST, _WY
+                local v = p:get(Velocity)
+                v.dx, v.dy = 0, 0
+            end
+            local e = spawn_enemy(_WEST, _WY, "core:bandit")
+            e:get(Position).x, e:get(Position).y = _WEST, _WY
+        )");
+        bool enemy_dry = true;
+        for (int i = 0; i < 240; ++i) { // 2 s: skirting, polled per tick
+            world.step(1.0f / 120.0f);
+            lua.script(R"(
+                for e in world:each(Enemy, Position) do
+                    local ep = e:get(Position)
+                    _EX, _EY = ep.x, ep.y
+                end
+            )");
+            enemy_dry = enemy_dry
+                     && !shared::map::water_at(12345, lua["_EX"].get<float>(),
+                                               lua["_EY"].get<float>());
+        }
+        const float moved_x = lua["_EX"].get<float>() - (west - 20.0f);
+        const float moved_y = std::abs(lua["_EY"].get<float>() - wy);
+        check(enemy_dry && (moved_x > 40.0f || moved_y > 40.0f),
+              "a blocked enemy skirts the pond instead of grinding the shore");
         lua.script(R"(for t in world:each(Terrain) do t:get(Terrain).seed = 0 end)");
         reset();
     }

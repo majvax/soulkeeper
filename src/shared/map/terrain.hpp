@@ -163,9 +163,10 @@ inline void obstacles_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy,
     }
 }
 
-// Ground deco of one chunk (0..5 pieces; purely visual — no collision). Kind
-// weights follow the biome: plains grow tufts, forests undergrowth, snow is
-// pebbles and dead stumps.
+// Ground deco of one chunk (purely visual — no collision). Kind weights and
+// DENSITY follow the biome: plains grow tufts and flowers, forests thick
+// undergrowth, snow stays sparse (pebbles and dead stumps). Ponds grow a
+// ring of shore reeds on top.
 inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::vector<Deco>& out)
 {
     const std::uint8_t biome =
@@ -177,7 +178,10 @@ inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::v
     static constexpr float forest_cut[3] = { 0.40f, 0.50f, 0.85f };
     static constexpr float snow_cut[3] = { 0.15f, 0.70f, 0.75f };
     cut = biome == 1 ? forest_cut : (biome == 2 ? snow_cut : plain_cut);
-    const int count = static_cast<int>(roll(seed, cx, cy, 100) * 6.0f);
+    const float croll = roll(seed, cx, cy, 100);
+    const int count = biome == 1 ? 5 + static_cast<int>(croll * 8.0f)   // forest 5-12
+                    : biome == 2 ? 1 + static_cast<int>(croll * 5.0f)   // snow   1-5
+                                 : 3 + static_cast<int>(croll * 7.0f);  // plain  3-9
     for (int i = 0; i < count; ++i) {
         const auto salt = static_cast<std::uint32_t>(101 + (i * 3));
         const float pick = roll(seed, cx, cy, salt);
@@ -191,6 +195,21 @@ inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::v
                 : pick < cut[1] ? std::uint8_t{ 1 }   // pebble
                 : pick < cut[2] ? std::uint8_t{ 2 }   // bush
                                 : std::uint8_t{ 3 },  // stump
+        });
+    }
+    // Shore reeds: extra rolls that only stick when they land in the band just
+    // above the waterline — pond rims grow lush, dry chunks pay nothing.
+    for (int i = 0; i < 10; ++i) {
+        const auto salt = static_cast<std::uint32_t>(301 + (i * 3));
+        const float x = static_cast<float>(cx) * chunk_size + (roll(seed, cx, cy, salt + 1) * chunk_size);
+        const float y = static_cast<float>(cy) * chunk_size + (roll(seed, cx, cy, salt + 2) * chunk_size);
+        const float f = water_field(seed, x, y);
+        if (f < water_threshold - 0.06f || f >= water_threshold - 0.005f) { continue; }
+        out.push_back(Deco{
+          .x = x,
+          .y = y,
+          .kind = roll(seed, cx, cy, salt) < 0.8f ? std::uint8_t{ 0 }  // reed tuft
+                                                  : std::uint8_t{ 1 }, // wet pebble
         });
     }
 }
@@ -279,6 +298,46 @@ inline bool resolve_terrain(ChunkCache& cache, std::uint32_t seed, float& x, flo
         }
     }
     return pushed;
+}
+
+// Shore steering for straight-line walkers (the sim's ENEMIES): when the walk
+// direction dives into a pond just ahead, slide along the shore tangent
+// instead of grinding on the shoreline — the walker rounds the rim until the
+// straight line clears. The side follows the velocity's tangential lean; a
+// dead-on approach picks a stable side from `who` (no per-tick flip-flop).
+// Players are NOT steered — under manual control a wall is just a wall.
+inline bool steer_shore(std::uint32_t seed, float& x, float& y, float vx, float vy,
+                        float radius, float dt, std::uint32_t who, float clear_x = 0.0f,
+                        float clear_y = 0.0f, float clear_r = 0.0f)
+{
+    const float sp2 = (vx * vx) + (vy * vy);
+    if (sp2 < 1.0f) { return false; } // parked anchors don't steer
+    const float sp = std::sqrt(sp2);
+    const float look = radius + 28.0f;
+    const float px = x + (vx / sp * look);
+    const float py = y + (vy / sp * look);
+    if (clear_r > 0.0f) { // arena ground is dry by decree — nothing to skirt
+        const float cx = px - clear_x;
+        const float cy = py - clear_y;
+        if ((cx * cx) + (cy * cy) < clear_r * clear_r) { return false; }
+    }
+    if (!water_at(seed, px, py)) { return false; }
+    const float eps = 12.0f;
+    const float gx = water_field(seed, px + eps, py) - water_field(seed, px - eps, py);
+    const float gy = water_field(seed, px, py + eps) - water_field(seed, px, py - eps);
+    float tx = -gy; // shore tangent = perpendicular to the field gradient
+    float ty = gx;
+    const float tlen = std::sqrt((tx * tx) + (ty * ty));
+    if (tlen < 1e-6f) { return false; }
+    tx /= tlen;
+    ty /= tlen;
+    const float lean = (vx * tx) + (vy * ty);
+    const float side = (lean > -0.15f * sp && lean < 0.15f * sp)
+                         ? ((mix(who) & 1U) != 0U ? 1.0f : -1.0f)
+                         : (lean >= 0.0f ? 1.0f : -1.0f);
+    x += tx * side * sp * dt;
+    y += ty * side * sp * dt;
+    return true;
 }
 
 } // namespace shared::map
