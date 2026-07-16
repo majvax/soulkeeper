@@ -1592,6 +1592,129 @@ int main()
     lua.script(R"(for t in world:each(Terrain) do t:get(Terrain).seed = 0 end)");
     reset();
 
+    // --- Scenario 66: water — deterministic ponds, dry spawn, hard walls -----
+    {
+        // Find a pond of seed 12345 (scan outward past the spawn ramp).
+        float wx = 0.0f;
+        float wy = 0.0f;
+        bool found = false;
+        for (float y = 1600.0f; y < 20000.0f && !found; y += 48.0f) {
+            for (float x = 1600.0f; x < 20000.0f && !found; x += 48.0f) {
+                if (shared::map::water_field(12345, x, y)
+                    > shared::map::water_threshold + 0.015f) { // deep-ish, not shore
+                    wx = x;
+                    wy = y;
+                    found = true;
+                }
+            }
+        }
+        check(found, "the probe seed has a pond to test against");
+        check([&] { // the radial ramp keeps the whole spawn neighborhood dry
+            for (float y = -1200.0f; y <= 1200.0f; y += 32.0f) {
+                for (float x = -1200.0f; x <= 1200.0f; x += 32.0f) {
+                    if (shared::map::water_at(12345, x, y)) { return false; }
+                }
+            }
+            return true;
+        }(), "the origin spawn area has no water");
+        check([&] { // the generator filter: nothing grows in (or right at) a pond
+            std::vector<shared::map::Obstacle> obs;
+            for (std::int32_t j = 2; j < 30; ++j) {
+                for (std::int32_t i = 2; i < 30; ++i) {
+                    shared::map::obstacles_in(12345, i, j, obs);
+                }
+            }
+            for (const auto& ob : obs) {
+                if (shared::map::water_at(12345, ob.x, ob.y)) { return false; }
+            }
+            return !obs.empty();
+        }(), "no obstacle stands in a pond");
+        // A player dropped mid-pond is walked out to the shore in one tick.
+        lua["_WX"] = wx;
+        lua["_WY"] = wy;
+        lua.script(R"(
+            for t in world:each(Terrain) do t:get(Terrain).seed = 12345 end
+            for p in world:each(Player, Position) do
+                local pp = p:get(Position)
+                pp.x, pp.y = _WX, _WY
+            end
+        )");
+        step(0.1f);
+        const auto player_dry = [&] {
+            lua.script(R"(
+                for p in world:each(Player, Position) do
+                    local pp = p:get(Position)
+                    _PX, _PY = pp.x, pp.y
+                end
+            )");
+            return !shared::map::water_at(12345, lua["_PX"].get<float>(),
+                                          lua["_PY"].get<float>());
+        };
+        check(player_dry(), "a player dropped in a pond is ejected to the shore");
+        // Hard wall: walking INTO the pond grinds on the shore, never enters.
+        lua.script(R"(
+            for p in world:each(Player, Position, Velocity) do
+                local pp = p:get(Position)
+                local v = p:get(Velocity)
+                local dx, dy = _WX - pp.x, _WY - pp.y
+                local len = math.sqrt(dx * dx + dy * dy)
+                v.dx, v.dy = dx / len * 240, dy / len * 240
+            end
+        )");
+        bool stayed_dry = true;
+        for (int i = 0; i < 120; ++i) { // poll per tick: never a wet frame
+            world.step(1.0f / 120.0f);
+            stayed_dry = stayed_dry && player_dry();
+        }
+        check(stayed_dry, "water is a hard wall to walkers");
+        // No dash-crossing either: a burst aimed at the pond center stays dry.
+        lua.script(R"(
+            for p in world:each(Player, Position, Velocity, Dash) do
+                local pp = p:get(Position)
+                local v = p:get(Velocity)
+                v.dx, v.dy = 0, 0
+                local d = p:get(Dash)
+                local dx, dy = _WX - pp.x, _WY - pp.y
+                local len = math.sqrt(dx * dx + dy * dy)
+                d.dir_x, d.dir_y = dx / len, dy / len
+                d.burst_remaining = 0.25
+            end
+        )");
+        stayed_dry = true;
+        for (int i = 0; i < 60; ++i) {
+            world.step(1.0f / 120.0f);
+            stayed_dry = stayed_dry && player_dry();
+        }
+        check(stayed_dry, "a dash cannot cross the water line");
+        // An enemy spawned mid-pond walks out too.
+        lua.script(R"(
+            local e = spawn_enemy(_WX, _WY, "core:bandit")
+            e:get(Position).x, e:get(Position).y = _WX, _WY
+        )");
+        step(0.2f);
+        check(lua_bool(R"(
+            for e in world:each(Enemy, Position) do
+                local ep = e:get(Position)
+                _EX, _EY = ep.x, ep.y
+                return true
+            end
+            return false
+        )") && !shared::map::water_at(12345, lua["_EX"].get<float>(),
+                                      lua["_EY"].get<float>()),
+              "an enemy spawned in a pond is ejected to the shore");
+        // The clear circle suppresses water like it does obstacles.
+        {
+            shared::map::ChunkCache cache;
+            float px = wx;
+            float py = wy;
+            const bool pushed = shared::map::resolve_terrain(cache, 12345, px, py, 12.0f,
+                                                             wx, wy, 300.0f);
+            check(!pushed && px == wx && py == wy, "an arena decree dries the pond");
+        }
+        lua.script(R"(for t in world:each(Terrain) do t:get(Terrain).seed = 0 end)");
+        reset();
+    }
+
     // --- Scenario 64: supply dummy — its own loot table -----------------------
     lua.script(R"(
         local C = import("core")

@@ -1170,39 +1170,59 @@ private:
     // material change (biome OR shade) dithers with 4 px squares of both
     // sides. Accents: dirt specks on grass, gravel specks on snow.
 
-    // Materials: 0 grass, 1 sand light, 2 sand dark, 3 snow light, 4 snow dark.
-    static constexpr const char* mat_paths[5] = {
-        "assets/map/tile_grass.png", "assets/map/tile_sand_a.png", "assets/map/tile_sand_b.png",
-        "assets/map/tile_snow_a.png", "assets/map/tile_snow_b.png",
+    // Materials: 0 grass, 1 sand light, 2 sand dark, 3 snow light, 4 snow dark,
+    // 5 water light, 6 water dark, 7 shore (muddy dirt rim around ponds).
+    static constexpr int mat_count = 8;
+    static constexpr const char* mat_paths[mat_count] = {
+        "assets/map/tile_grass.png",   "assets/map/tile_sand_a.png",
+        "assets/map/tile_sand_b.png",  "assets/map/tile_snow_a.png",
+        "assets/map/tile_snow_b.png",  "assets/map/tile_water_a.png",
+        "assets/map/tile_water_b.png", "assets/map/tile_dirt.png",
     };
-    static constexpr SDL_Color mat_flat[5] = { // fallback if art is missing
+    static constexpr SDL_Color mat_flat[mat_count] = { // fallback if art is missing
         { .r = 60, .g = 122, .b = 8, .a = 255 },    { .r = 240, .g = 195, .b = 145, .a = 255 },
         { .r = 227, .g = 168, .b = 106, .a = 255 }, { .r = 231, .g = 235, .b = 245, .a = 255 },
-        { .r = 200, .g = 210, .b = 233, .a = 255 },
+        { .r = 200, .g = 210, .b = 233, .a = 255 }, { .r = 68, .g = 150, .b = 210, .a = 255 },
+        { .r = 62, .g = 138, .b = 202, .a = 255 },  { .r = 150, .g = 120, .b = 80, .a = 255 },
     };
 
-    // Ground material at a world position: forest = grass; plain/snow pick
-    // their light/dark shade tile from a low-frequency noise blob.
-    static std::uint8_t material_at(std::uint32_t seed, float x, float y)
+    // Ground material at a world position: ponds first (their light/dark
+    // ripple shade reuses the same blob as sand/snow, ringed by a muddy shore
+    // band), then forest = grass; plain/snow pick their light/dark shade tile.
+    // The clear circle (ccr > 0) suppresses water — arena chunks compose the
+    // biome floor where the sim also skips the water wall.
+    static std::uint8_t material_at(std::uint32_t seed, float x, float y, float ccx = 0.0f,
+                                    float ccy = 0.0f, float ccr = 0.0f)
     {
+        const bool cleared =
+          ccr > 0.0f && ((x - ccx) * (x - ccx)) + ((y - ccy) * (y - ccy)) < ccr * ccr;
+        const bool dark = shared::map::vnoise(seed, x, y, 21) > 0.55f;
+        if (!cleared) {
+            const float water = shared::map::water_field(seed, x, y);
+            if (water > shared::map::water_threshold) { return dark ? 6 : 5; }
+            if (water > shared::map::water_threshold - 0.03f) { return 7; }
+        }
         const std::uint8_t biome = shared::map::biome_at(seed, x, y);
         if (biome == 1) { return 0; }
-        const bool dark = shared::map::vnoise(seed, x, y, 21) > 0.55f;
         return biome == 2 ? (dark ? 4 : 3) : (dark ? 2 : 1);
     }
 
+    // ccr > 0 composes the ARENA variant of the chunk (water suppressed inside
+    // the clear circle) into its own cache — originals stay cached and take
+    // over again the moment the arena drops.
     SDL_Texture* ground_chunk(SDL_Renderer* r, std::int32_t ci, std::int32_t cj,
-                              std::uint32_t seed)
+                              std::uint32_t seed, float ccx = 0.0f, float ccy = 0.0f,
+                              float ccr = 0.0f)
     {
         if (ground_seed_ != seed) {
             ground_cache_.clear();
+            arena_ground_cache_.clear();
             ground_seed_ = seed;
         }
+        auto& cache = ccr > 0.0f ? arena_ground_cache_ : ground_cache_;
         const std::uint64_t key = shared::map::chunk_key(ci, cj);
-        if (const auto it = ground_cache_.find(key); it != ground_cache_.end()) {
-            return it->second.get();
-        }
-        if (ground_cache_.size() > 96) { ground_cache_.clear(); } // ~1 MB each; recompose is cheap
+        if (const auto it = cache.find(key); it != cache.end()) { return it->second.get(); }
+        if (cache.size() > 96) { cache.clear(); } // ~1 MB each; recompose is cheap
         const auto side = static_cast<int>(shared::map::chunk_size);
         SDL_Texture* tex =
           SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, side, side);
@@ -1221,8 +1241,8 @@ private:
 
         constexpr int cell = 16;
         constexpr int cells = static_cast<int>(shared::map::chunk_size) / cell; // 32
-        SDL_Texture* mat_tex[5];
-        for (int m = 0; m < 5; ++m) { mat_tex[m] = textures_.get(mat_paths[m]); }
+        SDL_Texture* mat_tex[mat_count];
+        for (int m = 0; m < mat_count; ++m) { mat_tex[m] = textures_.get(mat_paths[m]); }
 
         // Material per sub-cell (sampled at cell centers, in WORLD space).
         std::array<std::uint8_t, static_cast<std::size_t>(cells * cells)> mat{};
@@ -1230,7 +1250,7 @@ private:
             for (int i = 0; i < cells; ++i) {
                 mat[static_cast<std::size_t>((j * cells) + i)] = material_at(
                   seed, wx0 + ((static_cast<float>(i) + 0.5f) * cell),
-                  wy0 + ((static_cast<float>(j) + 0.5f) * cell));
+                  wy0 + ((static_cast<float>(j) + 0.5f) * cell), ccx, ccy, ccr);
             }
         }
 
@@ -1279,7 +1299,7 @@ private:
                 return mat[static_cast<std::size_t>((j * cells) + i)];
             }
             return material_at(seed, wx0 + ((static_cast<float>(i) + 0.5f) * cell),
-                               wy0 + ((static_cast<float>(j) + 0.5f) * cell));
+                               wy0 + ((static_cast<float>(j) + 0.5f) * cell), ccx, ccy, ccr);
         };
         const auto square4 = [&](std::uint8_t m, float dx, float dy) {
             if (dx < 0.0f || dy < 0.0f || dx > shared::map::chunk_size - 4.0f
@@ -1328,8 +1348,8 @@ private:
         for (int k = 0; k < 26; ++k) {
             const float dx = next() * (shared::map::chunk_size - 5.0f);
             const float dy = next() * (shared::map::chunk_size - 5.0f);
-            const std::uint8_t m = material_at(seed, wx0 + dx, wy0 + dy);
-            SDL_Texture* speck = m == 0 ? dirt : (m >= 3 ? gravel : nullptr);
+            const std::uint8_t m = material_at(seed, wx0 + dx, wy0 + dy, ccx, ccy, ccr);
+            SDL_Texture* speck = m == 0 ? dirt : (m == 3 || m == 4 ? gravel : nullptr);
             if (speck == nullptr || next() < 0.55f) { continue; }
             float tw = 0.0f;
             float th = 0.0f;
@@ -1342,7 +1362,7 @@ private:
 
         SDL_SetRenderTarget(r, nullptr);
         SDL_Texture* raw = tex;
-        ground_cache_.emplace(key, client::TexturePtr{ tex });
+        cache.emplace(key, client::TexturePtr{ tex });
         return raw;
     }
 
@@ -1350,6 +1370,28 @@ private:
                      float oy)
     {
         const std::uint32_t seed = engine_->session().world_seed();
+        // Arena clear circle (same radius as the sim + prediction resolve).
+        // Chunks it touches compose a water-suppressed variant; a new/ended
+        // arena invalidates those variants only.
+        const float ccr =
+          arena_active_ ? std::sqrt((arena_hw_ * arena_hw_) + (arena_hh_ * arena_hh_)) : 0.0f;
+        if (ccr != arena_ground_ccr_ || (ccr > 0.0f && (arena_cx_ != arena_ground_ccx_
+                                                        || arena_cy_ != arena_ground_ccy_))) {
+            arena_ground_cache_.clear();
+            arena_ground_ccr_ = ccr;
+            arena_ground_ccx_ = arena_cx_;
+            arena_ground_ccy_ = arena_cy_;
+        }
+        const auto arena_cut = [&](std::int32_t ci, std::int32_t cj) {
+            if (ccr <= 0.0f) { return false; }
+            const float x0 = static_cast<float>(ci) * shared::map::chunk_size;
+            const float y0 = static_cast<float>(cj) * shared::map::chunk_size;
+            const float nx = std::clamp(arena_cx_, x0, x0 + shared::map::chunk_size);
+            const float ny = std::clamp(arena_cy_, y0, y0 + shared::map::chunk_size);
+            const float dx = nx - arena_cx_;
+            const float dy = ny - arena_cy_;
+            return (dx * dx) + (dy * dy) < ccr * ccr;
+        };
         const auto c0x = static_cast<std::int32_t>(
           std::floor((cam_x - (ww * 0.5f)) / shared::map::chunk_size));
         const auto c1x = static_cast<std::int32_t>(
@@ -1360,7 +1402,9 @@ private:
           std::floor((cam_y + (wh * 0.5f)) / shared::map::chunk_size));
         for (std::int32_t cj = c0y; cj <= c1y; ++cj) {
             for (std::int32_t ci = c0x; ci <= c1x; ++ci) {
-                SDL_Texture* tex = ground_chunk(r, ci, cj, seed);
+                SDL_Texture* tex = arena_cut(ci, cj)
+                                     ? ground_chunk(r, ci, cj, seed, arena_cx_, arena_cy_, ccr)
+                                     : ground_chunk(r, ci, cj, seed);
                 if (tex == nullptr) { continue; }
                 const SDL_FRect dst{ .x = (static_cast<float>(ci) * shared::map::chunk_size) + ox,
                                      .y = (static_cast<float>(cj) * shared::map::chunk_size) + oy,
@@ -2033,6 +2077,10 @@ private:
     int art_plants_ = 0, art_pebbles_ = 0, art_stumps_ = 0, art_stump_snow_ = 0;
     // Composited biome ground chunks (render targets), keyed like terrain chunks.
     std::unordered_map<std::uint64_t, client::TexturePtr> ground_cache_;
+    std::unordered_map<std::uint64_t, client::TexturePtr> arena_ground_cache_;
+    float arena_ground_ccx_ = 0.0f;
+    float arena_ground_ccy_ = 0.0f;
+    float arena_ground_ccr_ = 0.0f;
     std::uint32_t ground_seed_ = 0;
     std::vector<WorldItem> world_items_; // per-frame y-sorted world pass
     struct Shot

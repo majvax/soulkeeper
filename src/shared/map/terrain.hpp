@@ -95,6 +95,32 @@ inline std::uint8_t biome_at(std::uint32_t seed, float x, float y)
     return static_cast<std::uint8_t>(mix(chunk_key(bx, by) ^ seed) % 3U);
 }
 
+// Pond field in [0, 1): water wherever it crosses water_threshold. PONDS, not
+// lakes — small blobs (~150-400 px) so routing around one is no better than
+// rounding a rock cluster (no kiting loops, no dash-escape islands). Plain +
+// forest only (no ice art for snowfields), and a radial ramp keeps the spawn
+// neighborhood dry. Water is a HARD WALL for players and enemies (resolved
+// below); bullets and orbs fly over like everything else.
+inline constexpr float water_threshold = 0.78f;
+
+inline float water_field(std::uint32_t seed, float x, float y)
+{
+    if (biome_at(seed, x, y) == 2) { return 0.0f; } // snowfields stay dry
+    const float d = std::sqrt((x * x) + (y * y));
+    const float ramp = std::fmin(std::fmax((d - 1200.0f) / 600.0f, 0.0f), 1.0f);
+    if (ramp <= 0.0f) { return 0.0f; }
+    // Wetland mask (very low frequency): ponds cluster in districts with long
+    // bone-dry stretches between — not a uniform swamp pepper.
+    const float wet = std::fmin(std::fmax((vnoise(seed, x * 0.6f, y * 0.6f, 37) - 0.50f) / 0.20f, 0.0f), 1.0f);
+    if (wet <= 0.0f) { return 0.0f; }
+    return vnoise(seed, x * 2.5f, y * 2.5f, 31) * wet * ramp; // ~410 px noise features
+}
+
+inline bool water_at(std::uint32_t seed, float x, float y)
+{
+    return water_field(seed, x, y) > water_threshold;
+}
+
 // Obstacles of one chunk. The spawn neighborhood (|cx|,|cy| <= 1 — players
 // enter the world at the origin) stays empty. Density and the tree/rock mix
 // follow the BIOME: forests are thick with trees, plains stay open kiting
@@ -123,9 +149,13 @@ inline void obstacles_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy,
     for (int i = 0; i < count; ++i) {
         const auto salt = static_cast<std::uint32_t>(1 + (i * 4));
         const bool tree = roll(seed, cx, cy, salt) < tree_p;
+        const float x = base_x + 40.0f + (roll(seed, cx, cy, salt + 1) * (chunk_size - 80.0f));
+        const float y = base_y + 40.0f + (roll(seed, cx, cy, salt + 2) * (chunk_size - 80.0f));
+        // nothing grows in (or right at) a pond — margin keeps trunks off the shore band
+        if (water_field(seed, x, y) > water_threshold - 0.02f) { continue; }
         out.push_back(Obstacle{
-          .x = base_x + 40.0f + (roll(seed, cx, cy, salt + 1) * (chunk_size - 80.0f)),
-          .y = base_y + 40.0f + (roll(seed, cx, cy, salt + 2) * (chunk_size - 80.0f)),
+          .x = x,
+          .y = y,
           .r = tree ? 9.0f + (roll(seed, cx, cy, salt + 3) * 3.0f)
                     : 13.0f + (roll(seed, cx, cy, salt + 3) * 7.0f),
           .kind = tree ? std::uint8_t{ 0 } : std::uint8_t{ 1 },
@@ -151,9 +181,12 @@ inline void deco_in(std::uint32_t seed, std::int32_t cx, std::int32_t cy, std::v
     for (int i = 0; i < count; ++i) {
         const auto salt = static_cast<std::uint32_t>(101 + (i * 3));
         const float pick = roll(seed, cx, cy, salt);
+        const float x = static_cast<float>(cx) * chunk_size + (roll(seed, cx, cy, salt + 1) * chunk_size);
+        const float y = static_cast<float>(cy) * chunk_size + (roll(seed, cx, cy, salt + 2) * chunk_size);
+        if (water_at(seed, x, y)) { continue; } // shore deco ok, floating deco not
         out.push_back(Deco{
-          .x = static_cast<float>(cx) * chunk_size + (roll(seed, cx, cy, salt + 1) * chunk_size),
-          .y = static_cast<float>(cy) * chunk_size + (roll(seed, cx, cy, salt + 2) * chunk_size),
+          .x = x,
+          .y = y,
           .kind = pick < cut[0] ? std::uint8_t{ 0 }   // plant
                 : pick < cut[1] ? std::uint8_t{ 1 }   // pebble
                 : pick < cut[2] ? std::uint8_t{ 2 }   // bush
@@ -215,6 +248,34 @@ inline bool resolve_terrain(ChunkCache& cache, std::uint32_t seed, float& x, flo
                 y = ob.y + (dy / dist * apart);
                 pushed = true;
             }
+        }
+    }
+    // Water is a hard wall too: eject downhill on the field gradient to the
+    // nearest shore. The normal case is ONE small step (entities move a few
+    // px per tick); the long loop only fires for spawned-in-water entities
+    // (wave offsets, POI crates), and walking them out to the shore is the
+    // behavior we want. Inside the clear circle water is suppressed exactly
+    // like obstacles — boss arenas fight on dry ground.
+    const auto in_clear = [&](float px, float py) {
+        if (clear_r <= 0.0f) { return false; }
+        const float dx = px - clear_x;
+        const float dy = py - clear_y;
+        return (dx * dx) + (dy * dy) < clear_r * clear_r;
+    };
+    if (!in_clear(x, y)) {
+        for (int step = 0; step < 48 && water_at(seed, x, y); ++step) {
+            const float eps = 12.0f;
+            const float gx = water_field(seed, x + eps, y) - water_field(seed, x - eps, y);
+            const float gy = water_field(seed, x, y + eps) - water_field(seed, x, y - eps);
+            const float len = std::sqrt((gx * gx) + (gy * gy));
+            if (len < 1e-6f) { // flat gradient (vnoise saddle): march +X
+                x += 8.0f;
+            } else {
+                x -= gx / len * 8.0f;
+                y -= gy / len * 8.0f;
+            }
+            pushed = true;
+            if (in_clear(x, y)) { break; } // reached arena ground: dry by decree
         }
     }
     return pushed;

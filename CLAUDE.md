@@ -47,7 +47,8 @@ src/
                    #   (seed, chunk) — server & client derive the SAME obstacles/deco/biomes,
                    #   zero net traffic; 512px chunks, 0-2 colliders each (tree trunk r 9-12 /
                    #   rock r 13-20), origin ±1 chunk stays EMPTY (spawn), ChunkCache memoizes,
-                   #   resolve_terrain skips a CLEAR CIRCLE (arena flattening))
+                   #   resolve_terrain skips a CLEAR CIRCLE (arena flattening) and hard-
+                   #   ejects out of water_at ponds (gradient descent to shore))
                    #   + input.hpp (apply_input, start_dash/tick_dash shared w/ prediction, PLAYER_SPEED, DASH_*)
     factory/       #   create_player / create_enemy — kernel parts only (loadout/stats come from Lua)
     sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
@@ -304,8 +305,21 @@ squares of both sides; sparse dirt-on-grass / gravel-on-snow specks; the GENERAT
 biome-aware too (forest 1-4 obstacles/chunk tree_p .85 — reads as WOODS; plain 0-1 open,
 snow 0-2 rock-leaning + deco weights per biome — shared header,
 so sim collision matches) and trees wear their region's FAMILY (`tree_forest/plain/snow_NN`
-— the frozen crowns live only in snowfields; snow stumps frost too); water tiles exist in
-the pack but are DEFERRED (imply collision + shorelines) · art =
+— the frozen crowns live only in snowfields; snow stumps frost too) · **WATER** (shipped):
+`water_field/water_at` in the shared header — pond-scale blobs (~150-400 px: NO kiting
+loops or dash-escape islands, a deliberate design call) = high-threshold 410px-feature
+`vnoise` × a very-low-freq WETLAND mask (ponds cluster in districts, ~1.5-3% coverage,
+long bone-dry stretches) × a radial ramp (spawn ±1200 px stays dry), plain+forest only
+(no ice art for snow); water is a HARD WALL for players AND enemies incl. dash —
+`resolve_terrain` ejects downhill on the field gradient (1 step when walking in; spawned-
+in-water entities walk out to shore over ≤48 steps), bullets/orbs fly over as usual; the
+generator drops obstacles/deco landing wet (shared header = sim & render lockstep);
+materials 5/6 = `tile_water_a/b` (16x16 ripple period tiles cut IN PHASE from the sheet's
+two cross shades — the shade blob gives calm/ripple patchiness) + material 7 = muddy
+`tile_dirt` SHORE band (field within 0.03 of threshold), the standard 4px dither blends
+land→shore→water; boss arenas stay dry BOTH sides: the sim's clear circle skips the water
+eject and arena-touched chunks compose a water-suppressed VARIANT into a separate cache
+(originals return untouched when the wall drops) · art =
 `assets/map/` (auto-sliced from the natural half of the old Environment pack via
 alpha-island segmentation + hue classification: 20 forest/27 plain/4 snow trees, 6 rocks,
 23 bushes, 60 plants, 27 pebbles, 6+2 stumps, 8 ground patches, 5 base tiles +
@@ -329,7 +343,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (101 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (109 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/
