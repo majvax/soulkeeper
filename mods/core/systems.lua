@@ -20,7 +20,8 @@ end
 
 ---@param mod Mod
 ---@param C core.Components
-return function(mod, C)
+return function(mod, C, EV)
+    EV = EV or { xp_mult = 1.0 } -- wave-event state (events.lua); default keeps the file standalone
     -- Nearest live player to (x, y), or nil (+ squared distance). Downed
     -- players are ignored. world:closest is a single engine call — never loop
     -- candidates from Lua inside a per-entity system (that pattern dominated
@@ -533,7 +534,9 @@ return function(mod, C)
                 if e:has(XpReward) then xp_value = e:get(XpReward).value end
                 local orb = spawn_entity(ep.x, ep.y)
                 orb:get(Render).kind = KIND.orb
-                orb:set(C.Xp, { value = xp_value })
+                -- Blood Moon doubles orbs at KILL time (Greed still multiplies
+                -- at pickup on top).
+                orb:set(C.Xp, { value = math.floor(xp_value * EV.xp_mult + 0.5) })
                 if e:has(C.EliteDrop) or math.random() < 0.04 then
                     -- Late waves kill fast enough to CARPET the map in hearts
                     -- (an unkillable reserve): suppress the drop when the area

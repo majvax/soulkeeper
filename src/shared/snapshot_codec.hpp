@@ -44,6 +44,7 @@ struct SnapshotState
     std::uint16_t level = 1;
     std::uint8_t xp_frac = 0;
     std::uint16_t wave = 1;
+    std::uint8_t event = 0; // active wave event (wire_id + 1; 0 = none)
     float origin_x = 0.0f, origin_y = 0.0f;
     std::vector<EntityRec> entities;      // MUST be sorted by id (sort_entities)
     std::vector<std::byte> script_blob;   // concatenated per-entity comp bytes
@@ -77,6 +78,7 @@ struct DeltaHeader
     std::uint16_t level;
     std::uint8_t xp_frac;
     std::uint16_t wave;
+    std::uint8_t event; // active wave event (wire_id + 1; 0 = none)
     std::uint8_t player_count;
     float origin_x, origin_y;
 };

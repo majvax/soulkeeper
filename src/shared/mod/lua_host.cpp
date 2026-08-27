@@ -264,6 +264,37 @@ struct ModHandle
         return EnemyBuilder{ .state = state, .id = std::move(id) };
     }
 
+    // Register a wave event — a per-wave run modifier. One table carries the
+    // render metadata (label/tint/vision/sound, read by the client by wire id)
+    // and the sim callbacks (weight/on_start/during/on_end, dispatched by the
+    // rolling mod's own Lua — core's events.lua owns the roll + runner):
+    //   mod:wave_event("fog", "FOG", { vision = 320, weight = 1 })
+    void wave_event(const std::string& name, std::string label, sol::optional<sol::table> opts)
+    {
+        WaveEventDef d;
+        d.id = qualify(name);
+        d.label = std::move(label);
+        if (opts) {
+            if (const sol::optional<sol::table> tint = (*opts)["tint"]) {
+                for (std::size_t c = 0; c < d.tint.size(); ++c) {
+                    d.tint[c] = static_cast<std::uint8_t>(tint->get_or(c + 1, 0));
+                }
+            }
+            d.vision = opts->get_or("vision", 0.0f);
+            d.sound = opts->get_or<std::string>("sound", "");
+            const sol::object weight = (*opts)["weight"];
+            if (weight.is<sol::protected_function>()) {
+                d.weight_fn = weight.as<sol::protected_function>();
+            } else if (weight.is<double>()) {
+                d.weight = weight.as<float>();
+            }
+            d.on_start = opts->get_or<sol::protected_function>("on_start", {});
+            d.during = opts->get_or<sol::protected_function>("during", {});
+            d.on_end = opts->get_or<sol::protected_function>("on_end", {});
+        }
+        state->wave_events.add(std::move(d));
+    }
+
     // Declare the player character's visuals: an animation-pack folder of
     // <Clip>_<N>x1.png strips (or a plain .png). Render-VM metadata only.
     void player_sprite(const std::string& path) { state->player_sprite = path; }
@@ -376,6 +407,7 @@ void LuaHost::install_registration_api()
       "upgrade", &ModHandle::upgrade,
       "object", &ModHandle::object,
       "enemy", &ModHandle::enemy,
+      "wave_event", &ModHandle::wave_event,
       "player_sprite", &ModHandle::player_sprite,
       "sound", &ModHandle::sound,
       "hud", &ModHandle::hud,
@@ -476,6 +508,7 @@ void LuaHost::finalize_content()
 {
     state_->registry.finalize();
     state_->enemies.finalize();
+    state_->wave_events.finalize();
     state_->scripts.finalize();
     compute_plugin_hash();
 }
@@ -495,6 +528,7 @@ void LuaHost::compute_plugin_hash()
         fnv.byte(static_cast<std::uint8_t>(def.kind));
     }
     for (const EnemyDef& def : state_->enemies.defs()) { fnv.str(def.id); }
+    for (const WaveEventDef& def : state_->wave_events.defs()) { fnv.str(def.id); }
 
     std::vector<const ScriptSchema*> schemas;
     for (const ScriptSchema& schema : state_->scripts.all()) { schemas.push_back(&schema); }

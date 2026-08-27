@@ -768,6 +768,7 @@ void GameServer::stream_snapshots()
         const float frac = std::clamp(static_cast<float>(stats.xp) / static_cast<float>(xp_needed_), 0.0f, 1.0f);
         state.xp_frac = static_cast<std::uint8_t>(frac * 255.0f);
         state.wave = stats.wave;
+        state.event = stats.event;
     });
 
     snapshot_history_.push_back(std::move(state));

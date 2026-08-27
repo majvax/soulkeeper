@@ -473,6 +473,23 @@ private:
         }
         wave_ = state.wave;
 
+        // Wave event: the header byte is the def's wire id + 1 — look the def
+        // up in OUR registry (same mods, hash-validated at join) for banner
+        // text + tint/fog metadata. Banner on 0 -> X and X -> Y alike; a
+        // reconnect's full snapshot re-triggers it (you want to learn the
+        // wave you dropped into).
+        if (state.event != event_id_) {
+            event_id_ = state.event;
+            event_def_ =
+              event_id_ != 0
+                ? engine_->mods().wave_events().by_wire(static_cast<std::uint8_t>(event_id_ - 1))
+                : nullptr;
+            if (event_def_ != nullptr) {
+                event_banner_until_ = anim_time_ + 2.5f;
+                engine_->audio().play(event_def_->sound.empty() ? "wave" : event_def_->sound);
+            }
+        }
+
         // Listener for positional SFX = the local player (previous-snapshot pos
         // is fine: falloff over ~1000 px doesn't care about a 0.5 px step).
         client::Audio& audio = engine_->audio();
@@ -804,6 +821,19 @@ private:
                              12.0f * ui.scale());
         }
 
+        // Wave-event banner: the def's label, below the wave banner so both
+        // read together at a wave start ("WAVE 7" / "BLOOD MOON").
+        if (event_def_ != nullptr && anim_time_ < event_banner_until_
+            && engine_->scenes().is_top(this)) {
+            const float remain = event_banner_until_ - anim_time_;
+            const float alpha = std::clamp(remain, 0.0f, 1.0f);
+            client::Gui& ui = engine_->gui();
+            ui.text_centered(ww * 0.5f, wh * 0.28f, event_def_->label,
+                             client::GuiColor{ 255, 170, 120,
+                                               static_cast<std::uint8_t>(alpha * 255.0f) },
+                             12.0f * ui.scale());
+        }
+
         // Death poofs + dash trail: short-lived world-space rings (ImGui bg
         // list composites over SDL — fine, they're bursts ON things).
         if (engine_->scenes().is_top(this)) {
@@ -1002,6 +1032,22 @@ private:
                 const float px = (n.crit ? 5.0f : 3.0f) * ui.scale(); // scale-multiples stay crisp
                 ui.text_centered(n.x + ox, n.y + oy - 22.0f - rise, std::to_string(n.amount),
                                  col, px);
+            }
+        }
+
+        // Wave-event ambience, fully def-driven (no per-event C++): a
+        // fullscreen tint wash and/or a fog-of-war overlay with a clear
+        // circle around the local player. SDL draws like the damage vignette
+        // below — modals stacked above still dim over them.
+        if (event_def_ != nullptr) {
+            if (event_def_->tint[3] > 0) {
+                SDL_SetRenderDrawColor(r, event_def_->tint[0], event_def_->tint[1],
+                                       event_def_->tint[2], event_def_->tint[3]);
+                const SDL_FRect all{ .x = 0.0f, .y = 0.0f, .w = ww, .h = wh };
+                SDL_RenderFillRect(r, &all);
+            }
+            if (event_def_->vision > 0.0f && has_player_) {
+                draw_fog(r, ww, wh, ox + render_x_, oy + render_y_, event_def_->vision, 215);
             }
         }
 
@@ -1897,6 +1943,46 @@ private:
         quad({ .x = ww, .y = 0 }, { .x = ww, .y = wh }, { .x = ww - bx, .y = wh }, { .x = ww - bx, .y = 0 });
     }
 
+    // Fog-of-war overlay (the FOG wave event): a dark ring mesh centered on the
+    // local player's SCREEN position — clear inside 0.75x vision, ramping to
+    // `alpha` at vision, held to past the screen corners beyond it. Same
+    // per-vertex-gradient SDL_RenderGeometry technique as the vignette.
+    static void draw_fog(SDL_Renderer* r, float ww, float wh, float px, float py, float vision,
+                         std::uint8_t alpha)
+    {
+        constexpr int segs = 48;
+        const float inner = vision * 0.75f;
+        const float outer = std::sqrt((ww * ww) + (wh * wh)); // covers any corner from any pos
+        const SDL_FColor clear{ .r = 0.03f, .g = 0.03f, .b = 0.05f, .a = 0.0f };
+        const SDL_FColor dark{ .r = 0.03f, .g = 0.03f, .b = 0.05f,
+                               .a = static_cast<float>(alpha) / 255.0f };
+
+        SDL_Vertex verts[(segs + 1) * 3]; // rings: [inner clear][vision dark][outer dark]
+        for (int i = 0; i <= segs; ++i) { // duplicated seam vertex closes the ring
+            const float a = static_cast<float>(i) * (2.0f * std::numbers::pi_v<float> / segs);
+            const float ca = std::cos(a);
+            const float sa = std::sin(a);
+            verts[i * 3 + 0] = { .position = { .x = px + (ca * inner), .y = py + (sa * inner) },
+                                 .color = clear, .tex_coord = {} };
+            verts[i * 3 + 1] = { .position = { .x = px + (ca * vision), .y = py + (sa * vision) },
+                                 .color = dark, .tex_coord = {} };
+            verts[i * 3 + 2] = { .position = { .x = px + (ca * outer), .y = py + (sa * outer) },
+                                 .color = dark, .tex_coord = {} };
+        }
+        int idx[segs * 12];
+        int n = 0;
+        for (int i = 0; i < segs; ++i) {
+            const int a0 = i * 3;
+            const int b0 = (i + 1) * 3;
+            // inner->vision band (fade-in), then vision->outer band (solid).
+            idx[n++] = a0 + 0; idx[n++] = b0 + 0; idx[n++] = b0 + 1;
+            idx[n++] = a0 + 0; idx[n++] = b0 + 1; idx[n++] = a0 + 1;
+            idx[n++] = a0 + 1; idx[n++] = b0 + 1; idx[n++] = b0 + 2;
+            idx[n++] = a0 + 1; idx[n++] = b0 + 2; idx[n++] = a0 + 2;
+        }
+        SDL_RenderGeometry(r, nullptr, verts, (segs + 1) * 3, idx, n);
+    }
+
     // Corner radar built from the same state the renderer already mirrors:
     // dots in radar range draw in place, mission-critical marks (players,
     // boss, chest) CLAMP to the rim so their direction always reads.
@@ -2134,6 +2220,13 @@ private:
     std::uint8_t xp_frac_ = 0;
     std::uint16_t wave_ = 1;
     float banner_until_ = -1.0f; // anim_time_ deadline for the "WAVE N" banner
+
+    // Active wave event (snapshot header byte = wire id + 1; 0 = none). The
+    // def pointer is stable (registry outlives the scene) and carries all the
+    // visuals: banner label, tint wash, fog vision radius.
+    std::uint8_t event_id_ = 0;
+    const mod::WaveEventDef* event_def_ = nullptr;
+    float event_banner_until_ = -1.0f;
     // Game-feel state (client-only, inferred from snapshot deltas).
     float shake_amp_ = 0.0f;     // camera shake amplitude px (decays in update)
     float vignette_until_ = -1.0f;   // red edge flash deadline (heart lost)

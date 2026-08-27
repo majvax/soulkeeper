@@ -187,6 +187,69 @@ struct EnemyDef
     std::uint8_t wire_id = 0; // assigned by finalize()
 };
 
+// One registered wave event: a per-wave run modifier (blood moon, fog, ...).
+// Render metadata is read by the CLIENT by wire id (banner label, screen tint,
+// fog vision radius); the sim callbacks are dispatched by the ROLLING mod's
+// Lua (core's events.lua owns the roll policy + runner), not by C++.
+struct WaveEventDef
+{
+    std::string id;    // namespaced, e.g. "core:blood_moon" — the sort key
+    std::string label; // banner text, e.g. "BLOOD MOON"
+
+    // Render VM metadata. tint = fullscreen wash RGBA (a=0 = none); vision > 0
+    // draws a fog overlay with a clear circle of that radius around the local
+    // player; sound = banner sting name ("" = the default wave sting).
+    std::array<std::uint8_t, 4> tint{ 0, 0, 0, 0 };
+    float vision = 0.0f;
+    std::string sound;
+
+    // Roll weighting: constant or fn(wave) -> number, like EnemyDef.
+    float weight = 1.0f;
+    sol::protected_function weight_fn;
+    [[nodiscard]] float weight_at(std::uint16_t wave) const; // registry.cpp
+
+    // Sim-side lifecycle (may be empty — check .valid()).
+    sol::protected_function on_start; // (wave)
+    sol::protected_function during;   // (dt), per tick while active
+    sol::protected_function on_end;   // ()
+
+    std::uint8_t wire_id = 0; // assigned by finalize()
+};
+
+// Registered wave events, own wire-id space (the snapshot header's event byte
+// carries wire_id + 1; 0 = no event). Same deterministic scheme as the others.
+class WaveEventRegistry
+{
+public:
+    void add(WaveEventDef def)
+    {
+        for (const WaveEventDef& d : defs_) {
+            if (d.id == def.id) { return; } // ignore duplicate id (first wins)
+        }
+        defs_.push_back(std::move(def));
+    }
+
+    void finalize(); // sort by id, wire id = index — see registry.cpp
+
+    [[nodiscard]] std::size_t count() const noexcept { return defs_.size(); }
+    [[nodiscard]] const std::vector<WaveEventDef>& defs() const noexcept { return defs_; }
+
+    [[nodiscard]] const WaveEventDef* by_wire(std::uint8_t wire) const noexcept
+    {
+        return wire < defs_.size() ? &defs_[wire] : nullptr;
+    }
+
+    [[nodiscard]] const WaveEventDef* by_id(const std::string& id) const
+    {
+        const auto it = id_to_wire_.find(id);
+        return it == id_to_wire_.end() ? nullptr : &defs_[it->second];
+    }
+
+private:
+    std::vector<WaveEventDef> defs_;
+    std::unordered_map<std::string, std::uint8_t> id_to_wire_;
+};
+
 // Registered enemies + the same deterministic string-id -> wire-id scheme as
 // ContentRegistry (wire id = lexicographic sort index).
 class EnemyRegistry

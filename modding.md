@@ -282,6 +282,33 @@ mod:enemy("brute", "Brute", { sprite = "assets/sprite/RhinoMonster_01_Regular", 
 | `arena` (`{w, h}` half-extents) | enemy | render | boss arena rect around the SPAWN point: prediction clamps, wall drawn — pair with a sim clamp (core: `C.Nova`) |
 | `on_spawn(e)` | enemy | sim | dynamic per-spawn hook |
 
+### Wave events (`mod:wave_event`)
+A **wave event** is a per-wave run modifier (core ships Blood Moon / Fog / Horde Rush / Golden
+Wave in `mods/core/events.lua`). One registration carries both halves:
+
+```lua
+mod:wave_event("blood_moon", "BLOOD MOON", {
+    tint = { 170, 20, 20, 44 },   -- render: fullscreen RGBA wash (alpha 0 = none)
+    -- vision = 320,              -- render: >0 = fog overlay, clear circle around the player
+    -- sound = "wave",            -- render: banner sting name (default "wave")
+    weight = 1,                   -- sim: roll weight (number or fun(wave))
+    on_start = function(wave) end,-- sim lifecycle…
+    during = function(dt) end,    -- …per tick while active
+    on_end = function() end,
+})
+```
+
+The ENGINE only carries the identity: ids get deterministic wire ids (hashed like enemies), the
+active event ships as **one byte in the snapshot header** (`world:set_event(id|nil)` writes it),
+and the client draws the def's banner/tint/fog from its own registry. **The engine never calls
+the callbacks** — the rolling mod does. Core's roller (`events.lua`) subscribes `on_wave_start`
+(~22% from wave 4, never on `%5` milestone waves, never the same event twice in a row), runs the
+active def's `during(dt)` from a runner system, and ends the event on every wave start.
+Services: `world:wave_events(wave)` returns the pool `{ id, weight, on_start?, during?,
+on_end? }` (the roll facts, `world:offerable`'s twin); `world:event()` returns the active id or
+nil — it reads the sim singleton, which a run reset zeroes C++-side, so a runner detects "reset
+under us" through it. `/event <name|off>` (core) force-starts any event for testing.
+
 ## 5. Events
 
 `mod:subscribe(name, fn)` — engine events fire server-side:

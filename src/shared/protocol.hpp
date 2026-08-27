@@ -23,7 +23,7 @@ inline constexpr std::size_t max_players = 4;
 
 // Bumped on any wire-format change. Seeds the plugin-set hash carried in Join,
 // so a version skew is denied cleanly instead of mis-parsing packets.
-inline constexpr std::uint16_t protocol_version = 14;
+inline constexpr std::uint16_t protocol_version = 15;
 
 // Simulation runs at 120 Hz; the server sends a snapshot every 2nd tick (60 Hz).
 inline constexpr double sim_hz = 120.0;
@@ -245,6 +245,7 @@ struct SnapshotHeader
     std::uint16_t level;   // shared team level (for the HUD)
     std::uint8_t xp_frac;  // 0..255 progress toward the next level
     std::uint16_t wave;    // current wave number
+    std::uint8_t event;    // active wave event (WaveEventDef wire_id + 1; 0 = none)
     std::uint8_t player_count; // PlayerAim records in the trailer after the entries
     float origin_x, origin_y;  // quantization origin (near the players)
 };

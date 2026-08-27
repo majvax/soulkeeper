@@ -9,7 +9,8 @@ function main()
 
     ---@type core.Components
     local C = include("components.lua")(mod) -- component handles (Weapon, Bullet, ...)
-    include("systems.lua")(mod, C)
+    local EV = include("events.lua")(mod, C) -- wave events (shared EV state: xp_mult)
+    include("systems.lua")(mod, C, EV)
     local BRAIN = include("brains.lua")(mod, C) -- boss fight director (move tables) -> brain ids
     include("upgrades.lua")(mod, C)
     include("objects.lua")(mod, C)

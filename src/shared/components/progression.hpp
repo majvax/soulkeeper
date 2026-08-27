@@ -6,6 +6,10 @@ struct GameStats
 {
     std::uint32_t xp;
     std::uint16_t wave;
+    // Active wave event as WaveEventDef wire_id + 1 (0 = none) — written by
+    // world:set_event, shipped in the snapshot header. Lives here (not a
+    // mailbox) so reset_run's GameStats rewrite clears it for free.
+    std::uint8_t event = 0;
 };
 
 // (XP orbs and heart pickups are Lua-defined entities now — see mods/core.)

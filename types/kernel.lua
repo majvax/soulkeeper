@@ -218,6 +218,26 @@ function world:add_xp(value) end
 ---@param wave integer
 function world:set_wave(wave) end
 
+---Set (or clear, with nil) the ACTIVE wave event by registered id. The engine
+---ships it to every client as one byte in the snapshot header — the client
+---looks the def up by wire id and draws its banner/tint/fog. Sim VM only;
+---the ROLL policy and the def's on_start/during/on_end dispatch are the
+---calling mod's job (see mods/core/events.lua).
+---@param id string|nil # e.g. "core:blood_moon"; nil = no event
+function world:set_event(id) end
+
+---The active wave event's id, or nil. Reads the sim singleton — a run reset
+---clears it C++-side, so a Lua runner can detect "reset under us" here.
+---@return string|nil
+function world:event() end
+
+---The registered wave-event pool with weights resolved for `wave` — the FACTS
+---a roll works from (world:offerable's twin). Callbacks round-trip so the
+---roller can dispatch them. Sim VM only.
+---@param wave integer
+---@return { id: string, weight: number, on_start?: fun(wave: integer), during?: fun(dt: number), on_end?: fun() }[]
+function world:wave_events(wave) end
+
 ---Content offerable to `player` right now (availability predicates and
 ---object ownership already filtered) — the FACTS a mod:level_offer roll works
 ---from. Sim VM only.
@@ -504,6 +524,18 @@ function Mod:object(name, label, acquire, opts) end
 ---@param opts? EnemyOpts
 ---@return EnemyArchetype
 function Mod:enemy(name, label, opts) end
+
+---Register a wave event — a per-wave run modifier (see mods/core/events.lua).
+---One table carries the RENDER metadata (label = banner text; tint = fullscreen
+---RGBA wash, alpha 0 = none; vision > 0 = fog overlay with a clear circle of
+---that radius around the local player; sound = banner sting name) and the SIM
+---callbacks (weight for the roll, on_start/during/on_end lifecycle) — the
+---engine never calls the callbacks; the rolling mod's runner dispatches them
+---via world:wave_events. Ids are hashed (wire-visible); wire id = sort index.
+---@param name string  # bare name; auto-namespaced
+---@param label string # banner text, e.g. "BLOOD MOON"
+---@param opts? { tint?: integer[], vision?: number, sound?: string, weight?: number|fun(wave: integer): number, on_start?: fun(wave: integer), during?: fun(dt: number), on_end?: fun() }
+function Mod:wave_event(name, label, opts) end
 
 ---Declare the player character's visuals: an animation-pack folder (of
 ---<Clip>_<N>x1.png strips) or a static .png. The engine handles frame

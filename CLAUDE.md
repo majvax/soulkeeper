@@ -54,7 +54,7 @@ src/
     sim/           #   World (Registry+SystemManager); make_game_world() = kernel pipeline + singletons;
                    #   world.hpp phase constants (grid/targeting/motion/shooting/movement/separation/terrain/projectile/combat/update/pickup/death)
     mod/           #   Lua modding layer (SDL-free): component_ref (THE handle type), bindings_table (engine
-                   #   dispatch + prelude list), registry (content/enemy defs -> deterministic wire-id),
+                   #   dispatch + prelude list), registry (content/enemy/wave-event defs -> deterministic wire-id),
                    #   lua_host (sol::state, register_mod, import() loader, mod verbs), events (bus),
                    #   script_ecs (Lua components + net sync), sim_bindings (entity/world API + services)
     net/           #   net.hpp/.cpp — ENet wrapper (PImpl, enet only in .cpp): Server, Client, ScopedInit, Event
@@ -340,6 +340,19 @@ interest**: `poi_spawner` (wave ≥ 2, every 20-30 s, cap 6, paused during arena
 random live player — its `C.CrateLoot` death payout (60% 3-orb burst / 30% heart (area cap
 applies) / 10% 5-orb jackpot) replaces the standard drop — and **~10% of rolls place a
 core:mimic instead** (the POI that bites) ·
+**WAVE EVENTS** (`mod:wave_event` = a REGISTERED content type like enemies: wire-id sorted +
+hashed, def = render metadata (label/tint RGBA wash/`vision` fog radius/sound) + sim callbacks
+(weight, on_start/during/on_end) the ENGINE NEVER calls — `mods/core/events.lua` owns the roll
+(`on_wave_start`: ~22% from wave 4, never on %5 milestones, never the same twice in a row,
+one-wave lifetime ended by every wave start) + a runner system dispatching `during(dt)`;
+`world:set_event(id|nil)` writes GameStats.event (wire_id+1, 0=none) → ONE byte in BOTH
+snapshot headers (full+delta, no baseline mechanics; reset_run zeroes it free and the runner
+detects `world:event()==nil` = reset-under-us); the client looks the def up by wire id →
+event banner below the wave banner + def-driven tint wash + fog overlay (`draw_fog` ring
+mesh, clear circle around the player) — zero per-event C++; core v1: **Blood Moon** (2x XP
+baked into orbs at kill time via the shared EV.xp_mult + periodic gold elites, red wash),
+**Fog** (vision 320, purely visual), **Horde Rush** (fodder pump capped at 500 live),
+**Golden Wave** (crate rain on its own cadence); `/event <name|off>` forces one) ·
 **game-over** (all downed = defeat; frozen-world overlay; per-player SCOREBOARD from RunStats
 (kills/dmg/revives; `C.Bullet.owner` = `p:id()` stamps kill credit) + local bests file
 (`SDL_GetPrefPath` records.txt: best wave/wins/runs, "NEW BEST!" flash); host returns everyone
@@ -353,7 +366,7 @@ TAB console: `/pause` `/resume` + **mod commands** (`mod:command` — `/givexp` 
 shared `begin_offer_round` with level-ups/chests) with TAB-completion + history · **audio**: full SFX set + lobby/game/boss music (auto
 cross-fade; `assets/sound/` canonical names, all client-side triggers off snapshot state; local
 `/volume` `/sfx` `/music` verbs; mods rebind any sound via `mod:sound` and fire their own with
-`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (111 checks over the full
+`ctx:play/play_at`) · **headless sim test**: `tests/sim_test.cpp` (123 checks over the full
 mods/core pipeline incl. chest rounds, offer filtering, xp curve, co-op scaling, identity
 objects, RunStats attribution, damage-number queue, boss bullet variants, brain variety/
 phases/forced moves, the 25/35/45 kits, armor/ambush/homing archetypes, the new object/

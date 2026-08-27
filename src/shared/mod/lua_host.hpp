@@ -34,6 +34,7 @@ struct ModState
 {
     ContentRegistry registry;
     EnemyRegistry enemies;
+    WaveEventRegistry wave_events;
     EventBus events;
     ScriptComponentRegistry scripts;
     std::vector<ScriptSystem> script_systems;
@@ -109,6 +110,8 @@ public:
     [[nodiscard]] const ContentRegistry& registry() const noexcept { return state_->registry; }
     [[nodiscard]] EnemyRegistry& enemies() noexcept { return state_->enemies; }
     [[nodiscard]] const EnemyRegistry& enemies() const noexcept { return state_->enemies; }
+    [[nodiscard]] WaveEventRegistry& wave_events() noexcept { return state_->wave_events; }
+    [[nodiscard]] const WaveEventRegistry& wave_events() const noexcept { return state_->wave_events; }
     [[nodiscard]] EventBus& events() noexcept { return state_->events; }
     [[nodiscard]] const EventBus& events() const noexcept { return state_->events; }
     [[nodiscard]] ScriptComponentRegistry& scripts() noexcept { return state_->scripts; }

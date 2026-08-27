@@ -432,6 +432,57 @@ void install_sim_bindings(LuaHost& host, core::Registry& world_reg)
                                           stats.wave = static_cast<std::uint16_t>(std::max(1, wave));
                                       });
                                   },
+                                  // Set/clear the ACTIVE wave event by registered id (nil =
+                                  // none). Stored in GameStats as wire_id + 1 so the snapshot
+                                  // header ships one byte; the CALLING mod dispatches the
+                                  // def's lifecycle — the engine only carries the id.
+                                  "set_event", [reg, host_state = &host.state()](
+                                                 ScriptWorld&, sol::optional<std::string> id) {
+                                      std::uint8_t wire = 0;
+                                      if (id) {
+                                          const WaveEventDef* def = host_state->wave_events.by_id(*id);
+                                          if (def == nullptr) {
+                                              std::fprintf(stderr, "[mod] set_event: unknown event '%s'\n",
+                                                           id->c_str());
+                                              return;
+                                          }
+                                          wire = static_cast<std::uint8_t>(def->wire_id + 1);
+                                      }
+                                      reg->view<GameStats>().each(
+                                        [&](core::Entity, GameStats& stats) { stats.event = wire; });
+                                  },
+                                  // The active event's id, or nil. Reads GameStats — a run
+                                  // reset zeroes it C++-side, so a Lua runner detects "reset
+                                  // under us" through this.
+                                  "event", [reg, host_state = &host.state()](
+                                             ScriptWorld&, sol::this_state ts) -> sol::object {
+                                      std::uint8_t wire = 0;
+                                      reg->view<GameStats>().each(
+                                        [&](core::Entity, const GameStats& stats) { wire = stats.event; });
+                                      if (wire == 0) { return sol::lua_nil; }
+                                      const WaveEventDef* def =
+                                        host_state->wave_events.by_wire(static_cast<std::uint8_t>(wire - 1));
+                                      return def ? sol::make_object(ts, def->id) : sol::lua_nil;
+                                  },
+                                  // The registered wave-event pool with weights resolved for
+                                  // `wave` — the FACTS a Lua roll works from (offerable's
+                                  // twin). Callbacks round-trip so the roller dispatches them.
+                                  "wave_events", [host_state = &host.state()](ScriptWorld&, int wave,
+                                                                              sol::this_state ts) {
+                                      sol::state_view sv(ts);
+                                      sol::table out = sv.create_table();
+                                      int n = 0;
+                                      for (const WaveEventDef& d : host_state->wave_events.defs()) {
+                                          sol::table entry = sv.create_table();
+                                          entry["id"] = d.id;
+                                          entry["weight"] = d.weight_at(static_cast<std::uint16_t>(wave));
+                                          if (d.on_start.valid()) { entry["on_start"] = d.on_start; }
+                                          if (d.during.valid()) { entry["during"] = d.during; }
+                                          if (d.on_end.valid()) { entry["on_end"] = d.on_end; }
+                                          out[++n] = entry;
+                                      }
+                                      return out;
+                                  },
                                   "add_xp", [reg](ScriptWorld&, int value) {
                                       reg->view<GameStats>().each([&](core::Entity, GameStats& stats) {
                                           stats.xp += static_cast<std::uint32_t>(std::max(0, value));

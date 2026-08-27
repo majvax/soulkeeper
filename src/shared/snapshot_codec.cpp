@@ -89,6 +89,7 @@ void encode_full(const SnapshotState& state, ByteWriter& out)
                             .level = state.level,
                             .xp_frac = state.xp_frac,
                             .wave = state.wave,
+                            .event = state.event,
                             .player_count = static_cast<std::uint8_t>(state.aims.size()),
                             .origin_x = state.origin_x,
                             .origin_y = state.origin_y });
@@ -172,6 +173,7 @@ void encode_delta(const SnapshotState& state, const SnapshotState& baseline, Byt
                          .level = state.level,
                          .xp_frac = state.xp_frac,
                          .wave = state.wave,
+                         .event = state.event,
                          .player_count = static_cast<std::uint8_t>(state.aims.size()),
                          .origin_x = state.origin_x,
                          .origin_y = state.origin_y });
@@ -192,6 +194,7 @@ std::optional<SnapshotState> decode_full(std::span<const std::byte> payload,
     state.level = header->level;
     state.xp_frac = header->xp_frac;
     state.wave = header->wave;
+    state.event = header->event;
     state.origin_x = header->origin_x;
     state.origin_y = header->origin_y;
     const std::int32_t oqx = to_half_px(header->origin_x);
@@ -241,6 +244,7 @@ std::optional<SnapshotState> decode_delta(std::span<const std::byte> payload,
     state.level = header->level;
     state.xp_frac = header->xp_frac;
     state.wave = header->wave;
+    state.event = header->event;
     state.origin_x = header->origin_x;
     state.origin_y = header->origin_y;
     const std::int32_t oqx = to_half_px(header->origin_x);

@@ -1803,6 +1803,109 @@ int main()
     lua.script(R"(world:set_wave(1))");
     reset();
 
+    // --- Scenario 66: wave events — registry, force, sim effects ------------
+    // Registration: 4 core events, wire ids = lexicographic sort index.
+    check(host.wave_events().count() == 4, "4 wave events registered");
+    check(host.wave_events().by_wire(0) != nullptr
+            && host.wave_events().by_wire(0)->id == "core:blood_moon"
+            && host.wave_events().by_wire(1)->id == "core:fog"
+            && host.wave_events().by_wire(2)->id == "core:golden_wave"
+            && host.wave_events().by_wire(3)->id == "core:horde_rush",
+          "wave-event wire ids follow the id sort");
+    check(host.wave_events().by_id("core:fog") != nullptr
+            && host.wave_events().by_id("core:fog")->vision > 0.0f,
+          "fog carries its vision radius");
+
+    // The /event command is the force hook (it runs the full start_event path:
+    // on_start fires, unlike a bare world:set_event).
+    const mod::ModState::ConsoleCommand* event_cmd = nullptr;
+    for (const mod::ModState::ConsoleCommand& cmd : host.state().commands) {
+        if (cmd.name == "event") { event_cmd = &cmd; }
+    }
+    check(event_cmd != nullptr, "/event command registered");
+    const auto force_event = [&](const char* name) {
+        if (event_cmd == nullptr) { return; }
+        event_cmd->fn(mod::EntityHandle{ .reg = &world.registry(), .entity = player }, name);
+    };
+
+    // Blood Moon: the GameStats byte carries wire_id + 1, and kills pay 2x XP
+    // baked into the orb (Greed multiplies at pickup on top — not tested here).
+    force_event("blood_moon");
+    check(lua_bool(R"(return world:event() == "core:blood_moon")"),
+          "/event blood_moon sets the active event");
+    {
+        std::uint8_t stats_event = 0;
+        world.registry().view<GameStats>().each(
+          [&](core::Entity, const GameStats& stats) { stats_event = stats.event; });
+        check(stats_event == host.wave_events().by_id("core:blood_moon")->wire_id + 1,
+              "GameStats carries the event as wire_id + 1");
+    }
+    lua.script(R"(
+        local e = spawn_enemy(600, 600, "core:bandit") -- far: the orb stays put
+        _BM_REWARD = e:get(XpReward).value
+        e:get(Health).current = 0
+    )");
+    step(0.2f); // death system (30 Hz) pays the orb
+    check(lua_bool(R"(
+        local C = import("core")
+        for orb in world:each(C.Xp, Position) do
+            local p = orb:get(Position)
+            if p.x > 300 and orb:get(C.Xp).value == _BM_REWARD * 2 then return true end
+        end
+        return false
+    )"), "blood moon kills drop DOUBLE-value orbs");
+
+    // /event off ends it (on_end resets the multiplier) and a fresh kill pays
+    // the normal reward again.
+    force_event("off");
+    check(lua_bool(R"(return world:event() == nil)"), "/event off clears the active event");
+    reset();
+    lua.script(R"(
+        local e = spawn_enemy(600, 600, "core:bandit")
+        _BM_REWARD = e:get(XpReward).value
+        e:get(Health).current = 0
+    )");
+    step(0.2f);
+    check(lua_bool(R"(
+        local C = import("core")
+        for orb in world:each(C.Xp, Position) do
+            local p = orb:get(Position)
+            if p.x > 300 and orb:get(C.Xp).value == _BM_REWARD then return true end
+        end
+        return false
+    )"), "after the event, kills pay normal XP again");
+    reset();
+
+    // Horde Rush: this harness has NO C++ spawner — every enemy that appears
+    // came from the event's during() pump.
+    force_event("horde_rush");
+    step(3.5f); // first burst at ~1 s, another at ~3 s
+    check(lua_bool(R"(
+        local n = 0
+        for e in world:each(Enemy) do n = n + 1 end
+        return n >= 3
+    )"), "horde rush pumps extra fodder on its own");
+    force_event("off");
+    reset();
+
+    // Golden Wave: crates rain on the event's own cadence. Wave 1, so the
+    // regular poi_spawner (gated wave >= 2) can't be the source.
+    force_event("golden_wave");
+    step(13.0f); // first at ~2 s, then every 5 s
+    check(lua_bool(R"(
+        local C = import("core")
+        local n = 0
+        for e in world:each(C.CrateLoot) do n = n + 1 end
+        return n >= 2
+    )"), "golden wave rains supply crates at wave 1");
+
+    // A wave start ALWAYS ends the running event — a milestone (%5) never
+    // re-rolls, so wave 5's entrance leaves no event active.
+    host.events().emit("on_wave_start", 5);
+    check(lua_bool(R"(return world:event() == nil)"),
+          "a milestone wave start ends the active event");
+    reset(); // clears the wave-5 mini boss the milestone hook spawned
+
     // --- Scenario 26 (LAST: adds a 2nd player): co-op health scaling --------
     float solo_hp = 0.0f;
     lua.script(R"(
